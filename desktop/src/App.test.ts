@@ -10659,6 +10659,150 @@ describe('Result', () => {
   });
 });
 
+describe('Slow motion', () => {
+  function slowSnapshot(options: { feature?: boolean; hasAudio?: boolean } = {}) {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), duration_seconds: 12, has_audio: options.hasAudio ?? true },
+    ]);
+    snapshot.settings.task = 'video';
+    snapshot.settings.video_container = 'mp4';
+    snapshot.settings.video_codec = 'av1';
+    snapshot.settings.video_crf = 18;
+    snapshot.settings.output_directory = '/Users/demo/Desktop';
+    if (options.feature !== false) snapshot.engine!.features.push('video_slow_motion');
+    return snapshot;
+  }
+  const head = () =>
+    screen.getByRole('region', { name: 'Result' }).querySelector('.panel-head-value')
+      ?.textContent ?? '';
+  const planLineText = () => document.querySelector('.foot-plan')?.textContent ?? '';
+
+  it('offers the group with the clip length times the factor', async () => {
+    await mountWith(slowSnapshot());
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    const group = frames.querySelector('optgroup[label="Slow motion (no sound)"]');
+    expect(Array.from(group?.querySelectorAll('option') ?? []).map((o) => o.textContent)).toEqual([
+      '2× slower · 24 s',
+      '4× slower · 48 s',
+    ]);
+  });
+
+  it('has no such group when the engine does not list the feature', async () => {
+    await mountWith(slowSnapshot({ feature: false }));
+    expect(
+      (screen.getByLabelText('Frames') as HTMLSelectElement).querySelector(
+        'optgroup[label^="Slow"]',
+      ),
+    ).toBeNull();
+  });
+
+  it('writes the target, the order and the flag, and changes the head, plan and Output line', async () => {
+    const user = await mountWith(slowSnapshot());
+    await user.selectOptions(screen.getByLabelText('Frames'), 'slow:x2');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          video_interpolation: 'x2',
+          video_interpolation_order: 'after_upscale',
+          video_slow_motion: true,
+        }),
+      ),
+    );
+    expect(head()).toMatch(/ · 24 s$/);
+    expect(head()).not.toContain('fps');
+    await waitFor(() => expect(planLineText()).toMatch(/Slow motion 2×\s*$/));
+    expect(document.querySelector('.foot-output')?.textContent).toContain(
+      'MP4 · AV1 · CRF 18 · no sound · Desktop',
+    );
+
+    await user.selectOptions(screen.getByLabelText('Frames'), 'x2:after_upscale');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_slow_motion: false }),
+      ),
+    );
+    expect(head()).toMatch(/ · 48 fps$/);
+  });
+
+  it('shows no sound instead of sound cleaned, disables the tick and keeps the setting', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.settings.video_clean_audio = true;
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    const user = await mountWith(snapshot);
+    const trigger = document.querySelector('.foot-output') as HTMLButtonElement;
+    expect(trigger.textContent).toContain('no sound');
+    expect(trigger.textContent).not.toContain('sound cleaned');
+    const sheet = await openOutputSheet(user);
+    const tick = within(sheet).getByRole('checkbox', {
+      name: 'Clean up audio',
+    }) as HTMLInputElement;
+    expect(tick.disabled).toBe(true);
+    expect(tick.checked).toBe(false);
+    expect(tick.title).toBe('Slow motion has no sound.');
+    expect(api.saveSettings).not.toHaveBeenCalledWith(
+      expect.objectContaining({ video_clean_audio: false }),
+    );
+  });
+
+  it('says nothing about sound for a video without any', async () => {
+    const snapshot = slowSnapshot({ hasAudio: false });
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    await mountWith(snapshot);
+    expect(document.querySelector('.foot-output')?.textContent).not.toContain('no sound');
+  });
+
+  it('saves the flag in a recipe', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Slow');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    expect(api.saveRecipe).toHaveBeenCalledWith(
+      expect.objectContaining({ video_interpolation: 'x2', video_slow_motion: true }),
+    );
+  }, 20_000);
+
+  it('keeps the Frames select disabled while HDR is kept', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    snapshot.settings.video_hdr_mode = 'preserve';
+    snapshot.media = [{ ...snapshot.media[0], hdr_format: 'HLG' }];
+    const user = await mountWith(snapshot);
+    await user.click(document.querySelector('.foot-output') as HTMLButtonElement);
+    expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('preserve');
+    expect((screen.getByLabelText('Frames') as HTMLSelectElement).disabled).toBe(true);
+  });
+
+  it('with Scan at Double rate, the head shows the doubled rate and the length', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.media = [{ ...snapshot.media[0], fps: 25, field_order: 'bff' }];
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    expect(head()).toMatch(/ · 50 fps · 24 s$/);
+    await waitFor(() =>
+      expect(planLineText()).toMatch(/Deinterlace to 50 fps → .*Slow motion 2×\s*$/),
+    );
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    expect(frames.selectedOptions[0].textContent).toBe('2× slower · 24 s');
+    expect(Array.from(frames.options).map((option) => option.textContent)).toContain(
+      '2× · 100 fps',
+    );
+    const sheet = await openPlanSheet(user);
+    expect(within(sheet).getByText('2× slower · after upscaling · Labs')).toBeTruthy();
+  });
+});
+
 describe('Plan sheet', () => {
   it('opens from the plan line with Noise and Blur, reorders stages while keeping the Fix list, and closes on Escape', async () => {
     const snapshot = readySnapshot([image('photo', true)]);

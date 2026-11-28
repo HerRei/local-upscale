@@ -69,6 +69,36 @@ describe('mediaFacts', () => {
   });
 });
 
+describe('outputSummary and slow motion', () => {
+  const video = () => {
+    const { settings } = demoSnapshot();
+    settings.task = 'video';
+    settings.video_container = 'mp4';
+    settings.video_codec = 'av1';
+    settings.video_crf = 18;
+    settings.output_directory = '/tmp/Desktop';
+    return settings;
+  };
+
+  it('says no sound for a file with sound, and never beside sound cleaned', () => {
+    const settings = video();
+    expect(outputSummary(settings, { slowMotion: true })).toBe(
+      'MP4 · AV1 · CRF 18 · no sound · Desktop',
+    );
+    settings.video_clean_audio = true;
+    expect(outputSummary(settings, { slowMotion: true })).toBe(
+      'MP4 · AV1 · CRF 18 · no sound · Desktop',
+    );
+    expect(outputSummary(settings, {})).toBe('MP4 · AV1 · CRF 18 · sound cleaned · Desktop');
+  });
+
+  it('says nothing about sound for a file without any', () => {
+    expect(outputSummary(video(), { slowMotion: true, audioDisabled: true })).toBe(
+      'MP4 · AV1 · CRF 18 · Desktop',
+    );
+  });
+});
+
 describe('outputSummary', () => {
   it('adds transparent and explains a replaced format in the title', () => {
     const { settings } = demoSnapshot();

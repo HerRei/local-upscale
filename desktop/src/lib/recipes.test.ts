@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { recipeFixStages, recipeMatches, sameFixStages } from './recipes';
+import { recipeFixStages, recipeMatches, recipeSettingsPatch, sameFixStages } from './recipes';
 import type { Recipe, UiSettings } from './types';
 
 describe('recipeFixStages and recipeMatches', () => {
@@ -124,5 +124,42 @@ describe('recipes, strength', () => {
     expect(sameFixStages([entry(0.4)], [entry(0.7)])).toBe(false);
     expect(sameFixStages([entry(0.4)], [entry(0.4)])).toBe(true);
     expect(sameFixStages([entry()], [entry(1)])).toBe(true);
+  });
+});
+
+describe('slow motion in recipes', () => {
+  const snapshot = demoSnapshot();
+  const recipe: Recipe = {
+    id: 'slow',
+    name: 'Slow',
+    task: 'video',
+    quality: 'quick',
+    model_id: 'localsr_quick_x4_v1',
+    output_scale: 2,
+    tile_size: 256,
+    halo: 8,
+    precision: 'fp32',
+    safe_memory: false,
+    fixes: [],
+    video_interpolation: 'x2',
+    video_interpolation_order: 'after_upscale',
+    video_slow_motion: true,
+  };
+
+  it('applies the flag, and a recipe without it is normal speed', () => {
+    expect(recipeSettingsPatch(recipe, snapshot, snapshot.settings).video_slow_motion).toBe(true);
+    const { video_slow_motion: _flag, ...older } = recipe;
+    expect(recipeSettingsPatch(older, snapshot, snapshot.settings).video_slow_motion).toBe(false);
+  });
+
+  it('matches only the settings that carry the same flag', () => {
+    const current: UiSettings = {
+      ...snapshot.settings,
+      ...recipeSettingsPatch(recipe, snapshot, snapshot.settings),
+    };
+    expect(recipeMatches(recipe, current, snapshot.catalog)).toBe(true);
+    expect(recipeMatches(recipe, { ...current, video_slow_motion: false }, snapshot.catalog)).toBe(
+      false,
+    );
   });
 });

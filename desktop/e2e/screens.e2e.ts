@@ -5,6 +5,7 @@ import {
   cutout,
   firstRun,
   ready,
+  slow,
   strength,
   tape,
   upscale,
@@ -167,6 +168,14 @@ test.describe('screens @visual', () => {
     await shoot(page, 'panel-video');
     await page.locator('.foot-output').click();
     await shoot(page, 'panel-output-sheet-video');
+  });
+
+  test('Frames at 2× slower', async ({ page }) => {
+    await openApp(page, slow);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await expect(page.locator('#frame-rate')).toHaveValue('slow:x2');
+    await shoot(page, 'panel-slow-motion');
   });
 
   test('download waiting for Edit start', async ({ page }) => {

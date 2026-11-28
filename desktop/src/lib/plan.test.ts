@@ -8,6 +8,7 @@ import {
   displayName,
   fitFor,
   frameRateChange,
+  isSlowMotionResult,
   resultFps,
   interpolationLabel,
   pendingDownloads,
@@ -18,6 +19,22 @@ import {
 } from './plan';
 import { recipeFixStages, recipeMatches } from './recipes';
 import { buildStartInput } from './startInput';
+
+describe('isSlowMotionResult', () => {
+  it('takes a finished result at least 1.5 times as long as its original', () => {
+    const original = { duration_seconds: 10 };
+    expect(isSlowMotionResult({ output_duration_seconds: 20 }, original)).toBe(true);
+    expect(isSlowMotionResult({ output_duration_seconds: 15 }, original)).toBe(true);
+    expect(isSlowMotionResult({ output_duration_seconds: 14.9 }, original)).toBe(false);
+    expect(isSlowMotionResult({ output_duration_seconds: 20, partial: true }, original)).toBe(
+      false,
+    );
+    expect(isSlowMotionResult({ output_duration_seconds: 20 }, { duration_seconds: 0 })).toBe(
+      false,
+    );
+    expect(isSlowMotionResult(undefined, original)).toBe(false);
+  });
+});
 
 describe('model library resolution', () => {
   it('resolves Quick and Best by content and honours a pinned slot', () => {

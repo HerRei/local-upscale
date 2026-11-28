@@ -123,6 +123,8 @@
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
+  /** The result is slow motion: it plays on its own clock, so only Enhanced is offered. */
+  export let slowResult = false;
   export let videoResultId = '';
   export let compactHidden = false;
   export let viewerBackground: ViewerBackground = 'checker';
@@ -208,6 +210,7 @@
   ) as { id: ComparisonView; label: string; title: string }[];
   let comparisonView: ComparisonView = 'split';
   let holdingOriginal = false;
+  $: if (slowResult && comparisonView !== 'enhanced') comparisonView = 'enhanced';
   // Two saved sides compare even while one of them is still decoding.
   $: loading = loadingLabel !== '';
   $: pairShown = referenceIsResult && !singleFrame && selectedMedia?.kind === 'image' && !loading;
@@ -221,7 +224,7 @@
     Boolean(singleFrame && resultPreview) ||
     Boolean(processing && (committedStagePreview || hasLiveTiles || videoSourcePreview));
   $: if (!canPeek) holdingOriginal = false;
-  $: shownView = holdingOriginal ? 'original' : comparisonView;
+  $: shownView = holdingOriginal && !slowResult ? 'original' : comparisonView;
   $: resultClip = loading
     ? 0
     : singleFrame
@@ -1220,7 +1223,7 @@
   }
 
   function windowKeyDown(event: KeyboardEvent): void {
-    if (!canPeek || !holdsOriginalKey(event)) return;
+    if (!canPeek || slowResult || !holdsOriginalKey(event)) return;
     const target = event.target instanceof Element ? event.target : null;
     if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
     holdingOriginal = true;
@@ -1233,7 +1236,7 @@
 
   /** The View menu's comparison commands; they do nothing without a result. */
   export function setComparisonView(view: ComparisonView): void {
-    if (canCompare) comparisonView = view;
+    if (canCompare && !(slowResult && view !== 'enhanced')) comparisonView = view;
   }
 
   async function loadVideoComparison(key: string, forceCompatible = false): Promise<void> {
@@ -1436,7 +1439,10 @@
             role="radio"
             aria-checked={comparisonView === option.id}
             class:active={comparisonView === option.id}
-            title={option.title}
+            disabled={slowResult && option.id !== 'enhanced'}
+            title={slowResult && option.id !== 'enhanced'
+              ? 'A slow-motion result plays on its own.'
+              : option.title}
             on:click={() => (comparisonView = option.id)}>{option.label}</button
           >
         {/each}

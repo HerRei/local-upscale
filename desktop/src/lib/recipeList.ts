@@ -2,7 +2,7 @@ import { customModels, defaultCustomModelName } from './customModels';
 import { outputSummary } from './enhancePanel';
 import { fixStageKind, FIX_ROW_LABELS } from './fixStages';
 import { displayName, fixesOf, pendingDownloads, resolvePlan, type PlanStage } from './plan';
-import { planLine } from './planLine';
+import { planLine, slowMotionName } from './planLine';
 import { isRestoreRecipe, recipeFixStages, recipeSettingsPatch } from './recipes';
 import type { Workflow } from './workflows';
 import type {
@@ -155,6 +155,11 @@ export function recipePlanLine(
     stages.push(makePlanStage('face_restore', 'face', 'Faces'));
   }
 
+  const slow =
+    isVideo &&
+    !temporalVideo &&
+    Boolean(recipe.video_slow_motion) &&
+    (recipe.video_interpolation === 'x2' || recipe.video_interpolation === 'x4');
   if (isVideo) {
     if (!temporalVideo && recipe.deflicker) {
       stages.push(makePlanStage('deflicker', 'step', 'De-flicker'));
@@ -164,7 +169,7 @@ export function recipePlanLine(
       if (recipe.video_interpolation_order === 'before_upscale') stages.unshift(interp);
       else stages.push(interp);
     }
-    if (recipe.video_clean_audio) {
+    if (recipe.video_clean_audio && !slow) {
       stages.unshift(makePlanStage('audio_denoise', 'audio_denoise', 'Clean up audio'));
     }
   }
@@ -176,6 +181,7 @@ export function recipePlanLine(
       output_scale: recipe.output_scale,
       video_target_resolution: recipe.video_target_resolution,
       video_interpolation: recipe.video_interpolation || 'off',
+      video_slow_motion: slow,
       fix_stages: fixStages,
     },
     isVideo ? { kind: 'video' } : { kind: 'image' },
@@ -547,6 +553,9 @@ export function recipeDetails(
   const downloadBytes = pendingDownloads(stages).bytes;
   const output = outputSummary(previewSettings, {
     includeFolder: false,
+    slowMotion:
+      slowMotionName(previewSettings) !== null &&
+      stages.some((stage) => stage.kind === 'interpolate'),
     preservingHdr:
       previewSettings.task === 'video' && previewSettings.video_hdr_mode === 'preserve',
   });

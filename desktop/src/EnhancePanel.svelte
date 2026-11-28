@@ -26,8 +26,15 @@
     type EnhancePanelView,
   } from './lib/enhancePanel';
   import { formatEta } from './lib/eta-display';
-  import { formatBytes } from './lib/format';
-  import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
+  import { formatBytes, formatDuration } from './lib/format';
+  import {
+    displayName,
+    fitFor,
+    FIT_LABELS,
+    resultFps,
+    slowMotionApplies,
+    type PlanStage,
+  } from './lib/plan';
   import { planMarks } from './lib/jobSteps';
   import { planLine } from './lib/planLine';
   import {
@@ -170,8 +177,9 @@
   $: if (!settings.task || settings.task === 'edit') {
     outputOpen = false;
   }
-  $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled });
-  $: outputLineTitle = outputTitle(settings, { preservingHdr, audioDisabled });
+  $: slowMotion = slowMotionApplies(settings, usingTemporalVideo);
+  $: outputLineText = outputSummary(settings, { preservingHdr, audioDisabled, slowMotion });
+  $: outputLineTitle = outputTitle(settings, { preservingHdr, audioDisabled, slowMotion });
   $: engineFeatures = snapshot.engine?.features ?? [];
   $: cutoutModel = backgroundModel(snapshot.catalog.models);
   $: cutoutRemoved = backgroundRemoved(settings);
@@ -393,10 +401,22 @@
   $: baseFps = scanRate(scanSelected, fieldOrder, fps);
   $: outputFps =
     settings.task === 'video' && !usingTemporalVideo
-      ? settings.video_interpolation && settings.video_interpolation !== 'off'
+      ? !slowMotion && settings.video_interpolation && settings.video_interpolation !== 'off'
         ? resultFps(settings.video_interpolation, baseFps)
         : baseFps
       : null;
+  // Slow motion keeps the rate after Scan and stretches the length, so the head names the length.
+  $: slowSupported = engineFeatures.includes('video_slow_motion');
+  $: slowLength =
+    slowMotion && (selectedMedia?.duration_seconds ?? 0) > 0
+      ? formatDuration(
+          (selectedMedia?.duration_seconds ?? 0) * (settings.video_interpolation === 'x4' ? 4 : 2),
+        )
+      : '';
+  function slowLabel(factor: 2 | 4): string {
+    const seconds = selectedMedia?.duration_seconds ?? 0;
+    return `${factor}× slower${seconds > 0 ? ` · ${formatDuration(seconds * factor)}` : ''}`;
+  }
   function frameLabel(target: Exclude<InterpolationTarget, 'off'>, baseRate: number): string {
     if (target === 'fps60') return '60 fps';
     if (target === 'fps120') return '120 fps';
@@ -677,7 +697,7 @@
                     ? outputDimensions.split(' · ')[0]
                     : sizeResult}{outputFps !== null && outputFps !== fps
                     ? ` · ${Number(outputFps.toFixed(3))} fps`
-                    : ''}</span
+                    : ''}{slowLength ? ` · ${slowLength}` : ''}</span
                 >{/if}
             </div>
             <div class="panel-row">
@@ -778,7 +798,7 @@
                 <div class="panel-key">
                   <label class="panel-label" for="frame-rate">Frames</label><HelpTip
                     label="Frames"
-                    text="Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. Adding them after upscaling is faster; before upscaling can look smoother, but the added frames are upscaled too, which takes about twice as long at 2×. RIFE · Labs makes the frames: scene cuts stay cuts, very fast motion can smear. The first use downloads about 25 MB."
+                    text={`Adds in-between frames for smoother motion. 2× and 4× multiply the clip's own rate; 60 and 120 fps set a fixed rate and are skipped when the clip is already about that fast. Adding them after upscaling is faster; before upscaling can look smoother, but the added frames are upscaled too, which takes about twice as long at 2×.${slowSupported ? " Slow motion adds the same frames after upscaling and plays them at the clip's own rate, so the video becomes two or four times as long. It is saved without sound and subtitles." : ''} RIFE · Labs makes the frames: scene cuts stay cuts, very fast motion can smear. The first use downloads about 25 MB.`}
                   />
                 </div>
                 <select
@@ -791,14 +811,25 @@
                       : undefined}
                   value={(settings.video_interpolation ?? 'off') === 'off'
                     ? 'off'
-                    : `${settings.video_interpolation}:${settings.video_interpolation_order ?? 'after_upscale'}`}
+                    : slowMotion
+                      ? `slow:${settings.video_interpolation}`
+                      : `${settings.video_interpolation}:${settings.video_interpolation_order ?? 'after_upscale'}`}
                   on:change={(event) => {
                     const [target, order] = event.currentTarget.value.split(':');
+                    if (target === 'slow') {
+                      updateSettings({
+                        video_interpolation: order as InterpolationTarget,
+                        video_interpolation_order: 'after_upscale',
+                        video_slow_motion: true,
+                      });
+                      return;
+                    }
                     updateSettings({
                       video_interpolation: target as InterpolationTarget,
                       video_interpolation_order: (order ||
                         settings.video_interpolation_order ||
                         'after_upscale') as InterpolationOrder,
+                      video_slow_motion: false,
                     });
                   }}
                   ><option value="off">Original</option
@@ -813,7 +844,13 @@
                             baseFps,
                           )}{order === 'before_upscale' ? ' · before upscaling' : ''}</option
                         >{/each}</optgroup
-                    >{/each}</select
+                    >{/each}{#if slowSupported || slowMotion}<optgroup
+                      label="Slow motion (no sound)"
+                      >{#each [2, 4].filter((factor) => slowSupported || settings.video_interpolation === `x${factor}`) as factor}<option
+                          value={`slow:x${factor}`}
+                          disabled={!slowSupported}>{slowLabel(factor as 2 | 4)}</option
+                        >{/each}</optgroup
+                    >{/if}</select
                 >
               </div>{/if}
             {#if cutoutShown}<div class="panel-row">
@@ -1186,6 +1223,7 @@
             {preservingHdr}
             {hdrPreservationAvailable}
             {audioDisabled}
+            {slowMotion}
             {audioModels}
             {selectedAudioModel}
             disabled={settingsLocked}

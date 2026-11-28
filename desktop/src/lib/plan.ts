@@ -484,6 +484,17 @@ export function slowMotionApplies(settings: UiSettings, usingTemporalVideo: bool
   );
 }
 
+/** A finished result at least 1.5 times as long as its original is slow motion: the two cannot
+ * be played on one clock, so the viewer shows the result alone. */
+export function isSlowMotionResult(
+  result: { output_duration_seconds?: number; partial?: boolean } | undefined,
+  media: { duration_seconds: number } | undefined,
+): boolean {
+  const original = media?.duration_seconds ?? 0;
+  const length = result?.output_duration_seconds ?? 0;
+  return !result?.partial && original > 0 && length >= original * 1.5;
+}
+
 /** Selected audio cleanup model, falling back to the catalog default for empty or unknown ids. */
 export function resolveAudioModel(
   audioModels: CatalogVideoModel[] | undefined,

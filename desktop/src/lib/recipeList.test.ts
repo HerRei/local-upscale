@@ -204,6 +204,26 @@ describe('recipeList', () => {
 
     expect(
       recipePlanLine(
+        makeRecipe('slow', {
+          task: 'video',
+          video_task: 'upscale',
+          output_scale: 2,
+          video_interpolation: 'x2',
+          video_interpolation_order: 'after_upscale',
+          video_slow_motion: true,
+          video_clean_audio: true,
+          fixes: ['noise'],
+          stages: [
+            { kind: 'restore', model_id: 'denoise_realplksr_1x', fix: 'noise' },
+            { kind: 'video', model_id: 'localsr_quick_x4_v1' },
+          ],
+        }),
+        catalog,
+      ),
+    ).toBe('Noise → Upscale 2× → Slow motion 2×');
+
+    expect(
+      recipePlanLine(
         makeRecipe('empty-same-size', {
           task: 'denoise',
           output_scale: 1,
