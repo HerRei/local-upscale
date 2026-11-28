@@ -503,6 +503,12 @@ pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> 
         if runtime.preview_original.media_id == id {
             runtime.preview_original = Default::default();
         }
+        // Step pictures of this file go with it.
+        stale.extend(crate::step_results::release_locked(
+            &mut runtime,
+            Some(id),
+            false,
+        ));
         for slot in &runtime.compare.slots {
             stale.push(slot.preview_data_url.clone());
         }
@@ -543,6 +549,7 @@ pub(crate) fn clear_results_checked(state: &AppState) -> AppResult<()> {
     runtime.comparison_preview_data_url.clear();
     runtime.comparison_error.clear();
     runtime.comparison_pair = Default::default();
+    crate::step_results::release_locked(&mut runtime, None, false);
     if runtime.active_job_id.is_empty() {
         runtime.last_output_path.clear();
         runtime.result_preview_data_url.clear();
@@ -579,6 +586,7 @@ fn clear_all_media_and_previews(state: &AppState) -> AppResult<()> {
     runtime.comparison_pair = Default::default();
     runtime.preview_original = Default::default();
     runtime.compare.slots.clear();
+    crate::step_results::release_locked(&mut runtime, None, false);
     clear_completed_result_locked(&mut runtime);
     crate::preview_cache::sweep_unreferenced(&state.paths.preview_root, &database, Some(&runtime))?;
     Ok(())
@@ -2354,7 +2362,12 @@ pub(crate) fn request_preview_regions_checked(
                 (&pair.against, regions.against),
             ] {
                 if region.is_some() && !slot.target_id.is_empty() && slot.target_id != "original" {
-                    let _ = database.media_result_output(media_id, &slot.target_id)?;
+                    let _ = crate::compare::resolve_pair_target(
+                        &database,
+                        runtime.last_steps.as_ref(),
+                        media_id,
+                        &slot.target_id,
+                    )?;
                 }
             }
         }
@@ -2368,10 +2381,12 @@ pub(crate) fn request_preview_regions_checked(
         let crate::types::RuntimeStatus {
             comparison_pair,
             preview_original,
+            last_steps,
             ..
         } = &mut *runtime;
         crate::compare::plan_pair_regions(
             &database,
+            last_steps.as_ref(),
             comparison_pair,
             preview_original,
             media_id,
@@ -2386,10 +2401,12 @@ pub(crate) fn request_preview_regions_checked(
             let crate::types::RuntimeStatus {
                 comparison_pair,
                 preview_original,
+                last_steps,
                 ..
             } = &mut *runtime;
             crate::compare::apply_pair_region(
                 &database,
+                last_steps.as_ref(),
                 comparison_pair,
                 preview_original,
                 &request["data"],
@@ -2667,11 +2684,17 @@ pub fn request_image_comparison(
                 "select an image for this comparison".into(),
             ));
         }
+        let runtime = lock(&state.runtime)?;
         let resolve = |target: &str| -> AppResult<String> {
             if target == "original" {
                 Ok(String::new())
             } else {
-                database.media_result_output(&media_id, target)
+                crate::compare::resolve_pair_target(
+                    &database,
+                    runtime.last_steps.as_ref(),
+                    &media_id,
+                    target,
+                )
             }
         };
         let showing_path = resolve(&showing)?;
@@ -5373,6 +5396,7 @@ fn build_job_request(
             preview_max_dimension: 320,
             // The engine that runs the job is known only when it is sent (`dispatch_once`).
             stage_picture_max_dimension: None,
+            stage_results_directory: None,
             output_scale: Some(if input.task == "denoise" || *skip_upscale {
                 1
             } else {

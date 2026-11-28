@@ -332,6 +332,10 @@
                       "type": ["integer", "null"], "minimum": 64, "maximum": 2048,
                       "description": "Each step before the main model ends with a stage_result whose JPEG is at most this many pixels on its long side. Sent only to engines that list the stage_results feature."
                     },
+                    "stage_results_directory": {
+                      "type": ["string", "null"], "minLength": 1,
+                      "description": "A folder the engine writes each finished step's full-size picture into as <stage_index>.png (8-bit, sRGB), so the app can compare it with the original. The file's path is the stage_result's image_path. Used with stage_picture_max_dimension."
+                    },
                     "stages": {
                       "type": ["array", "null"],
                       "maxItems": 16,

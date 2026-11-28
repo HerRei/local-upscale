@@ -279,6 +279,10 @@ pub struct ImageJobRequest {
     /// an older engine refuses a field it does not know.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stage_picture_max_dimension: Option<u32>,
+    /// Set with it for a lone photo job: the folder the engine writes each step's full-size
+    /// picture into (`step_results`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stage_results_directory: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub output_scale: Option<u32>,
     #[serde(default)]

@@ -842,6 +842,17 @@ pub struct LastSteps {
     pub job_id: String,
     pub media_id: String,
     pub steps: Vec<JobStep>,
+    /// The folder of the step files; never sent to the window.
+    #[serde(skip)]
+    pub directory: std::path::PathBuf,
+}
+
+/// The step files the running lone photo job is asked to write.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct StepFilesRun {
+    pub job_id: String,
+    pub media_id: String,
+    pub directory: std::path::PathBuf,
 }
 
 /// A square of the source picture for the preview patch, in source pixels.
@@ -981,6 +992,9 @@ pub struct RuntimeStatus {
     /// The plan line's name of each of `job_steps`, for the status title.
     #[serde(skip)]
     pub job_step_names: Vec<String>,
+    /// The folder the running job writes its step files into, when it is asked to.
+    #[serde(skip)]
+    pub step_files_run: Option<StepFilesRun>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1271,6 +1285,7 @@ impl Default for RuntimeStatus {
             last_steps: None,
             patches: None,
             job_step_names: Vec::new(),
+            step_files_run: None,
         }
     }
 }

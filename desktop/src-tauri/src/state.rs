@@ -145,6 +145,8 @@ impl AppState {
                 "LocalSR could not make its safety copy of your settings and queue ({error})."
             ));
         }
+        // Step pictures belong to the run that made them; a crash may have left some.
+        crate::step_results::empty_at_start(&paths.work_root);
         let (mut database, set_aside) = Database::open_or_set_aside(&paths.database)?;
         if let Err(error) =
             crate::preview_cache::sweep_unreferenced(&paths.preview_root, &database, None)

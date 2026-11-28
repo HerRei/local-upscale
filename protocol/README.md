@@ -26,6 +26,11 @@ Compatibility rules:
   or, for a step that was skipped, no picture and the reason in `note`. Without the field
   the engine sends no `stage_result`. `stage_started` and `stage_completed` carry the
   optional `step` (the step's id) and `fix` (`""` when the stage fixes nothing).
+  With `stage_results_directory` as well, the engine writes each step's picture there at full
+  size as `<stage_index>.png` (8-bit RGB, with alpha when the picture has it, sRGB) and names
+  it in `image_path`; the files are complete before `job_completed`. A step whose file cannot
+  be written has an empty `image_path`; the job goes on. A cancelled or failed job leaves no
+  partial file.
 - An engine that lists the feature `patch_preview` answers `patch_request` (a square of one
   photo, run through the plan the request carries) with `patch_started`, then one
   `patch_stage` per step (`running`, then `done` with a lossless PNG, or `skipped` with a

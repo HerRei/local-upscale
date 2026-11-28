@@ -404,3 +404,119 @@ def test_an_unstable_blur_fix_sends_a_skipped_result_without_a_picture(
     assert noise["skipped"] is False and noise["jpeg_base64"]
     assert (noise["preview_width"], noise["preview_height"]) == (800, 600)
     assert messages[-1]["type"] == "job_completed"
+
+
+# Step results: the full-size file of each step, for the step chips after the job.
+
+
+def test_step_files_exist_when_the_job_completes_and_are_named_in_the_messages(
+    tmp_path, monkeypatch, capsys
+):
+    steps = tmp_path / "steps" / "steps-job"
+    data = _step_job(
+        tmp_path,
+        _TWO_FIXES,
+        stage_picture_max_dimension=2048,
+        stage_results_directory=str(steps),
+    )
+    messages = _run_step_job(tmp_path, monkeypatch, capsys, data)
+    results = [m["data"] for m in messages if m["type"] == "stage_result"]
+    assert [result["image_path"] for result in results] == [
+        str(steps / "0.png"),
+        str(steps / "1.png"),
+    ]
+    assert messages[-1]["type"] == "job_completed"
+    for index, expected_grey in ((0, 40), (1, 80)):
+        with Image.open(steps / f"{index}.png") as picture:
+            assert picture.format == "PNG" and picture.mode == "RGB"
+            assert picture.size == (3000, 2000)
+            assert abs(int(np.asarray(picture).mean()) - expected_grey) <= 1
+    assert sorted(path.name for path in steps.iterdir()) == ["0.png", "1.png"]
+
+
+def test_the_step_files_are_complete_before_job_completed_is_sent(tmp_path, monkeypatch, capsys):
+    from localsr.worker import image_job
+
+    steps = tmp_path / "steps" / "steps-job"
+    seen = {}
+    original = image_job.StepFiles.finish
+
+    def finish_then_look(self):
+        original(self)
+        seen["files"] = sorted(path.name for path in steps.iterdir())
+
+    monkeypatch.setattr(image_job.StepFiles, "finish", finish_then_look)
+    data = _step_job(
+        tmp_path,
+        _TWO_FIXES,
+        stage_picture_max_dimension=2048,
+        stage_results_directory=str(steps),
+    )
+    messages = _run_step_job(tmp_path, monkeypatch, capsys, data)
+    assert seen["files"] == ["0.png", "1.png"]
+    assert messages[-1]["type"] == "job_completed"
+
+
+def test_a_step_folder_that_cannot_be_written_does_not_stop_the_job(tmp_path, monkeypatch, capsys):
+    blocker = tmp_path / "steps"
+    blocker.write_text("a file where the folder should be")
+    data = _step_job(
+        tmp_path,
+        _TWO_FIXES,
+        stage_picture_max_dimension=2048,
+        stage_results_directory=str(blocker / "steps-job"),
+    )
+    messages = _run_step_job(tmp_path, monkeypatch, capsys, data)
+    results = [m["data"] for m in messages if m["type"] == "stage_result"]
+    assert [result["image_path"] for result in results] == ["", ""]
+    assert all(result["jpeg_base64"] for result in results)
+    assert messages[-1]["type"] == "job_completed"
+
+
+def test_a_skipped_step_has_no_file(tmp_path, monkeypatch, capsys):
+    steps = tmp_path / "steps" / "steps-job"
+    fixes = [
+        ("restore", "nafnet_gopro_deblur", "blur", "blur-restore.pth"),
+        ("restore", "nafnet_sidd_width64", "noise", "noise-restore.pth"),
+    ]
+    data = _step_job(
+        tmp_path,
+        fixes,
+        stage_picture_max_dimension=1024,
+        stage_results_directory=str(steps),
+    )
+    messages = _run_step_job(
+        tmp_path, monkeypatch, capsys, data, width=800, height=600, unstable=["blur-restore.pth"]
+    )
+    blur, noise = [m["data"] for m in messages if m["type"] == "stage_result"]
+    assert blur["image_path"] == "" and noise["image_path"] == str(steps / "1.png")
+    assert sorted(path.name for path in steps.iterdir()) == ["1.png"]
+
+
+def test_a_cancelled_job_leaves_no_step_file(tmp_path, monkeypatch, capsys):
+    steps = tmp_path / "steps" / "steps-job"
+
+    def cancel_on_second_model(self, **kwargs):
+        self.calls.append(kwargs["model_path"])
+        if len(self.calls) == 2:
+            raise InterruptedError
+        tensor = kwargs["img_data"]["tensor"]
+        kwargs["progress_callback"](1, 1, kwargs["tile_size"])
+        return _StepWriter(np.full((3, *tensor.shape[1:]), 40, dtype=np.uint8))
+
+    monkeypatch.setattr(_StepEngine, "process_image", cancel_on_second_model)
+    data = _step_job(
+        tmp_path,
+        _TWO_FIXES,
+        stage_picture_max_dimension=2048,
+        stage_results_directory=str(steps),
+    )
+    messages = _run_step_job(tmp_path, monkeypatch, capsys, data, width=300, height=200)
+    assert messages[-1]["type"] == "job_cancelled"
+    assert not steps.exists()
+
+
+def test_without_the_directory_the_image_path_stays_empty(tmp_path, monkeypatch, capsys):
+    data = _step_job(tmp_path, _TWO_FIXES, stage_picture_max_dimension=2048)
+    messages = _run_step_job(tmp_path, monkeypatch, capsys, data, width=300, height=200)
+    assert [m["data"]["image_path"] for m in messages if m["type"] == "stage_result"] == ["", ""]

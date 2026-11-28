@@ -38,6 +38,7 @@ mod results;
 mod settings;
 mod state;
 mod stay_awake;
+mod step_results;
 mod steps;
 mod system_accent;
 mod tray;
@@ -325,6 +326,8 @@ pub fn run() {
     application.run(|app, event| {
         if matches!(&event, tauri::RunEvent::Exit) {
             let state = app.state::<Arc<AppState>>();
+            let _ = step_results::release(&state);
+            let _ = step_results::drop_run(&state);
             worker::shutdown(&state);
             // Keep the process alive until the supervisor has removed the job's scratch.
             let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);

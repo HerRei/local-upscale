@@ -4042,3 +4042,259 @@ fn step_names_follow_the_plan_line_fixture() {
     let (_, names_of_job) = job_steps_for(&three_step_job("p", directory.path()));
     assert!(names_of_job.iter().all(|name| names.contains(name)));
 }
+
+// Step results: the full-size files of a lone photo job and their lifetime.
+
+fn step_result_message(job: &str, index: u32, path: &std::path::Path) -> WorkerEnvelope {
+    envelope(
+        "stage_result",
+        json!({"job_id": job, "stage_index": index, "stage_count": 3, "step": "jpeg",
+               "fix": "jpeg", "skipped": false, "note": "", "width": 30, "height": 20,
+               "jpeg_base64": "", "preview_width": 30, "preview_height": 20,
+               "image_path": path}),
+    )
+}
+
+/// A lone job whose engine wrote step files `0.png` and `1.png`, then completed.
+fn finished_lone_job(directory: &std::path::Path) -> Arc<AppState> {
+    let (state, sent) = dispatch_to_engine(
+        directory,
+        |output| three_step_job("p", output),
+        &["image", "stage_results"],
+    );
+    let folder = PathBuf::from(sent["data"]["stage_results_directory"].as_str().unwrap());
+    std::fs::create_dir_all(&folder).unwrap();
+    for index in 0..2u32 {
+        std::fs::write(folder.join(format!("{index}.png")), b"png").unwrap();
+    }
+    assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "p"}))).unwrap());
+    for index in 0..2u32 {
+        let path = folder.join(format!("{index}.png"));
+        assert!(accept_envelope(&state, &step_result_message("p", index, &path)).unwrap());
+    }
+    assert!(accept_envelope(
+        &state,
+        &envelope(
+            "job_completed",
+            json!({"job_id": "p", "output_path": directory.join("out").join("p.png")})
+        )
+    )
+    .unwrap());
+    state
+}
+
+#[test]
+fn a_lone_photo_job_is_asked_for_step_files_under_the_work_folder() {
+    let directory = tempfile::tempdir().unwrap();
+    let (state, sent) = dispatch_to_engine(
+        directory.path(),
+        |output| three_step_job("p", output),
+        &["image", "stage_results"],
+    );
+    let expected = state.paths.work_root.join("steps").join("p");
+    assert_eq!(
+        sent["data"]["stage_results_directory"],
+        json!(expected.to_string_lossy())
+    );
+    assert!(protocol_validator().is_valid(&sent), "{sent}");
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+    // An engine without the feature is not asked.
+    let directory = tempfile::tempdir().unwrap();
+    let (state, sent) = dispatch_to_engine(
+        directory.path(),
+        |output| {
+            let mut job = three_step_job("p", output);
+            job["data"]["stage_results_directory"] = json!("/somewhere");
+            job
+        },
+        &["image"],
+    );
+    assert!(sent["data"].get("stage_results_directory").is_none());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+
+    // A job of one step has nothing to keep.
+    let directory = tempfile::tempdir().unwrap();
+    let (state, sent) = dispatch_to_engine(
+        directory.path(),
+        |output| {
+            let mut job = three_step_job("one", output);
+            job["data"]["stages"] = json!([job["data"]["stages"][2]]);
+            job
+        },
+        &["image", "stage_results"],
+    );
+    assert!(sent["data"].get("stage_results_directory").is_none());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_job_with_another_queued_behind_it_gets_no_step_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    let output = directory.path().join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    {
+        let db = lock(&state.database).unwrap();
+        for id in ["p", "q"] {
+            db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+                .unwrap();
+            db.insert_job(id, id, &three_step_job(id, &output).to_string())
+                .unwrap();
+        }
+    }
+    *lock(&state.engine).unwrap() = Some(
+        serde_json::from_value(json!({"protocol_version": 1, "minimum_protocol_version": 1,
+            "engine_id": "e", "engine_version": "1", "features": ["image", "stage_results"],
+            "model_formats": [], "video_engines": []}))
+        .unwrap(),
+    );
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    assert!(begin_dispatch(&state, false).unwrap());
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert!(sent["data"].get("stage_picture_max_dimension").is_some());
+    assert!(sent["data"].get("stage_results_directory").is_none());
+    assert!(lock(&state.runtime).unwrap().step_files_run.is_none());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_completed_lone_job_keeps_its_steps_as_last_steps() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = finished_lone_job(directory.path());
+    let runtime = lock(&state.runtime).unwrap();
+    let last = runtime.last_steps.as_ref().expect("last_steps is set");
+    assert_eq!((last.job_id.as_str(), last.media_id.as_str()), ("p", "p"));
+    let kept: Vec<_> = last.steps.iter().map(|step| step.kept).collect();
+    assert_eq!(kept, [true, true, false]);
+    assert!(last.steps.iter().all(|step| step.preview_url.is_empty()));
+    // The window gets the steps but never the folder.
+    let snapshot = serde_json::to_value(&*runtime).unwrap();
+    assert_eq!(snapshot["last_steps"]["steps"].as_array().unwrap().len(), 3);
+    assert!(snapshot["last_steps"].get("directory").is_none());
+    assert!(runtime.step_files_run.is_none());
+    drop(runtime);
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn resolve_pair_target_gives_step_files_and_refuses_what_is_not_kept() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = finished_lone_job(directory.path());
+    let folder = state.paths.work_root.join("steps").join("p");
+    let runtime = lock(&state.runtime).unwrap();
+    let database = lock(&state.database).unwrap();
+    let last = runtime.last_steps.as_ref();
+    let resolve = |media: &str, target: &str| {
+        crate::compare::resolve_pair_target(&database, last, media, target)
+    };
+    assert_eq!(
+        resolve("p", "p#1").unwrap(),
+        folder.join("1.png").to_string_lossy()
+    );
+    // The last step is the finished result: no step file.
+    assert!(resolve("p", "p#2").is_err());
+    assert!(resolve("p", "p#7").is_err());
+    assert!(resolve("p", "p#x").is_err());
+    assert!(resolve("p", "other#1").is_err());
+    assert!(resolve("other-media", "p#1").is_err());
+    assert!(crate::compare::resolve_pair_target(&database, None, "p", "p#1").is_err());
+    // Anything else goes to the result history as before: the job has no saved file here.
+    assert!(resolve("p", "p").is_err());
+    std::fs::remove_file(folder.join("1.png")).unwrap();
+    assert!(resolve("p", "p#1").is_err());
+}
+
+#[test]
+fn step_files_go_with_the_next_job_clear_results_remove_media_and_clear_media() {
+    type End = fn(&Arc<AppState>);
+    let ends: [(&str, End); 4] = [
+        ("the next dispatch", |state| {
+            let output = state.paths.default_output.parent().unwrap().join("out");
+            let db = lock(&state.database).unwrap();
+            db.insert_media("n", "/in/n.png", "n", "image").unwrap();
+            db.insert_job("n", "n", &three_step_job("n", &output).to_string())
+                .unwrap();
+            drop(db);
+            assert!(begin_dispatch(state, false).unwrap());
+            assert_eq!(lock(&state.runtime).unwrap().active_job_id, "n");
+        }),
+        ("clear_results", |state| {
+            crate::commands::clear_results_checked(state).unwrap();
+        }),
+        ("remove_media", |state| {
+            crate::commands::remove_media_checked(state, "p").unwrap();
+        }),
+        ("clear_media", |state| {
+            crate::commands::clear_media_checked(state).unwrap();
+        }),
+    ];
+    for (what, end) in ends {
+        let directory = tempfile::tempdir().unwrap();
+        let state = finished_lone_job(directory.path());
+        let (sender, _receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        let folder = state.paths.work_root.join("steps").join("p");
+        assert!(folder.join("0.png").is_file(), "{what}");
+        end(&state);
+        assert!(!folder.exists(), "{what}: the folder is gone");
+        assert!(
+            lock(&state.runtime).unwrap().last_steps.is_none(),
+            "{what}: last_steps is empty"
+        );
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+}
+
+#[test]
+fn removing_another_file_keeps_the_step_files() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = finished_lone_job(directory.path());
+    lock(&state.database)
+        .unwrap()
+        .insert_media("z", "/in/z.png", "z", "image")
+        .unwrap();
+    crate::commands::remove_media_checked(&state, "z").unwrap();
+    assert!(lock(&state.runtime).unwrap().last_steps.is_some());
+    crate::step_results::release(&state).unwrap();
+    assert!(!state.paths.work_root.join("steps").join("p").exists());
+    assert!(lock(&state.runtime).unwrap().last_steps.is_none());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_cancelled_or_failed_job_keeps_no_step_files_and_start_up_empties_the_folder() {
+    for ending in ["job_cancelled", "job_failed"] {
+        let directory = tempfile::tempdir().unwrap();
+        let (state, sent) = dispatch_to_engine(
+            directory.path(),
+            |output| three_step_job("p", output),
+            &["image", "stage_results"],
+        );
+        let folder = PathBuf::from(sent["data"]["stage_results_directory"].as_str().unwrap());
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join("0.png"), b"png").unwrap();
+        assert!(accept_envelope(&state, &envelope("job_started", json!({"job_id": "p"}))).unwrap());
+        assert!(accept_envelope(
+            &state,
+            &envelope(ending, json!({"job_id": "p", "error_message": "x"}))
+        )
+        .unwrap());
+        assert!(!folder.exists(), "{ending}");
+        let runtime = lock(&state.runtime).unwrap();
+        assert!(runtime.last_steps.is_none() && runtime.step_files_run.is_none());
+        drop(runtime);
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    let leftover = paths.work_root.join("steps").join("old");
+    std::fs::create_dir_all(&leftover).unwrap();
+    std::fs::write(leftover.join("0.png"), b"png").unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    assert!(!state.paths.work_root.join("steps").exists());
+}
