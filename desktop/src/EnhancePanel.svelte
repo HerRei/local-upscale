@@ -518,8 +518,8 @@
       {#if settings.task}
         {#if settings.task === 'edit'}
           <section class="control-section" aria-label="Edit prompt">
-            <div class="eyebrow-row">
-              <span class="eyebrow">What to change</span>
+            <div class="panel-head eyebrow-row">
+              <span class="panel-head-title">What to change</span>
               {#if promptExamples.length > 0}
                 <Popover
                   bind:open={examplesOpen}
@@ -878,8 +878,8 @@
 
         {#if settings.task === 'edit'}
           <section class="control-section model-section" aria-label="Model plan">
-            <div class="eyebrow eyebrow-row">
-              <span>Model</span>
+            <div class="panel-head eyebrow-row">
+              <span class="panel-head-title">Model</span>
               <span class="eyebrow-actions">
                 {#if !noRestoreModel && !plan.some((stage) => stage.role === 'primary')}<button
                     class="link-button"

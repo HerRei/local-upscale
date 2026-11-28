@@ -5267,6 +5267,10 @@
         if (comparePicks.length < 2) return;
         mainTab = 'compare';
         page = 'preview';
+        // The panel, the header and Start describe the selected file, so it must be the
+        // one being compared.
+        const first = comparePicks[0].media_id;
+        if (selectedMedia?.id !== first) void selectQueueMedia(first, false);
       }}
       compareActive={mainTab === 'compare'}
       historyError={bulkHistoryError}

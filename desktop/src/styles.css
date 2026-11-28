@@ -2179,6 +2179,24 @@ input[type='search'],
   color: var(--text);
   font-size: calc(12px * var(--ui-scale));
 }
+select {
+  /* WebKit draws its pop-up button at a fixed 18-20 px and ignores height, padding and
+     border for every appearance except none. The menu that opens is still the native one;
+     only the closed button is drawn here, with the arrow as two gradients in the text
+     colour so it follows every theme. */
+  -webkit-appearance: none;
+  appearance: none;
+  padding-right: 28px;
+  background-image:
+    linear-gradient(45deg, transparent 50%, var(--text) 50%),
+    linear-gradient(135deg, var(--text) 50%, transparent 50%);
+  background-position:
+    calc(100% - 15px) 50%,
+    calc(100% - 10px) 50%;
+  background-size: 5px 5px;
+  background-repeat: no-repeat;
+  text-overflow: ellipsis;
+}
 .model-description {
   margin: 10px 0 7px;
   color: var(--secondary);
@@ -5459,6 +5477,14 @@ label.setting-label {
   }
   .button.primary {
     border-color: ButtonText;
+  }
+  /* Chromium draws no gradient arrow here; its own pop-up button follows the system
+     colours and, unlike WebKit's, already honours the height. */
+  select {
+    -webkit-appearance: auto;
+    appearance: auto;
+    background-image: none;
+    padding-right: 10px;
   }
   :is(button, input, select):disabled,
   [aria-disabled='true'] {

@@ -6448,6 +6448,33 @@ describe('Comparing saved results', () => {
     expect(load).toHaveBeenCalled();
   });
 
+  it('selects the file of the first ticked result when Compare opens, without changing the ticks or starting anything', async () => {
+    vi.spyOn(HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+    const snapshot = readySnapshot([image('photo', true), video('clip')]);
+    api.selectMedia.mockImplementation(async (id: string) => {
+      snapshot.media.forEach((item) => (item.selected = item.id === id));
+      api.refreshSnapshot.mockResolvedValue(structuredClone(snapshot));
+    });
+    api.listAllMediaResults.mockResolvedValue([
+      historyOf('clip', [
+        { ...row('slow'), kind: 'video', output_fps: 15 },
+        { ...row('fast'), kind: 'video', output_fps: 60 },
+      ]),
+    ]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('tab', { name: /Outputs/ }));
+    await user.click(await screen.findByRole('checkbox', { name: 'slow, clip.mp4' }));
+    await user.click(screen.getByRole('checkbox', { name: 'fast, clip.mp4' }));
+    // Ticking alone selects nothing.
+    expect(api.selectMedia).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('button', { name: 'Compare these 2' }));
+    await waitFor(() => expect(api.selectMedia).toHaveBeenCalledWith('clip'));
+    await waitFor(() => expect(document.querySelectorAll('.compare-pane video')).toHaveLength(1));
+    expect(screen.getByText(/^2 of 4 chosen/)).toBeTruthy();
+    expect(api.startJobs).not.toHaveBeenCalled();
+  });
+
   it('compares two photo outputs of one source in slider and boxes with job details and omits missing fields', async () => {
     const first = row('first', {
       model_label: 'Upscale',
