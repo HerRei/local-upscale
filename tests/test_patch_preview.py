@@ -386,6 +386,105 @@ def test_colour_guesses_from_the_whole_picture_not_the_crop(harness, monkeypatch
     assert np.abs(left[:, 100:].astype(np.int16) - right[:, :100].astype(np.int16)).max() <= 1
 
 
+# The Colour model between photos ----------------------------------------------------
+
+
+def _count_loads(harness, monkeypatch) -> list[str]:
+    loaded: list[str] = []
+    original = harness.adapter.load
+
+    def counted(path, *args, **kwargs):
+        loaded.append(path)
+        return original(path, *args, **kwargs)
+
+    monkeypatch.setattr(harness.adapter, "load", counted)
+    return loaded
+
+
+def _three_photos(harness) -> list[str]:
+    return [
+        _picture(harness.tmp / f"photo-{seed}.png", (420, 300), seed=seed) for seed in (11, 12, 13)
+    ]
+
+
+def test_colour_stays_loaded_so_a_new_photo_does_not_load_the_model_again(harness, monkeypatch):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: True)
+    loaded = _count_loads(harness, monkeypatch)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    colour = _colour_fix(path)
+    for photo in _three_photos(harness):
+        messages = harness.run([colour], image_path=photo)
+        assert _types(messages)[-1] == "patch_completed"
+    assert loaded == [path]
+    assert path in harness.engine._loaded_models
+
+
+def test_colour_is_loaded_again_where_the_device_has_no_room_to_keep_it(harness, monkeypatch):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: False)
+    loaded = _count_loads(harness, monkeypatch)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    for photo in _three_photos(harness)[:2]:
+        harness.run([_colour_fix(path)], image_path=photo)
+    assert loaded == [path, path]
+    assert harness.engine._loaded_models == {}
+
+
+def test_switching_the_patch_off_releases_the_colour_model(harness, monkeypatch):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: True)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    harness.run([_colour_fix(path)])
+    assert path in harness.engine._loaded_models
+    harness.server._release_patch_colour()
+    assert harness.engine._loaded_models == {}
+    assert harness.server.patch_cache.colour_model is None
+
+
+def test_the_patch_release_message_reaches_the_release(harness, monkeypatch):
+    released = threading.Event()
+    server = WorkerServer(requests=_lines({"type": "patch_release", "data": {}}))
+    monkeypatch.setattr(server, "_release_patch_colour", released.set)
+    server.model_adapter = harness.adapter
+    server.engine = harness.engine
+    runner = threading.Thread(target=server.run, name="localsr-test-worker")
+    runner.start()
+    runner.join(60)
+    assert not runner.is_alive()
+    assert released.is_set()
+
+
+def test_a_release_without_a_colour_patch_does_not_build_the_engine():
+    server = WorkerServer()
+    server._release_patch_colour()
+    assert server._engine is None
+
+
+def test_a_patch_without_colour_keeps_the_model_and_a_job_or_idle_release_drops_it(
+    harness, monkeypatch
+):
+    from localsr.worker import patch_preview
+
+    monkeypatch.setattr(patch_preview, "colour_may_stay_loaded", lambda _device: True)
+    path = _ddcolor_checkpoint(harness.tmp / "ddcolor.pth")
+    harness.run([_colour_fix(path)])
+    harness.run([_fix(harness.noise)])
+    assert path in harness.engine._loaded_models
+    # A job that does not use it makes room for its own models, as for any warm model.
+    harness.engine.release_models_except({harness.up2})
+    assert path not in harness.engine._loaded_models
+    harness.run([_colour_fix(path)], image_path=_three_photos(harness)[0])
+    assert path in harness.engine._loaded_models
+    server = harness.server
+    server._idle_since = 0.0
+    server._release_when_idle(worker_server.IDLE_RELEASE_SECONDS + 1)
+    assert harness.engine._loaded_models == {}
+
+
 # Cancelling and scheduling ----------------------------------------------------------
 
 

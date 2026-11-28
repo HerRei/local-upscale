@@ -967,6 +967,12 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
         crate::worker::apply_low_priority(state, enabled);
     } else if name == "keep_awake" {
         crate::stay_awake::sync(state);
+    } else if name == "preview_patch" || name == "preview_patch_shown" {
+        let settings = lock(&state.settings)?;
+        if settings.preview_patch == "off" || !settings.preview_patch_shown {
+            drop(settings);
+            crate::patch_preview::switched_off(state);
+        }
     }
     Ok(())
 }

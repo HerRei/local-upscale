@@ -712,6 +712,16 @@ class WorkerServer:
         sys.stderr.flush()
         os._exit(DEVICE_LOST_EXIT_CODE)
 
+    def _release_patch_colour(self) -> None:
+        """Drop the Colour model the preview patches kept loaded; nothing is loaded for a
+        worker that never ran a Colour patch, and then the engine is not even built."""
+        if self.patch_cache is None or self.patch_cache.colour_model is None:
+            return
+        from localsr.worker.patch_preview import release_resident_colour
+
+        release_resident_colour(self.engine, self.patch_cache)
+        gc.collect()
+
     def _note_activity(self) -> None:
         self._idle_since = None
         self._idle_released = False
@@ -801,6 +811,10 @@ class WorkerServer:
 
                 elif req_type == "patch_request":
                     self._run_patch(data)
+
+                elif req_type == "patch_release":
+                    # The preview patch was switched off: its Colour model goes back.
+                    self._release_patch_colour()
 
                 elif req_type == "media_probe_request":
                     media_path = data.get("media_path")
