@@ -163,6 +163,7 @@
     UiSettings,
     WorkerEnvelope,
   } from './lib/types';
+  import { strengthOf } from './lib/fixRows';
 
   let snapshot: AppSnapshot = demoSnapshot();
   let booting = true;
@@ -4292,6 +4293,12 @@
     }
   }
 
+  /** A recipe stage keeps a fix's strength only when it is under Full. */
+  function strengthParams(selection: FixStageSelection): { params?: { strength: number } } {
+    const strength = strengthOf(selection);
+    return strength < 1 ? { params: { strength } } : {};
+  }
+
   function buildRecipe(id: string, name: string): Recipe | undefined {
     if (!settings.task) return undefined;
     // The fixes that run before the model; a fix without a model has nothing to keep.
@@ -4346,6 +4353,7 @@
               ),
               model_id: selection.model_id,
               fix: selection.fix,
+              ...strengthParams(selection),
             })),
             {
               kind: restoring
@@ -4359,7 +4367,10 @@
                   : settings.selected_model_id,
               // Restore's model is its last fix.
               ...(restoring && imageFixes.length
-                ? { fix: imageFixes[imageFixes.length - 1].fix }
+                ? {
+                    fix: imageFixes[imageFixes.length - 1].fix,
+                    ...strengthParams(imageFixes[imageFixes.length - 1]),
+                  }
                 : {}),
             },
           ],

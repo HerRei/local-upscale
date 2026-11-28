@@ -609,6 +609,7 @@
                 {openLibrary}
                 {toggleFix}
                 {seeFixOnPhoto}
+                {radioGroupKeydown}
                 {patchLink}
                 {updateSettings}
                 bind:moreOpen={moreFixesOpen}

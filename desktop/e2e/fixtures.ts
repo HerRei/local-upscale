@@ -22,6 +22,12 @@ export const cutout: Scenario = {
   settings: { ...ready.settings, output_directory: '/Users/test/Desktop' },
 };
 
+/** A ready engine that can change how strongly Blur, JPEG artifacts and Noise are applied. */
+export const strength: Scenario = {
+  ...ready,
+  features: [...FEATURES, 'fix_strength', 'stage_params_and_masks'],
+};
+
 /** Two photos; the first has three finished outputs, the second one. */
 export const withOutputs: Scenario = {
   ...upscale,

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { recipeFixStages, recipeMatches } from './recipes';
+import { recipeFixStages, recipeMatches, sameFixStages } from './recipes';
 import type { Recipe, UiSettings } from './types';
 
 describe('recipeFixStages and recipeMatches', () => {
@@ -75,5 +75,54 @@ describe('recipeFixStages and recipeMatches', () => {
       { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
       { fix: 'noise', model_id: 'nafnet_sidd_width64' },
     ]);
+  });
+});
+
+describe('recipes, strength', () => {
+  const snapshot = demoSnapshot();
+  const recipe = (strength?: unknown): Recipe => ({
+    id: 'strength',
+    name: 'Strength',
+    task: 'upscale',
+    quality: 'quick',
+    model_id: 'localsr_quick_x4_v1',
+    output_scale: 4,
+    tile_size: 256,
+    halo: 8,
+    precision: 'fp32',
+    safe_memory: false,
+    fixes: ['noise'],
+    stages: [
+      {
+        kind: 'restore',
+        model_id: 'denoise_realplksr_1x',
+        fix: 'noise',
+        ...(strength === undefined ? {} : { params: { strength, other: 1 } }),
+      },
+      { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+    ],
+  });
+
+  it('copies a strength under 1 to the entry and nothing else', () => {
+    expect(recipeFixStages(recipe(0.4), snapshot.catalog)).toEqual([
+      { fix: 'noise', model_id: 'denoise_realplksr_1x', params: { strength: 0.4 } },
+    ]);
+    expect(recipeFixStages(recipe(1), snapshot.catalog)).toEqual([
+      { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+    ]);
+    expect(recipeFixStages(recipe(), snapshot.catalog)).toEqual([
+      { fix: 'noise', model_id: 'denoise_realplksr_1x' },
+    ]);
+  });
+
+  it('compares strengths: 0.4 differs from 0.7, absent equals 1', () => {
+    const entry = (strength?: number) => ({
+      fix: 'noise' as const,
+      model_id: 'm',
+      ...(strength === undefined ? {} : { params: { strength } }),
+    });
+    expect(sameFixStages([entry(0.4)], [entry(0.7)])).toBe(false);
+    expect(sameFixStages([entry(0.4)], [entry(0.4)])).toBe(true);
+    expect(sameFixStages([entry()], [entry(1)])).toBe(true);
   });
 });

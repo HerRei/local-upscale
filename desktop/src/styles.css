@@ -1981,6 +1981,10 @@ input:focus-visible {
 .seg-inline.size-switch {
   grid-template-columns: 1.5fr 1fr 1fr 1fr;
 }
+.seg-inline.strength-switch {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 8px;
+}
 .seg-inline.task-switch {
   grid-template-columns: minmax(max-content, 1.45fr) minmax(0, 1fr);
 }

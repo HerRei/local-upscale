@@ -278,8 +278,8 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
   to `VideoChainContext`.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI
   row, and running after the primary in video (today refused).
-- **Denoise/deblur strength**: declare `strength` on the fix step, and blend the fix output
-  with its input by that scalar in `_run_stage`, next to the mask blend.
+- **Denoise/deblur strength**: built in 0.7.0 as `Light` / `Medium` / `Full` on a ticked Blur,
+  JPEG artifacts or Noise row; see `docs/design/tools-wave.md`, section 1.
 - **Object/scratch removal** (inpainting with a painted mask): a model-bearing step stage, a
   `requires_mask` registry flag, and the host command that writes a painted mask.
 - **Masks per fix**: `supports_mask` on the fix steps and the painting UI; the plumbing is
