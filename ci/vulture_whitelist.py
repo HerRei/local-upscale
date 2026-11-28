@@ -185,3 +185,7 @@ recommended_cpu_threads
 cpu_threads
 cpu_avx2
 framerate  # PyAV codec_context.framerate: set to 0/1 so Matroska writes no DefaultDuration
+
+# Preview patch (engine feature patch_preview): the request message the Rust host sends,
+# parsed through the schema by request_validation.validate_patch_request.
+PatchRequest

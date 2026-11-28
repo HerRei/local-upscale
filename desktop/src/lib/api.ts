@@ -562,6 +562,7 @@ export const requestPreviewRegions = (
   generation: number,
   regions: import('./compareRegions').PreviewRegions,
 ): Promise<void> => invoke('request_preview_regions', { mediaId, generation, regions });
+/** @public The preview patch's request, sent by the patch view (task P6). */
 export const requestPatchPreview = (request: {
   mediaId: string;
   slot: 'a' | 'b';
@@ -580,6 +581,7 @@ export const requestPatchPreview = (request: {
     stageLimit: request.stageLimit ?? null,
     force: request.force ?? false,
   });
+/** @public The preview patch's Stop, wired by the patch view (task P6). */
 export const cancelPatchPreview = (slot: 'a' | 'b'): Promise<void> =>
   invoke('cancel_patch_preview', { slot });
 export const clearPreviewRegions = (): Promise<void> => invoke('clear_preview_regions');

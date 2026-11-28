@@ -524,7 +524,10 @@ export interface PatchState {
   steps: PatchStep[];
 }
 
-/** Variant A is the plan as it stands; B swaps one slot's model for comparison. */
+/**
+ * Variant A is the plan as it stands; B swaps one slot's model for comparison.
+ * @public Sent by the two-model comparison (task P7).
+ */
 export interface PatchReplace {
   slot: 'a' | 'b';
   fix: string;
