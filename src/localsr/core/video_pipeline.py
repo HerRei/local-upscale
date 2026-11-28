@@ -343,6 +343,8 @@ def _run_video_job(
         validate_hdr_encoder(config.video_codec, config.external_ffmpeg, config.container)
         if config.deflicker:
             raise ValueError("De-flicker is not yet supported with HDR preservation.")
+        if any(stage.step_id == "stabilise" for stage in config.preprocess_stages):
+            raise ValueError("Stabilise is not yet supported with HDR preservation.")
         if any(
             stage.step_id == "colour" or stage.fix == "colour" for stage in config.preprocess_stages
         ):
