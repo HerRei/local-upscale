@@ -50,12 +50,14 @@ def test_visits_count_unique_visitors_and_every_view(tmp_path):
     assert store.record(entry("/hit?p=/localsr/&r=news.ycombinator.com"), NOW)
     assert store.record(entry("/hit?p=/localsr/&r="), NOW)
     assert store.record(entry("/hit?p=/localsr/download/&r=herrei.github.io"), NOW)
+    assert store.record(entry("/hit?p=/localsr/guide/&r=localsr.com"), NOW)
     assert store.record(entry("/hit?p=/localsr/", ip="198.51.100.2"), NOW)
     counts = daily(store)
-    assert counts[("visitor", "")] == (2, 4)
+    assert counts[("visitor", "")] == (2, 5)
     assert counts[("view", "/localsr/")] == (2, 3)
     assert counts[("referrer", "news.ycombinator.com")] == (1, 1)
-    assert ("referrer", "herrei.github.io") not in counts
+    for own in ("herrei.github.io", "localsr.com"):
+        assert ("referrer", own) not in counts
 
 
 def test_rejects_bots_bad_input_and_uncounted_requests(tmp_path):

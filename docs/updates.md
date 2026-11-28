@@ -128,7 +128,7 @@ The platform key in a feed is `<os>-<architecture>-<backend>-<kind>`:
 
 The Stable channel rejects prereleases, and both channels reject entries whose
 backend, package kind or worker protocol do not match the installed build. The
-public beta feed is `https://herrei.github.io/localsr/updates/beta.json`.
+public beta feed is `https://localsr.com/updates/beta.json`.
 
 ## Feed format
 
@@ -336,7 +336,7 @@ Do not point an updater package URL at an HTML download page.
 Put this notice on the download page and in the 0.3.7 release body:
 
 > Windows/Linux users of 0.3.3–0.3.6: install 0.3.7 once from
-> https://herrei.github.io/localsr/download/ to enable future in-app updates.
+> https://localsr.com/download/ to enable future in-app updates.
 > Your settings, queue and downloaded models stay in your existing profile.
 
 Finish or cancel jobs and quit every LocalSR process first. On Windows, download

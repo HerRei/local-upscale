@@ -50,7 +50,7 @@ BOT = re.compile(
 )
 TOKEN = re.compile(r"[A-Za-z0-9._+-]{1,80}")
 HOSTNAME = re.compile(r"[a-z0-9](?:[a-z0-9.-]{0,251}[a-z0-9])?")
-OWN_HOSTS = {"herrei.github.io"}
+OWN_HOSTS = {"herrei.github.io", "localsr.com", "www.localsr.com"}
 MAX_LINE = 65536
 # The pages, referrers and app versions of a day come from whoever sends the request, and
 # daily totals are kept forever. Past this many distinct keys per kind and day, new keys

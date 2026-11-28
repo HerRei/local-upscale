@@ -59,7 +59,7 @@ impl UpdateConfig {
                 .unwrap_or("")
                 .into(),
             feed: option_env!("LOCALSR_UPDATE_FEED")
-                .unwrap_or("https://herrei.github.io/localsr/updates")
+                .unwrap_or("https://localsr.com/updates")
                 .into(),
             backend: option_env!("LOCALSR_UPDATE_BACKEND").unwrap_or("").into(),
             engine_id: option_env!("LOCALSR_ENGINE_ID").unwrap_or("").into(),
@@ -552,7 +552,7 @@ pub fn update_status(state: State<'_, Arc<AppState>>) -> AppResult<UpdateStatus>
 }
 
 /// The release notes, generated with every release (the old whats-new page was not).
-const DISCOVER_URL: &str = "https://herrei.github.io/localsr/release-notes/";
+const DISCOVER_URL: &str = "https://localsr.com/release-notes/";
 
 /// Where What's New opens: the feed's own link, else the offered version's release notes.
 fn discover_url_for(raw: &serde_json::Value, version: &str) -> String {
@@ -578,7 +578,7 @@ fn validated_discover_url(value: Option<&str>) -> String {
                 && url.username().is_empty()
                 && url.password().is_none()
                 && url.port_or_known_default() == Some(443)
-                && (url.host_str() == Some("herrei.github.io")
+                && (matches!(url.host_str(), Some("localsr.com" | "herrei.github.io"))
                     || (url.host_str() == Some("github.com") && url.path().starts_with("/HerRei/")))
         })
         .map(|url| url.to_string())

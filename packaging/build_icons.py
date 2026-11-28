@@ -8,7 +8,7 @@ ROOT = Path(__file__).resolve().parent.parent
 OUTPUT = ROOT / "packaging" / "icons"
 
 
-# Brand colours shared with the website (herrei.github.io/localsr): paper, ink
+# Brand colours shared with the website (localsr.com): paper, ink
 # and the terracotta of the "LocalSR." dot.
 PAPER_TOP = (247, 245, 238, 255)
 PAPER_BOTTOM = (233, 230, 219, 255)
