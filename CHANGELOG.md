@@ -28,12 +28,14 @@
   list. Its value, `Paint…` or the number of marks, opens a paint bar in the viewer:
   paint over each speck, scratch or spot (Paint and Erase, a brush size, Undo, Clear,
   Done), and LocalSR fills the painted places from the picture around them before the
-  other fixes and the upscale (OpenCV inpainting, no model). Each photo keeps its own
-  marks; the host keeps the strokes, draws the mask and gives it only to that photo's
-  job, and a photo without marks is left as it is. With nothing else ticked at Same
-  size, only painted photos are started and the file ends in `_repaired`. The preview
-  patch shows the repair on its region. It works for small marks on even areas; large
-  areas or marks across fine detail come out smeared. Marks are not saved in recipes.
+  other fixes and the upscale: hairlines and specks with OpenCV inpainting, wider marks
+  with MI-GAN (28 MB, downloaded with the first start that has marks). Each photo keeps
+  its own marks; the host keeps the strokes, draws the mask and gives it only to that
+  photo's job, and a photo without marks is left as it is. With nothing else ticked at
+  Same size, only painted photos are started and the file ends in `_repaired`. The
+  preview patch shows the repair on its region, and Start shows how long it will take.
+  A mark across a face, lettering or other fine detail can still come out wrong. Marks
+  are not saved in recipes.
 - **Fix strength.** A ticked Blur, JPEG artifacts (Compression on a video) or Noise row
   now shows how strongly its fix is applied: Full, Medium or Light. Click the value to
   choose. Light and Medium mix the fixed picture with the picture before the fix, so
@@ -136,7 +138,8 @@
 - **Fixes.** Comparing videos keeps both sides on the same frame (#176). A result shown
   without its result list is no longer labelled Original. The hardware line shows no
   memory meter when there is no reading. Models can be chosen while Start waits for a
-  download; only the model folder stays locked. On Windows, the engine no longer waits
+  download; only the model folder stays locked. Start right after a step's model has
+  downloaded (Dust & scratches, Backgr.) starts the job. On Windows, the engine no longer waits
   on a blocked input pipe when it loads a library for the first time. On the command
   line, `localsr process` with the DDColor model keeps its colour on a black-and-white
   picture. On Linux and Windows, Edit no longer stops with "the system swapped 0.5 GiB"
