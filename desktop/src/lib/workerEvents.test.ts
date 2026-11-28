@@ -213,7 +213,7 @@ describe('desktop state', () => {
         estimated_remaining_seconds: 65,
       },
     });
-    expect(snapshot.runtime.status_detail).toBe('3 of 12 tiles · ETA 1:05');
+    expect(snapshot.runtime.status_detail).toBe('3 of 12 tiles · ETA ≈ 1:05');
     snapshot = applyWorkerEnvelope(snapshot, {
       type: 'video_frame_completed',
       data: {
@@ -227,7 +227,7 @@ describe('desktop state', () => {
     });
     expect(snapshot.runtime.worker).toBe('ready');
     expect(snapshot.runtime.progress).toBe(25);
-    expect(snapshot.runtime.status_detail).toBe('Frame 12 of 48 · ETA 1:30');
+    expect(snapshot.runtime.status_detail).toBe('Frame 12 of 48 · ETA ≈ 1:30');
     expect(snapshot.runtime.result_preview_data_url).toContain('live-frame');
     snapshot = applyWorkerEnvelope(snapshot, {
       type: 'video_job_completed',
@@ -612,14 +612,14 @@ it('waits for the first tile measurement before showing a long-duration frame ET
     type: 'video_tile_progress',
     data: { ...data, completed_tiles: 1, estimated_remaining_seconds: 180000 },
   });
-  expect(snapshot.runtime.status_detail).toContain('Tile 1 / 20 · ETA ≈ 2d 2h');
+  expect(snapshot.runtime.status_detail).toContain('Tile 1 / 20 · ETA ≈ 2 d 2 h');
   expect(snapshot.runtime.progress).toBeCloseTo(0.005);
   snapshot = applyWorkerEnvelope(snapshot, {
     type: 'video_frame_started',
     data: { ...data, frame_index: 1 },
   });
-  expect(snapshot.runtime.status_detail).toContain('ETA ≈ 2d 2h');
-  expect(formatDuration(3599.9)).toBe('1h 0m');
+  expect(snapshot.runtime.status_detail).toContain('ETA ≈ 2 d 2 h');
+  expect(formatDuration(3599.9)).toBe('1 h 0 min');
 });
 
 it('keeps temporal memory evidence separate from progress and rejects other jobs', () => {

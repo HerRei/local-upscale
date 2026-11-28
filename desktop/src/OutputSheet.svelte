@@ -141,10 +141,10 @@
           {disabled}
           checked={settings.preserve_metadata}
           on:change={(event) => updateSettings({ preserve_metadata: event.currentTarget.checked })}
-        /> Preserve safe metadata and color profile</label
+        /> Preserve safe metadata and colour profile</label
       ><HelpTip
-        label="Metadata and color profile"
-        text="Keeps the date, artist and copyright tags and the color profile, converted to sRGB. GPS position, camera serial numbers and similar tags are never copied. With this off, the file carries none of it."
+        label="Metadata and colour profile"
+        text="Keeps the date, artist and copyright tags and the colour profile, converted to sRGB. GPS position, camera serial numbers and similar tags are never copied. With this off, the file carries none of it."
       />
     </div>
   {:else}

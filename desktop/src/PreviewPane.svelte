@@ -1689,7 +1689,7 @@
               on:click={() => {
                 previewRetryMediaId = '';
                 void repairSelectedPreview();
-              }}>Try Again</button
+              }}>Try again</button
             >
           </div>
         {/if}
@@ -1749,7 +1749,8 @@
         <div class="playback-preparation" role="status" on:pointerdown|stopPropagation>
           <span class="playback-spinner" aria-hidden="true"></span>
           <span
-            >{videoPreparationProgress?.stage ?? 'Preparing video comparison…'} · {videoPreparationElapsed}s
+            >{videoPreparationProgress?.stage ?? 'Preparing video comparison…'} · {videoPreparationElapsed}
+            s
             {#if videoPreparationProgress}
               · {videoPreparationProgress.frame}{videoPreparationProgress.total > 0
                 ? ` / ~${videoPreparationProgress.total} frames`

@@ -102,14 +102,14 @@ export function etaStep(seconds: number): number {
 
 /** A time that is on its step, as text. */
 function stepText(seconds: number): string {
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) return `${seconds} s`;
   if (seconds < 600)
     return `${Math.floor(seconds / 60)}:${(seconds % 60).toString().padStart(2, '0')}`;
   const minutes = seconds / 60;
   if (minutes < 60) return `${minutes} min`;
   const hours = Math.floor(minutes / 60);
-  if (hours < 24) return minutes % 60 ? `${hours}h ${minutes % 60}m` : `${hours}h`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h`;
+  if (hours < 24) return minutes % 60 ? `${hours} h ${minutes % 60} min` : `${hours} h`;
+  return `${Math.floor(hours / 24)} d ${hours % 24} h`;
 }
 
 /** How far from the shown value a time may drift before the text changes, in steps. */
@@ -188,7 +188,7 @@ export class EtaDisplay {
 /** A progress line with the engine's raw "· ETA …" at its end replaced by the shown time. */
 export function withEta(detail: string, shown: string | null): string {
   return detail.replace(
-    / · ETA(?: ≈)? (?:\d+d \d+h|\d+h \d+m|\d+:\d{2}|\d+s)$/,
+    / · ETA(?: ≈)? (?:\d+ d \d+ h|\d+ h \d+ min|\d+:\d{2}|\d+ s)$/,
     shown ? ` · ETA ≈ ${shown}` : '',
   );
 }

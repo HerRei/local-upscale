@@ -6,7 +6,7 @@ test('skip hides the offered version', async ({ page }) => {
   await openApp(page, { update: '0.5.0' });
   const notice = page.getByRole('status').filter({ hasText: 'LocalSR 0.5.0 is available' });
   await expect(notice).toBeVisible();
-  await notice.getByRole('button', { name: 'Skip This Version' }).click();
+  await notice.getByRole('button', { name: 'Skip this version' }).click();
   await expect(notice).toBeHidden();
   expect(await hostCalls(page, 'skip_update')).toHaveLength(1);
 });

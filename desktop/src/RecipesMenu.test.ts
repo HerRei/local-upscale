@@ -68,7 +68,7 @@ describe('Recipes menu', () => {
 
     const first = screen.getByRole('button', { name: /^Phone photos/ });
     expect(first.textContent).toContain('JPEG → Noise → Upscale 4×');
-    expect(first.textContent).toContain('⌃');
+    expect(first.querySelector('.recipe-pin svg')).not.toBeNull();
     expect(screen.getByRole('button', { name: /^Clean noise/ }).textContent).toContain('Noise');
     expect(screen.getByRole('button', { name: /^Quick 2x/ }).textContent).toContain('Upscale 2×');
     expect(screen.queryByRole('button', { name: /^Delete / })).toBeNull();

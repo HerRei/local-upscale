@@ -180,9 +180,9 @@
       <p>Images, camera RAW, or video clips. A folder becomes a batch.</p>
       <div class="empty-actions">
         <button class="button" disabled={benchmarkRunning} on:click={() => addFiles(false)}
-          >Add Files…</button
+          >Add files…</button
         >
-        <button class="button" disabled={benchmarkRunning} on:click={addFolder}>Add Folder…</button>
+        <button class="button" disabled={benchmarkRunning} on:click={addFolder}>Add folder…</button>
       </div>
     </div>
   {:else}
@@ -288,7 +288,7 @@
         class="button"
         title="Add every image in a folder as a batch"
         disabled={benchmarkRunning || Boolean(activeJobId)}
-        on:click={addFolder}>Add Folder…</button
+        on:click={addFolder}>Add folder…</button
       >
       <button
         class="button"

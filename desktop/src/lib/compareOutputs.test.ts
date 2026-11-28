@@ -1,6 +1,24 @@
 import { describe, expect, it } from 'vitest';
 import { detailLines, outputGroups, resultDetails } from './compareOutputs';
-import type { ComparePick, MediaItem, MediaResults, ResultSummary } from './types';
+import { groupedHardware } from './hardwareRoutes';
+import { hardwareChoices } from './neuralEngine';
+import type {
+  CapabilityInfo,
+  ComparePick,
+  DeviceInfo,
+  MediaItem,
+  MediaResults,
+  ResultSummary,
+} from './types';
+
+const hardware = groupedHardware(
+  hardwareChoices({
+    devices: [
+      { id: 'cpu', type: 'cpu', name: 'CPU' },
+      { id: 'mps', type: 'gpu', name: 'Apple M4 Pro', neural_engine: true },
+    ] as DeviceInfo[],
+  } as CapabilityInfo),
+);
 
 describe('Outputs list histories', () => {
   it('groups all completed results by image in input order and keeps unavailable results visible', () => {
@@ -52,24 +70,26 @@ it('formats recorded details in order and leaves absent older fields out', () =>
     'Fixes: Blur → Noise',
     'Scale: 4×',
     'Output: 400 × 300',
-    'Time: 31s',
-    'Requested device: cuda:0',
+    'Time: 31 s',
+    'Device: cuda:0',
     `Date: ${new Date(saved.completed_at).toLocaleDateString()}`,
   ]);
   expect(
-    resultDetails({
-      model_label: 'SPAN',
-      device: 'mps',
-      neural_engine: true,
-    } as ResultSummary),
-  ).toEqual(['Models: SPAN', 'Requested device: mps · Neural Engine enabled']);
+    resultDetails(
+      { model_label: 'SPAN', device: 'mps', neural_engine: true } as ResultSummary,
+      0,
+      0,
+      hardware,
+    ),
+  ).toEqual(['Model: SPAN', 'Device: Neural Engine']);
   expect(
-    resultDetails({
-      model_label: 'SPAN',
-      device: 'mps',
-      neural_engine: false,
-    } as ResultSummary),
-  ).toEqual(['Models: SPAN', 'Requested device: mps']);
+    resultDetails(
+      { model_label: 'SPAN', device: 'mps', neural_engine: false } as ResultSummary,
+      0,
+      0,
+      hardware,
+    ),
+  ).toEqual(['Model: SPAN', 'Device: Apple M4 Pro']);
   expect(resultDetails({ model_label: 'Unknown model' } as ResultSummary)).toEqual([]);
   expect(
     resultDetails({
@@ -80,7 +100,7 @@ it('formats recorded details in order and leaves absent older fields out', () =>
       output_duration_seconds: 12,
     } as ResultSummary),
     // The Unfinished mark heads the slot's details; it is not one of the facts.
-  ).toEqual(['Models: Frame by frame']);
+  ).toEqual(['Model: Frame by frame']);
 });
 
 describe('the lines of the details strip', () => {
@@ -90,7 +110,7 @@ describe('the lines of the details strip', () => {
     'Scale: 4×',
     'Output: 5760 × 7680',
     'Time: 1:40',
-    'Requested device: mps · Neural Engine enabled',
+    'Device: Neural Engine',
     'Date: 11/23/2026',
   ];
   it('gives models and fixes a line each and shares the rest over what is left', () => {

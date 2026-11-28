@@ -71,7 +71,7 @@ test.describe('Size decides', () => {
     await expect(fix(page, 'Noise')).toBeChecked();
     await expect(fix(page, 'Blur')).toBeChecked();
     await page.locator('.foot-plan').click();
-    await expect(stages).toContainText('Upscale ×4');
+    await expect(stages).toContainText('Upscale 4×');
     await page.keyboard.press('Escape');
 
     // Same size, untick both: photo line shows and Start is disabled.

@@ -171,7 +171,7 @@ test.describe('plan card', () => {
 
   test('Try others… opens the library for trial runs', async ({ page }) => {
     await openPlanSheet(page);
-    await page.getByRole('button', { name: 'Try other upscalers on this image' }).click();
+    await page.getByRole('button', { name: 'Try other upscalers on this photo' }).click();
     await expect(page.getByRole('dialog', { name: 'Model library' })).toBeVisible();
   });
 });
@@ -181,7 +181,7 @@ test('Try others… waits for a ready worker', async ({ page }) => {
   await showPane(page, 'enhance');
   await openPlanSheet(page);
   await expect(
-    page.getByRole('button', { name: 'Try other upscalers on this image' }),
+    page.getByRole('button', { name: 'Try other upscalers on this photo' }),
   ).toBeDisabled();
 });
 

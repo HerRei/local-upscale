@@ -213,7 +213,6 @@
   --shimmer-highlight: rgba(204, 204, 204, 0.07);
   --preview-hud-bg: rgba(24, 24, 26, 0.84);
   --retry-hover-bg: #aaaaaa25;
-  --welcome-bg: rgba(35, 35, 37, 0.9);
   --notice-outline: rgba(255, 255, 255, 0.1);
 }
 
@@ -407,7 +406,6 @@
   --shimmer-highlight: rgba(75, 75, 75, 0.07);
   --preview-hud-bg: rgba(233, 233, 233, 0.84);
   --retry-hover-bg: #69696925;
-  --welcome-bg: rgba(224, 224, 224, 0.9);
   --notice-outline: rgba(0, 0, 0, 0.1);
 }
 
@@ -498,7 +496,6 @@
   --recess: #000000;
   --meter-track: #000000;
   --dialog-bg: #141414;
-  --welcome-bg: #141414;
   --notice-surface: #141414;
   --pane-seam: #8f8f8f;
   --border: #8f8f8f;
@@ -621,7 +618,6 @@
   --recess: #f2f2f2;
   --meter-track: #f2f2f2;
   --dialog-bg: #ffffff;
-  --welcome-bg: #ffffff;
   --notice-surface: #ffffff;
   --pane-seam: #6b6b6b;
   --border: #6b6b6b;
@@ -2643,6 +2639,8 @@ input[type='search'],
   flex-direction: column;
 }
 .recipe-pin {
+  display: inline-flex;
+  align-items: center;
   color: var(--secondary);
   font-size: calc(11px * var(--ui-scale));
   line-height: 15px;
@@ -3992,7 +3990,7 @@ input[type='search'],
   display: flex;
   flex-direction: column;
   gap: 6px;
-  max-height: 200px;
+  max-height: calc(236px * var(--ui-scale));
   overflow: auto;
   padding: 8px 16px 10px;
   border-bottom: 1px solid var(--divider);
@@ -4258,6 +4256,9 @@ input[type='search'],
   margin-top: 2px;
   color: var(--secondary);
   font-size: calc(12px * var(--ui-scale));
+}
+.recipe-secondary-actions .link-button:not(.danger) {
+  color: var(--accent-text);
 }
 .recipe-secondary-actions .link-button.danger {
   color: var(--danger-text);
@@ -5568,6 +5569,7 @@ label.setting-label {
   box-sizing: border-box;
   /* The line stays 1 px on screen at every zoom. */
   border: calc(1px / var(--zoom, 1)) solid var(--accent);
+  box-shadow: 0 0 0 calc(1px / var(--zoom, 1)) rgba(0, 0, 0, 0.55);
   pointer-events: none;
 }
 .patch-frame.dashed {
@@ -5615,6 +5617,10 @@ label.setting-label {
 }
 .patch-tab:active {
   cursor: grabbing;
+}
+.patch-tab:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 1px;
 }
 .patch-tab .step-chips-row {
   flex-wrap: nowrap;

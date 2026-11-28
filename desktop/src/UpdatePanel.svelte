@@ -82,7 +82,7 @@
       tabindex="-1"
       use:modal={closePanel}
     >
-      <h2 id="update-title">Software Update</h2>
+      <h2 id="update-title">Software update</h2>
       {#if status.managed_by_store}
         <p>
           Settings, recipes and downloaded models are kept. LocalSR backs up your profile on the

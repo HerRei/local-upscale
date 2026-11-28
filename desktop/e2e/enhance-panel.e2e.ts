@@ -198,7 +198,7 @@ test('system accent and accessible palette overrides', async ({ page }) => {
 });
 
 test('a low fix popover flips above its row inside the scroll body', async ({ page }) => {
-  await page.setViewportSize({ width: 1024, height: 700 });
+  await page.setViewportSize({ width: 1024, height: 658 });
   await openApp(page, ready);
   await showPane(page, 'enhance');
   await fix(page, 'Noise').check();
@@ -218,7 +218,7 @@ test('the cost line shows a measured time, and nothing without one', async ({ pa
   await showPane(page, 'enhance');
   await page.getByRole('button', { name: 'Not now' }).click();
   const cost = page.locator('.foot-cost');
-  await expect(cost).toContainText('about 40s');
+  await expect(cost).toContainText('about 40 s');
   const first = await hostCalls(page, 'estimate_start');
   expect(first.length).toBeGreaterThan(0);
   const args = first[0].args as { mediaIds: string[]; input: { task: string } };

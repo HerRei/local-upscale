@@ -51,7 +51,7 @@ describe('mediaFacts', () => {
           duration_seconds: 12,
         }),
       ),
-    ).toBe('1920 × 1080 · 24 fps · 12s');
+    ).toBe('1920 × 1080 · 24 fps · 12 s');
 
     expect(
       mediaFacts(

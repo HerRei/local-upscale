@@ -100,7 +100,7 @@ describe('Inputs list while a batch runs', () => {
     expect(row(container, 2).classList.contains('running')).toBe(true);
     expect(row(container, 3).classList.contains('running')).toBe(false);
     const text = (n: number) => row(container, n).querySelector('.queue-state');
-    expect(text(2)?.textContent).toBe('Running · 38 %');
+    expect(text(2)?.textContent).toBe('Running · 38%');
     expect(text(2)?.getAttribute('title')).toBe('Running SPAN ×4');
     expect(text(3)?.textContent).toBe('Queued');
     expect(text(1)?.textContent).toBe('Done · 31 s');

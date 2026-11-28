@@ -31,7 +31,7 @@ test.describe('the remaining time while a queue runs', () => {
     await page.clock.runFor(1_000);
     await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 1:10');
     await page.clock.runFor(30_000);
-    await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 40s');
+    await expect(detail).toContainText('5 of 12 tiles · ETA ≈ 40 s');
   });
 
   test('shows the same time in the queue summary and counts it down too', async ({ page }) => {
@@ -41,6 +41,6 @@ test.describe('the remaining time while a queue runs', () => {
     const queue = page.locator('.queue-eta');
     await expect(queue).toContainText('Current item: ≈ 1:40');
     await page.clock.runFor(60_000);
-    await expect(queue).toContainText('Current item: ≈ 40s');
+    await expect(queue).toContainText('Current item: ≈ 40 s');
   });
 });

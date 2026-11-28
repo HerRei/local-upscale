@@ -52,7 +52,7 @@ interface Variant {
   expected: string[];
 }
 
-const IMAGE = ['Format', 'Preserve safe metadata and color profile'];
+const IMAGE = ['Format', 'Preserve safe metadata and colour profile'];
 const TAIL = ['Save to'];
 const VIDEO = ['Container', 'Video format', 'Video quality · CRF', 'Clean up audio'];
 
@@ -177,7 +177,8 @@ describe('the wording of the help tips in OutputSheet', () => {
       const words = text.trim().split(/\s+/).length;
       expect(words, text).toBeLessThanOrEqual(46);
       expect(text, text).not.toMatch(/!|\b(simply|just|easily)\b/i);
-      expect(text, text).not.toMatch(/colour/);
+      // The metadata tip says "colour profile" to match the sheet's British spelling.
+      expect(text, text).not.toMatch(/colour(?! profile)/);
     }
   });
 });

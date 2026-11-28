@@ -127,11 +127,12 @@
   import {
     colourHardwareLabel,
     engineLabel,
+    hardwareChoices,
     hardwarePatch,
     interpolationHardwareLabel,
     withListedDevice,
   } from './lib/neuralEngine';
-  import { cpuHint, deviceLabel } from './lib/hardwareRoutes';
+  import { cpuHint, deviceLabel, groupedHardware } from './lib/hardwareRoutes';
   import type {
     AppSnapshot,
     ComparePick,
@@ -203,6 +204,7 @@
   ]);
   $: if (desiredBulkKey !== bulkKey) void loadBulkHistories(desiredBulkKey);
   $: compareGroups = outputGroups(snapshot.media, bulkHistories);
+  $: compareHardware = groupedHardware(hardwareChoices(snapshot.capabilities));
   $: compareItems = comparePicks.map((pick, index): CompareItem => {
     const group = compareGroups.find((entry) => entry.media.id === pick.media_id);
     const media = snapshot.media.find((entry) => entry.id === pick.media_id);
@@ -230,7 +232,7 @@
             .join(' · ')
         : `${media?.width ?? 0} × ${media?.height ?? 0}`,
       details: result
-        ? resultDetails(result, slot?.width, slot?.height)
+        ? resultDetails(result, slot?.width, slot?.height, compareHardware)
         : media?.width && media?.height
           ? [`Size: ${media.width} × ${media.height}`]
           : [],
@@ -1724,7 +1726,7 @@
     : settings.batch_mode && settings.task === 'edit'
       ? selectedMedia
         ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
-        : 'Edit processes only the selected image.'
+        : 'Edit processes only the selected photo.'
       : settings.batch_mode
         ? queueableMedia.length === 0 && runnableMedia.length > 0
           ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
@@ -1752,7 +1754,7 @@
               : settings.task === 'edit'
                 ? selectedMedia
                   ? `Edit processes only “${selectedMedia.name}”; batches are not supported yet.`
-                  : 'Edit processes only the selected image.'
+                  : 'Edit processes only the selected photo.'
                 : mismatchNote ||
                   (queueableMedia.length === 0 && runnableMedia.length > 0
                     ? `All ${runnableMedia.length} compatible item${runnableMedia.length === 1 ? ' is' : 's are'} already running or queued.`
@@ -5463,7 +5465,7 @@
                 : downloadFailureLine
                   ? downloadFailureLine.tooltip || undefined
                   : stoppedNote || idleSummary || runningStatusDetail || undefined}
-          >{#if booting}Opening the trusted desktop control plane.{:else if snapshot.runtime.active_job_id}{activityDetail ||
+          >{#if booting}Starting the engine…{:else if snapshot.runtime.active_job_id}{activityDetail ||
               stoppedNote ||
               idleSummary ||
               runningStatusDetail}{:else if downloadStatus || preparing}{downloadDetailText}{:else if downloadFailureLine}{downloadFailureLine.detail}{#if !downloadFailureLine.inPlan}{' '}<button
@@ -5577,7 +5579,7 @@
             on:click={() => void cancelSelectedImage()}
             >{selectedMedia?.kind === 'video'
               ? 'Cancel runs for this file'
-              : 'Cancel runs for this image'}</button
+              : 'Cancel runs for this photo'}</button
           >
         {/if}
         <button class="button danger" disabled={cancelling} on:click={cancelWork}
@@ -5609,13 +5611,17 @@
           <button
             class="button start scope-one"
             disabled={!canStartOne && !canPrepareOne}
-            title={oneTitle || undefined}
+            title={oneTitle ||
+              (!canStartOne && !canPrepareOne ? startBlockReason : '') ||
+              undefined}
             on:click={() => void startScope(false)}>Only this one</button
           >
           <button
             class="button primary start"
             disabled={!canStartAll && !canPrepareAll}
-            title={allTitle || undefined}
+            title={allTitle ||
+              (!canStartAll && !canPrepareAll ? startBlockReason : '') ||
+              undefined}
             on:click={() => void startScope(true)}
             >{canPrepareAll
               ? `Download ${formatBytes(downloads.bytes)}, then ${allPhrase}`
@@ -5632,7 +5638,7 @@
           <button
             class="button primary start"
             disabled={!canStart}
-            title={singleHint || undefined}
+            title={singleHint || (!canStart ? startBlockReason : '') || undefined}
             on:click={() => start()}
             >{settings.task === 'video'
               ? 'Start selected video'
@@ -5813,7 +5819,7 @@
         issue.
       </p>
       <div class="modal-actions">
-        <button class="button" on:click={discardCrash}>Don't Send</button>
+        <button class="button" on:click={discardCrash}>Don't send</button>
         <button class="button primary" on:click={reviewCrash}>Review report…</button>
       </div>
     </div>
@@ -5976,7 +5982,7 @@
                 >Review</button
               >
               <button class="button" disabled={!crashReports.length} on:click={removeAllCrashes}
-                >Delete All</button
+                >Delete all</button
               >
             </div>
           </div>

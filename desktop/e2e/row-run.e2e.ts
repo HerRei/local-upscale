@@ -4,7 +4,7 @@ import { hostCalls, refuse } from './fake-host';
 import { ready } from './fixtures';
 
 // A running picture is marked in the Inputs list: a progress line inside its row (the row keeps
-// its height), the text "Running · 38 %", and a lighter background.
+// its height), the text "Running · 38%", and a lighter background.
 
 const batch = (selected: number) => ({
   ...ready,
@@ -41,7 +41,7 @@ test('a running row keeps its height and carries a line as wide as the row, fill
   expect(barBox.y + barBox.height).toBeCloseTo(rowBox.y + rowBox.height, 0);
   const fill = (await bar.locator('i').boundingBox())!;
   expect(fill.width / barBox.width).toBeCloseTo(0.38, 1);
-  await expect(running.locator('.queue-state')).toHaveText('Running · 38 %');
+  await expect(running.locator('.queue-state')).toHaveText('Running · 38%');
   await expect(rows(page).nth(0).locator('.queue-state')).toHaveText('Done · 31 s');
   await expect(idle.locator('.queue-state')).toHaveText('Queued');
   await expect(page.locator('.media-list').getByRole('progressbar')).toHaveCount(1);
@@ -150,7 +150,7 @@ test('from 100 % until the file is written the row and the status bar say Saving
   });
   const running = rows(page).nth(1);
   await expect(running.getByText('Saving…')).toBeVisible();
-  await expect(running).not.toContainText('100 %');
+  await expect(running).not.toContainText('100%');
   const bar = page.locator('.status-bar');
   await expect(bar.locator('strong')).toHaveText(/^Saving the result/);
   await expect(bar).not.toContainText(/ETA|≈|100%/);
