@@ -42,6 +42,7 @@ REPORT_SUFFIXES = (
     ".offline-window.png",
     ".engine-payload.json",
     ".engine-update.json",
+    ".engine-files.json",
     ".sha256",
     ".json",
 )

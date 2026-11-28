@@ -171,6 +171,7 @@ impl AppState {
             notices.push("Your settings come from a newer LocalSR. This version uses defaults and will not save settings changes.".into());
         }
         let (settings, recipes) = settings::load(&paths);
+        crate::checkpoint_approvals::prepare_at_start(&paths, &settings.trusted_checkpoint_sha256);
         let model_root = effective_model_root(&paths, &settings);
         let catalog = load_catalog_in(&model_root)?;
         let latest_benchmark = settings::load_benchmark(&paths);

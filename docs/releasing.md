@@ -132,7 +132,8 @@ macOS build, from the workflow runs at the same commit:
 2. `python scripts/beta_update_signing.py platforms build/release-<version>/platforms
    --feed build/release-<version>/beta.json --commit <sha>` checks every package
    against its checksum file, its installed smoke report (version and update
-   identity) and its engine package, and signs nothing unless all of them pass. It
+   identity) and its engine package (including that its `*.engine-files.json` lists
+   exactly the files of its archive), and signs nothing unless all of them pass. It
    then signs private copies of exactly those files with the Keychain key, adds the
    entries with their signed release statements next to the macOS entry, and prints
    the `.sig` files it wrote. The copies need room for the largest package once more.
@@ -145,8 +146,8 @@ macOS build, from the workflow runs at the same commit:
    target except the .deb, with its backend, kind, protocol, engine id and engine package, and every
    statement and signature verified against the public key over the local files.
 5. Attach the packages, their parts and engine packages from the same runs
-   (`release_tag`, or `attach-release-assets.yml`), and upload the printed `.sig`
-   files from the Mac to the release. The signatures cover the exact files of those
+   (`release_tag`, or `attach-release-assets.yml`; the engine file lists are among
+   them), and upload the printed `.sig` files from the Mac to the release. The signatures cover the exact files of those
    runs; a rerun produces different files and needs new signatures.
 6. Install the previous version on a Windows machine and from an AppImage on Linux
    and confirm that the update downloads, installs and relaunches, before the feed
@@ -162,7 +163,8 @@ release; otherwise the files stay run artifacts for 14 days, and
 Each build gets its update identity from `scripts/release_targets.py --update-env`
 and writes its schema 2 engine package (`<package>.engine-payload.json` with
 `version`, `os`, `arch`, `protocol_version` and `engine_id`, plus its
-`.engine.tar.gz.part-*` files) next to the package, and the update form of that
+`.engine.tar.gz.part-*` files) next to the package, its file list
+(`<package>.engine-files.json`) and the update form of that
 manifest (`<package>.engine-update.json`, see [Older releases](#older-releases));
 the updater signatures are made on the Mac
 ([Windows and Linux updates](#windows-and-linux-updates)).
@@ -242,6 +244,11 @@ So:
   by the signed release statement. `verify_prepared_release.py` refuses a feed whose
   manifest an older updater would refuse. Never add a field to that form, to the
   release statement or to anything else an older updater parses strictly.
+- The feed's engine object also names `files`, the signed engine file list
+  ([Engine payloads](updates.md#engine-payloads)). The feed types of every updater since
+  0.3.0 accept fields they do not know (`tests/test_tauri_release_tools.py` reads them
+  from the release tags), so older updaters ignore it; this release's host fetches the
+  list for an engine they installed.
 - `scripts/upgrade_check.py` checks out each release in `OLDER_RELEASES`, builds its
   update code with `scripts/upgrade_check/old_release_probe.rs` injected and runs it on
   this release's engine package, signed with a disposable key: the contract check, the

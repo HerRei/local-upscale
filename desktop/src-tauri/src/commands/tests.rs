@@ -4713,6 +4713,34 @@ fn custom_checkpoint_consent_is_persisted_by_digest_and_changes_require_new_cons
 }
 
 #[test]
+fn a_checkpoint_digest_added_to_the_settings_file_is_not_trusted() {
+    let dir = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(dir.path());
+    let checkpoint = dir.path().join("my_model.pth");
+    fs::write(&checkpoint, b"weights").unwrap();
+    let digest = catalog::sha256_file(&checkpoint).unwrap();
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    state.persist_settings().unwrap();
+    drop(state);
+
+    // The digest is written into the settings file, not approved in LocalSR.
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&paths.settings).unwrap()).unwrap();
+    document["ui"]["trusted_checkpoint_sha256"] = json!([digest]);
+    fs::write(&paths.settings, serde_json::to_vec(&document).unwrap()).unwrap();
+
+    let state = AppState::from_paths(paths).unwrap();
+    state.grants.grant_model_file(&checkpoint);
+    assert!(!custom_checkpoint_trusted(&state, &checkpoint).unwrap());
+    let request = json!({"type": "job_request", "data": {
+        "model_path": checkpoint.to_string_lossy(),
+        "allow_unverified_checkpoint": true,
+        "approved_checkpoint_sha256": digest,
+    }});
+    assert!(check_retry_checkpoint_consent(&state, &request).is_err());
+}
+
+#[test]
 fn custom_checkpoint_job_requires_matching_approval_and_safe_format_does_not() {
     let dir = tempfile::tempdir().unwrap();
     let state = AppState::from_paths(AppPaths::under(dir.path())).unwrap();
@@ -5018,6 +5046,77 @@ fn cancel_jobs_and_cancel_jobs_for_media_forward_keep_partial_and_cancel_queued(
 }
 
 #[test]
+fn a_queued_request_loads_a_pickle_checkpoint_only_with_an_approval_made_in_localsr() {
+    let dir = tempfile::tempdir().unwrap();
+    let checkpoint = dir.path().join("mine.pth");
+    fs::write(&checkpoint, b"pickled weights").unwrap();
+    let state = AppState::from_paths(AppPaths::under(&dir.path().join("app"))).unwrap();
+    let digest = catalog::sha256_file(&checkpoint).unwrap();
+    let request = |approved: Option<&str>, allowed: bool| {
+        json!({"type": "job_request", "data": {
+            "model_path": checkpoint.to_string_lossy(),
+            "allow_unverified_checkpoint": allowed,
+            "approved_checkpoint_sha256": approved,
+        }})
+    };
+    // Nothing to load that needs an approval.
+    assert!(queued_checkpoint_still_approved(
+        &state,
+        &request(None, false)
+    ));
+    // The general permission without a digest is sent withdrawn.
+    assert!(queued_checkpoint_still_approved(
+        &state,
+        &request(None, true)
+    ));
+    let mut flagged = request(None, true);
+    withdraw_unapproved_checkpoint_permission(&mut flagged);
+    assert_eq!(flagged["data"]["allow_unverified_checkpoint"], json!(false));
+    let mut batch = json!({"type": "image_batch_request", "data": {"jobs": [
+        request(None, true)["data"].clone(),
+        request(Some(&digest), true)["data"].clone(),
+    ]}});
+    withdraw_unapproved_checkpoint_permission(&mut batch);
+    assert_eq!(
+        batch["data"]["jobs"][0]["allow_unverified_checkpoint"],
+        json!(false)
+    );
+    assert_eq!(
+        batch["data"]["jobs"][1]["allow_unverified_checkpoint"],
+        json!(true)
+    );
+    // A digest only the settings list, or one never approved: refused.
+    assert!(!queued_checkpoint_still_approved(
+        &state,
+        &request(Some(&"1".repeat(64)), true)
+    ));
+    lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone()];
+    assert!(!queued_checkpoint_still_approved(
+        &state,
+        &request(Some(&digest), true)
+    ));
+    // Approved in LocalSR: sent.
+    state.grants.grant_model_file(&checkpoint);
+    set_custom_checkpoint_consent(&state, &checkpoint, true).unwrap();
+    assert!(queued_checkpoint_still_approved(
+        &state,
+        &request(Some(&digest), true)
+    ));
+    // Each photo of a batch is checked.
+    let batch = json!({"type": "image_batch_request", "data": {"jobs": [
+        request(Some(&digest), true)["data"].clone(),
+        request(Some(&"1".repeat(64)), true)["data"].clone(),
+    ]}});
+    assert!(!queued_checkpoint_still_approved(&state, &batch));
+    // Withdrawn: refused again.
+    set_custom_checkpoint_consent(&state, &checkpoint, false).unwrap();
+    assert!(!queued_checkpoint_still_approved(
+        &state,
+        &request(Some(&digest), true)
+    ));
+}
+
+#[test]
 fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint = dir.path().join("mine.pth");
@@ -5039,6 +5138,7 @@ fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
 
     // Not granted any more: refused.
     lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone()];
+    crate::checkpoint_approvals::record(&state.paths, &digest, true).unwrap();
     assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_err());
 
     state.grants.grant_model_file(&checkpoint);
@@ -5055,6 +5155,7 @@ fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
     // The file changed since it was approved: refused, even if the new file is trusted.
     fs::write(&checkpoint, b"other weights").unwrap();
     let changed = catalog::sha256_file(&checkpoint).unwrap();
+    crate::checkpoint_approvals::record(&state.paths, &changed, true).unwrap();
     lock(&state.settings).unwrap().trusted_checkpoint_sha256 = vec![digest.clone(), changed];
     assert!(check_retry_checkpoint_consent(&state, &request(Some(&digest))).is_err());
 

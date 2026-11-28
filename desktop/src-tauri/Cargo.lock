@@ -2495,6 +2495,7 @@ version = "0.7.0-beta"
 dependencies = [
  "axum",
  "base64 0.23.1",
+ "core-foundation 0.10.1",
  "directories",
  "flate2",
  "fs2",
@@ -2504,7 +2505,9 @@ dependencies = [
  "open",
  "proptest",
  "reqwest",
+ "ring",
  "rusqlite",
+ "security-framework-sys",
  "semver",
  "serde",
  "serde_json",
@@ -2522,6 +2525,7 @@ dependencies = [
  "tower-http 0.7.1",
  "unicode-normalization",
  "uuid",
+ "zbus",
 ]
 
 [[package]]

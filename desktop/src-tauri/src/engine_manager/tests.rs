@@ -56,6 +56,7 @@ fn write_replacement_fixture(next_root: &Path, id: &str, content: &[u8]) -> Engi
         files: updates::test_engine_files(next_root, id),
     };
     write_engine_meta(next_root, &meta).unwrap();
+    crate::engine_files::test_signing::write_list_for_installed(next_root, id);
     meta
 }
 
@@ -74,7 +75,10 @@ fn engine_replacement_keeps_the_complete_old_install_until_start() {
         |destination| {
             fs::create_dir(destination)?;
             fs::write(destination.join(worker_executable_name()), b"new")?;
-            Ok(new_meta.files.clone())
+            Ok((
+                new_meta.files.clone(),
+                crate::engine_files::test_signing::list_of(id, &new_meta.files.clone()),
+            ))
         },
         |_| Ok(()),
     )
@@ -113,7 +117,10 @@ fn engine_replacement_rollback_leaves_an_already_restored_copy_in_place() {
         |destination| {
             fs::create_dir(destination)?;
             fs::write(destination.join(worker_executable_name()), b"new")?;
-            Ok(new.files.clone())
+            Ok((
+                new.files.clone(),
+                crate::engine_files::test_signing::list_of(id, &new.files.clone()),
+            ))
         },
         |_| Ok(()),
     )
@@ -155,6 +162,9 @@ fn engine_replacement_recovers_verified_files_and_metadata_at_each_step() {
             ..new
         };
         fs::write(staging.join("meta.json"), serde_json::to_vec(&new).unwrap()).unwrap();
+        crate::engine_files::test_signing::list_of(id, &new.files)
+            .write_into(&staging)
+            .unwrap();
         if step == "partial-stage" {
             fs::remove_file(staging.join("engine").join(worker_executable_name())).unwrap();
         }
@@ -375,12 +385,32 @@ fn host_test_engine_id() -> &'static str {
     }
 }
 
+/// The engine fixture's signed file list, as the tests' cache folders hold it.
+fn fixture_list_bytes(
+    manifest: &[u8],
+    part_name: &str,
+    part: &[u8],
+    id: &str,
+    os: &str,
+) -> Vec<u8> {
+    crate::engine_files::test_signing::package_list_from(
+        manifest,
+        &[(part_name.to_owned(), part.to_vec())],
+        id,
+        (os, "x86_64"),
+        "",
+        "engine-files.json",
+    )
+    .0
+}
+
 fn fixture_engine_files_from(
     value: serde_json::Value,
     base_url: &str,
     backend: &str,
     engine_id: &str,
     config_engine_id: &str,
+    list_os: &str,
 ) -> (
     UpdateConfig,
     String,
@@ -415,10 +445,19 @@ fn fixture_engine_files_from(
         sha256: part["sha256"].as_str().unwrap().into(),
         signature: part["signature"].as_str().unwrap().into(),
     };
+    let (_, list_file) = crate::engine_files::test_signing::package_list_from(
+        &manifest_bytes,
+        &[(part_name.clone(), part_bytes.clone())],
+        &engine_id,
+        (list_os, "x86_64"),
+        base_url,
+        "engine-files.json",
+    );
     let engine_update = EngineUpdate {
         id: engine_id.clone(),
         manifest: manifest_file,
         parts: vec![part_file],
+        files: Some(list_file),
     };
     let contract = ReleaseContract {
         channel: "beta".into(),
@@ -472,6 +511,7 @@ fn fixture_engine_files(
         "rocm",
         "linux-x86_64-rocm-0123456789ab",
         "linux-x86_64-cpu-000000000000",
+        "linux",
     )
 }
 
@@ -497,6 +537,7 @@ fn host_fixture_engine_files(
         host_test_backend(),
         host_test_engine_id(),
         config_engine_id,
+        host_test_os(),
     )
 }
 
@@ -664,7 +705,9 @@ fn catalog_lists_all_backends_for_current_os_and_arch_while_app_updates_keep_com
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].backend, "rocm");
     assert_eq!(entries[0].engine_id, "linux-x86_64-rocm-0123456789ab");
-    assert_eq!(entries[0].size, 308 + 195);
+    let listed = contract.engine.as_ref().unwrap().files.as_ref().unwrap();
+    assert_eq!(entries[0].engine.files.as_ref().unwrap().name, listed.name);
+    assert_eq!(entries[0].size, 308 + 195 + listed.size);
     assert_eq!(
         entries[0].manifest_url,
         "http://127.0.0.1:1/engine-payload.json"
@@ -749,6 +792,13 @@ fn host_runs_active_installed_engine_with_different_id_when_os_arch_and_handshak
         files: updates::test_engine_files(&paths.next_root, id),
     };
     write_engine_meta(&paths.next_root, &meta).unwrap();
+    crate::engine_files::test_signing::write_list_on(
+        &paths.next_root,
+        id,
+        &meta.files,
+        "windows",
+        "x86_64",
+    );
     assert_eq!(
         updates::active_engine_for_host(
             &paths,
@@ -825,6 +875,14 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
     let base = format!("http://{}", listener.local_addr().unwrap());
     contract.engine.as_mut().unwrap().manifest.url = format!("{base}/engine-payload.json");
     contract.engine.as_mut().unwrap().parts[0].url = format!("{base}/{part_name}");
+    contract
+        .engine
+        .as_mut()
+        .unwrap()
+        .files
+        .as_mut()
+        .unwrap()
+        .url = format!("{base}/engine-files.json");
     let feed_bytes =
         serde_json::to_vec(&feed_json_with_host_backend("0.3.7-beta", &contract)).unwrap();
     let (mut config, _, _, _, _, _, _) = host_fixture_engine_files(&base);
@@ -832,15 +890,23 @@ fn install_engine_resumes_from_partial_file_verifies_signature_and_activates() {
 
     let seen_ranges = Arc::new(Mutex::new(Vec::new()));
     let ranges_clone = seen_ranges.clone();
+    let list_bytes = fixture_list_bytes(
+        &manifest_bytes,
+        &part_name,
+        &part_bytes,
+        host_test_engine_id(),
+        host_test_os(),
+    );
     let files = [
         ("beta.json".to_owned(), feed_bytes),
         ("engine-payload.json".to_owned(), manifest_bytes),
+        ("engine-files.json".to_owned(), list_bytes),
         (part_name.clone(), part_bytes.clone()),
     ];
     let server = std::thread::spawn(move || {
         let mut handled = 0;
         let deadline = std::time::Instant::now() + Duration::from_secs(10);
-        while handled < 3 && std::time::Instant::now() < deadline {
+        while handled < 4 && std::time::Instant::now() < deadline {
             let mut socket = match listener.accept() {
                 Ok((s, _)) => s,
                 Err(e) if e.kind() == std::io::ErrorKind::WouldBlock => {
@@ -1068,16 +1134,32 @@ fn install_engine_refuses_privacy_unset_running_job_low_space_and_failed_handsha
     lock(&state.runtime).unwrap().active_job_id.clear();
 
     // Pre-populate verified catalog so disk space and handshake tests don't need extra feed fetch.
+    let list_bytes = fixture_list_bytes(
+        &manifest_bytes,
+        &part_name,
+        &part_bytes,
+        host_test_engine_id(),
+        host_test_os(),
+    );
     let (base, _, server) = serve_with_ranges(
         vec![
             ("engine-payload.json".into(), manifest_bytes),
+            ("engine-files.json".into(), list_bytes),
             (part_name.clone(), part_bytes),
         ],
-        2,
+        3,
     );
     config.feed = base.clone();
     contract.engine.as_mut().unwrap().manifest.url = format!("{base}/engine-payload.json");
     contract.engine.as_mut().unwrap().parts[0].url = format!("{base}/{part_name}");
+    contract
+        .engine
+        .as_mut()
+        .unwrap()
+        .files
+        .as_mut()
+        .unwrap()
+        .url = format!("{base}/engine-files.json");
     let entries = parse_feed_engines_for(
         &feed_json_with_host_backend("0.3.7-beta", &contract),
         &config,
@@ -1168,6 +1250,13 @@ fn use_engine_and_remove_engine_switch_protect_active_and_remove_inactive() {
         },
     )
     .unwrap();
+    crate::engine_files::test_signing::write_list_on(
+        &paths.next_root,
+        rocm_id,
+        &updates::test_engine_files(&paths.next_root, rocm_id),
+        "linux",
+        "x86_64",
+    );
 
     // Switch to installed ROCm engine.
     use_engine_for(&state, None, &config, "rocm", "linux", "x86_64", |_| Ok(())).unwrap();
@@ -1212,6 +1301,7 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
     fs::write(&manifest_sig_path, &engine.manifest.signature).unwrap();
     fs::write(&part_path, &part_bytes).unwrap();
     fs::write(&part_sig_path, &engine.parts[0].signature).unwrap();
+    write_import_list(&manifest_path, host_test_engine_id(), host_test_os());
 
     // Grants check: ungranted manifest path is refused, granted path succeeds.
     assert!(state.grants.check_engine_manifest(&manifest_path).is_err());
@@ -1252,6 +1342,36 @@ fn import_engine_verifies_signatures_reuses_install_manifest_and_enforces_grants
         fs::read_to_string(paths.next_root.join("active-engine.txt")).unwrap(),
         meta.id
     );
+
+    // Without its signed file list, or with one signed by another key, it is refused.
+    let list_path = import_dir.join("LocalSR-test.engine-files.json");
+    let list_sig_path = import_dir.join("LocalSR-test.engine-files.json.sig");
+    let list_signature = fs::read_to_string(&list_sig_path).unwrap();
+    let import = || {
+        import_engine_for(
+            &state,
+            None,
+            &config,
+            &manifest_path,
+            "0.5.1-beta",
+            host_test_os(),
+            "x86_64",
+            |_| Ok(()),
+        )
+    };
+    fs::write(
+        &list_sig_path,
+        crate::engine_files::test_signing::sign_with_another_key(&fs::read(&list_path).unwrap()),
+    )
+    .unwrap();
+    assert!(import().is_err());
+    fs::remove_file(&list_sig_path).unwrap();
+    assert!(import().is_err());
+    fs::write(&list_sig_path, &list_signature).unwrap();
+    fs::remove_file(&list_path).unwrap();
+    assert!(import().unwrap_err().to_string().contains("file list"));
+    write_import_list(&manifest_path, host_test_engine_id(), host_test_os());
+    assert!(import().is_ok());
 
     // Tampered part or missing .sig is refused.
     fs::write(&part_path, b"corrupted").unwrap();
@@ -1307,6 +1427,17 @@ fn check_install_failure_status(failure: &'static str) {
         .join("updates/engine-cache")
         .join(&entries[0].engine_id);
     fs::create_dir_all(&cache).unwrap();
+    fs::write(
+        cache.join("engine-files.json"),
+        fixture_list_bytes(
+            &manifest_bytes,
+            &part_name,
+            &part_bytes,
+            &entries[0].engine_id,
+            host_test_os(),
+        ),
+    )
+    .unwrap();
     fs::write(cache.join("engine-payload.json"), manifest_bytes).unwrap();
     fs::write(cache.join(part_name), part_bytes).unwrap();
     *lock(&state.engines.catalog).unwrap() = entries;
@@ -1384,6 +1515,7 @@ fn reimport_handshake_failure_preserves_active_engine() {
         &engine.parts[0].signature,
     )
     .unwrap();
+    write_import_list(&manifest, host_test_engine_id(), host_test_os());
     let meta = import_engine_for(
         &state,
         None,
@@ -1468,6 +1600,13 @@ fn app_updates_keep_the_users_chosen_backend() {
         },
     )
     .unwrap();
+    crate::engine_files::test_signing::write_list_on(
+        &paths.next_root,
+        old_rocm,
+        &updates::test_engine_files(&paths.next_root, old_rocm),
+        "linux",
+        "x86_64",
+    );
     fs::write(paths.next_root.join("active-engine.txt"), old_rocm).unwrap();
     assert_eq!(
         updates::chosen_backend_for(&paths, &config, "linux", "x86_64"),
@@ -1653,6 +1792,13 @@ fn explicit_use_allows_previously_failed_engine() {
         },
     )
     .unwrap();
+    crate::engine_files::test_signing::write_list_on(
+        &paths.next_root,
+        id,
+        &updates::test_engine_files(&paths.next_root, id),
+        "windows",
+        "x86_64",
+    );
     lock(&state.worker.failed_engines)
         .unwrap()
         .insert(id.into());
@@ -1685,6 +1831,7 @@ fn interrupted_reimport_restores_active_engine_at_startup_and_retry() {
         &engine.parts[0].signature,
     )
     .unwrap();
+    write_import_list(&manifest, host_test_engine_id(), host_test_os());
     let meta = import_engine_for(
         &state,
         None,
@@ -1769,6 +1916,13 @@ fn snapshot_reports_worker_choice_when_active_id_is_excluded() {
         },
     )
     .unwrap();
+    crate::engine_files::test_signing::write_list_on(
+        &paths.next_root,
+        id,
+        &updates::test_engine_files(&paths.next_root, id),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    );
     fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
     let bundled = root.path().join("bundled-worker");
     fs::write(&bundled, b"bundled").unwrap();
@@ -1840,6 +1994,38 @@ fn reimport_recovery_keeps_ambiguous_backups_and_removes_obsolete_ones() {
     assert!(first.is_dir() && second.is_dir());
 }
 
+/// The signed file list an offline download keeps beside `manifest_path`, for engine
+/// `id` on `os` unless the manifest names its platform and engine.
+fn write_import_list(manifest_path: &Path, id: &str, os: &str) {
+    let manifest = fs::read(manifest_path).unwrap();
+    let parsed = engine_payload::parse_manifest(&manifest).unwrap();
+    let directory = manifest_path.parent().unwrap();
+    let parts: Vec<(String, Vec<u8>)> = parsed
+        .parts
+        .iter()
+        .map(|part| {
+            (
+                part.filename.clone(),
+                fs::read(directory.join(&part.filename)).unwrap(),
+            )
+        })
+        .collect();
+    let id = parsed.engine_id.as_deref().unwrap_or(id);
+    let os = parsed.os.as_deref().unwrap_or(os);
+    let arch = parsed.arch.as_deref().unwrap_or("x86_64");
+    let (bytes, file) = crate::engine_files::test_signing::package_list_from(
+        &manifest,
+        &parts,
+        id,
+        (os, arch),
+        "",
+        "engine-files.json",
+    );
+    let list = imported_list_path(manifest_path);
+    fs::write(&list, bytes).unwrap();
+    fs::write(format!("{}.sig", list.display()), file.signature).unwrap();
+}
+
 fn schema2_fixture() -> serde_json::Value {
     #[cfg(windows)]
     {
@@ -1878,6 +2064,7 @@ fn write_schema2_case(dir: &Path, fixture: &serde_json::Value, case: &str) -> Pa
         part["signature"].as_str().unwrap(),
     )
     .unwrap();
+    write_import_list(&manifest_path, host_test_engine_id(), host_test_os());
     manifest_path
 }
 
@@ -2011,6 +2198,7 @@ fn recorded_file_list_catches_size_change_at_start_and_hash_change_on_verify() {
         &engine.parts[0].signature,
     )
     .unwrap();
+    write_import_list(&manifest, host_test_engine_id(), host_test_os());
     let os = host_test_os();
     let meta = import_engine_for(
         &state,
@@ -2114,6 +2302,11 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("engine-payload.json"), &manifest_bytes).unwrap();
     fs::write(cache.join(&part_name), &part_bytes).unwrap();
+    fs::write(
+        cache.join("engine-files.json"),
+        fixture_list_bytes(&manifest_bytes, &part_name, &part_bytes, &id, os),
+    )
+    .unwrap();
     *lock(&state.engines.catalog).unwrap() = entries.clone();
 
     // Install initial copy of `id`, then replace its worker bytes with a sentinel.
@@ -2141,6 +2334,11 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("engine-payload.json"), &manifest_bytes).unwrap();
     fs::write(cache.join(&part_name), &part_bytes).unwrap();
+    fs::write(
+        cache.join("engine-files.json"),
+        fixture_list_bytes(&manifest_bytes, &part_name, &part_bytes, &id, os),
+    )
+    .unwrap();
     let meta_path = engine_root.join("meta.json");
     fs::remove_file(&meta_path).unwrap();
     fs::create_dir(&meta_path).unwrap();
@@ -2168,6 +2366,11 @@ fn same_id_reinstall_keeps_backup_until_activation_and_holds_scheduler_lock() {
     fs::create_dir_all(&cache).unwrap();
     fs::write(cache.join("engine-payload.json"), &manifest_bytes).unwrap();
     fs::write(cache.join(&part_name), &part_bytes).unwrap();
+    fs::write(
+        cache.join("engine-files.json"),
+        fixture_list_bytes(&manifest_bytes, &part_name, &part_bytes, &id, os),
+    )
+    .unwrap();
     let state_for_job = state.clone();
     let during_handshake_res = tauri::async_runtime::block_on(install_engine_for(
         &state,
@@ -2215,7 +2418,8 @@ fn stage_fixture(
         |destination| {
             fs::create_dir(destination)?;
             fs::write(destination.join(worker_executable_name()), content)?;
-            Ok(files)
+            let list = crate::engine_files::test_signing::list_of(id, &files);
+            Ok((files, list))
         },
         |_| Ok(()),
     )
@@ -2281,6 +2485,13 @@ fn same_size_swap_of_an_extensionless_executable_is_rejected_at_start() {
             },
         )
         .unwrap();
+        crate::engine_files::test_signing::write_list_on(
+            &paths.next_root,
+            id,
+            &updates::test_engine_files(&paths.next_root, id),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
         fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
         if let Some(index) = swapped {
             let (relative, content) = &cases[index];
@@ -2446,6 +2657,9 @@ fn a_second_install_keeps_the_confirmed_copy_or_a_verified_backup_as_the_fallbac
             serde_json::to_vec(&previous).unwrap(),
         )
         .unwrap();
+        crate::engine_files::test_signing::list_of(id, &previous.files)
+            .write_into(&backup)
+            .unwrap();
         if case != "confirmed-target" {
             fs::write(
                 target.join(".pending-start.json"),
@@ -2698,6 +2912,13 @@ fn path_files_fat_binaries_and_scripts_are_hashed_at_start() {
             },
         )
         .unwrap();
+        crate::engine_files::test_signing::write_list_on(
+            &paths.next_root,
+            id,
+            &updates::test_engine_files(&paths.next_root, id),
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        );
         fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
         let mut changed = content.to_vec();
         *changed
@@ -2770,4 +2991,169 @@ fn staging_leaves_recovery_to_callers_that_hold_engine_files() {
     );
     assert!(updates::engine_backup_path(&paths.next_root.join("engines"), id).is_dir());
     drop(staged);
+}
+
+/// An engine as 0.5.2 to 0.6 leave it: files, meta.json, active-engine.txt, no list.
+fn engine_from_an_earlier_version(next_root: &Path, id: &str, os: &str) -> PathBuf {
+    let engine = next_root.join("engines").join(id).join("engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    fs::write(engine.join("_internal/library.so"), b"library").unwrap();
+    write_engine_meta(
+        next_root,
+        &EngineMeta {
+            id: id.into(),
+            backend: "rocm".into(),
+            os: os.into(),
+            arch: "x86_64".into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            verified_install: true,
+            version: "0.6.3-beta".into(),
+            files: updates::test_engine_files(next_root, id),
+        },
+    )
+    .unwrap();
+    fs::write(next_root.join("active-engine.txt"), id).unwrap();
+    engine.join(worker_executable_name())
+}
+
+fn catalog_entry_with_list(id: &str, list: DownloadFile) -> VerifiedCatalogEntry {
+    let unused = DownloadFile {
+        name: "unused.engine-update.json".into(),
+        url: "https://example.test/unused".into(),
+        size: 1,
+        sha256: "0".repeat(64),
+        signature: String::new(),
+    };
+    VerifiedCatalogEntry {
+        backend: "rocm".into(),
+        engine_id: id.into(),
+        version: "0.7.0-beta".into(),
+        size: 1,
+        manifest_url: unused.url.clone(),
+        engine: EngineUpdate {
+            id: id.into(),
+            manifest: unused,
+            parts: Vec::new(),
+            files: Some(list),
+        },
+    }
+}
+
+fn served_list(
+    bytes: Vec<u8>,
+    signature: String,
+) -> (DownloadFile, std::thread::JoinHandle<()>, String) {
+    let digest = sha256_hex(&bytes);
+    let size = bytes.len() as u64;
+    let (base, _, server) = serve_with_ranges(vec![("engine-files.json".into(), bytes)], 1);
+    let file = DownloadFile {
+        name: "engine-files.json".into(),
+        url: format!("{base}/engine-files.json"),
+        size,
+        sha256: digest,
+        signature,
+    };
+    (file, server, base)
+}
+
+#[test]
+fn an_engine_an_earlier_version_installed_takes_its_signed_list_from_the_feed() {
+    use crate::engine_files::test_signing;
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let os = host_test_os();
+    let id = "linux-x86_64-rocm-070";
+    let worker = engine_from_an_earlier_version(&paths.next_root, id, os);
+    // It waits for its list: not chosen, not marked.
+    assert_eq!(
+        updates::active_engine_for_host(&paths, false, "compiled", os, "x86_64"),
+        None
+    );
+    assert_eq!(
+        engines_without_file_list(&paths.next_root, "compiled", os, "x86_64"),
+        vec![id.to_owned()]
+    );
+    let part = engine_payload::ManifestPart {
+        filename: "engine.tar.gz.part-0001".into(),
+        size: 1,
+        sha256: "0".repeat(64),
+    };
+    let files = updates::test_engine_files(&paths.next_root, id);
+    let (bytes, signature) = test_signing::signed_list(id, os, "x86_64", "ROCM", &[part], &files);
+    let anchor = |file: DownloadFile, base: &str| {
+        let config = UpdateConfig {
+            public_key: test_signing::public_key(),
+            feed: base.to_owned(),
+            backend: "cpu".into(),
+            engine_id: "compiled".into(),
+            kind: "native".into(),
+        };
+        tauri::async_runtime::block_on(anchor_installed_engines(
+            &state,
+            None,
+            &config,
+            &[catalog_entry_with_list(id, file)],
+            vec![id.to_owned()],
+            os,
+            "x86_64",
+            |_| panic!("an engine with metadata needs no handshake"),
+        ))
+    };
+
+    // A list signed by another key is not kept.
+    let (file, server, base) =
+        served_list(bytes.clone(), test_signing::sign_with_another_key(&bytes));
+    assert!(anchor(file, &base).is_empty());
+    server.join().unwrap();
+    assert!(updates::engine_lacks_file_list(&paths.next_root, id));
+
+    // The release's list, while a file differs from it, is not kept either.
+    fs::write(
+        worker.parent().unwrap().join("_internal/library.so"),
+        b"LIBRARY",
+    )
+    .unwrap();
+    let (file, server, base) = served_list(bytes.clone(), signature.clone());
+    assert!(anchor(file, &base).is_empty());
+    server.join().unwrap();
+    assert!(updates::engine_lacks_file_list(&paths.next_root, id));
+
+    // With the files it names, the engine keeps it and is started again.
+    fs::write(
+        worker.parent().unwrap().join("_internal/library.so"),
+        b"library",
+    )
+    .unwrap();
+    let (file, server, base) = served_list(bytes, signature);
+    assert_eq!(anchor(file, &base), vec![id.to_owned()]);
+    server.join().unwrap();
+    assert!(!updates::engine_lacks_file_list(&paths.next_root, id));
+    assert!(!paths
+        .next_root
+        .join("updates/engine-cache")
+        .join(id)
+        .exists());
+    assert_eq!(
+        updates::active_engine_for_host(&paths, false, "compiled", os, "x86_64"),
+        Some(worker)
+    );
+    assert!(engines_without_file_list(&paths.next_root, "compiled", os, "x86_64").is_empty());
+}
+
+#[test]
+fn a_verify_request_leaves_an_engine_without_a_list_as_it_is() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = Arc::new(AppState::from_paths(paths.clone()).unwrap());
+    let (config, ..) = fixture_engine_files("http://127.0.0.1:1");
+    let id = "linux-x86_64-rocm-070";
+    engine_from_an_earlier_version(&paths.next_root, id, "linux");
+    let error = verify_engine_for(&state, None, &config, id, "linux", "x86_64").unwrap_err();
+    assert!(error.to_string().contains("earlier version"), "{error}");
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(meta.verified_install);
+    assert!(paths.next_root.join("active-engine.txt").exists());
 }

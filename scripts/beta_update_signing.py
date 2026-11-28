@@ -31,7 +31,7 @@ import tempfile
 from collections.abc import Callable
 from pathlib import Path
 
-from prepare_engine_payload import legacy_update_manifest, validate_payload
+from prepare_engine_payload import engine_files_document, inspect_payload, legacy_update_manifest
 from release_targets import (
     UPDATE_ARCH,
     engine_id,
@@ -279,7 +279,7 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
     manifest_bytes = manifest_path.read_bytes()
     manifest = json.loads(manifest_bytes)
     identity = engine_id(target, commit)
-    engine_parts = validate_payload(
+    engine_parts, unpacked = inspect_payload(
         manifest,
         directory,
         files["engine_prefix"],
@@ -298,6 +298,14 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
     if update_bytes != legacy_update_manifest(manifest):
         raise ValueError(
             f"{target['id']}: {update_path.name} is not the update form of the engine manifest"
+        )
+    # The app checks an installed engine against this list: it must name exactly the files
+    # of this package, read from its archive here.
+    files_path = _regular(directory / files["engine_files"])
+    files_bytes = files_path.read_bytes()
+    if files_bytes != engine_files_document(manifest, unpacked):
+        raise ValueError(
+            f"{target['id']}: {files_path.name} is not the file list of the engine package"
         )
     # Where the smoke test installed the engine manifest (Windows CUDA), the published
     # engine package must be that one, not merely a valid one.
@@ -322,6 +330,8 @@ def _check_target(downloads: Path, target: dict, release_version: str, commit: s
         "engine_parts": engine_parts,
         "update_path": update_path,
         "update_digest": (hashlib.sha256(update_bytes).hexdigest(), len(update_bytes)),
+        "files_path": files_path,
+        "files_digest": (hashlib.sha256(files_bytes).hexdigest(), len(files_bytes)),
     }
 
 
@@ -475,6 +485,11 @@ def platform_entries(
                 copy = workspace / path.name
                 _snapshot([path], copy, known)
                 engine_files.append(download(path.name, known, sign_copy(copy, directory)))
+            files_copy = workspace / item["files_path"].name
+            _snapshot([item["files_path"]], files_copy, item["files_digest"])
+            file_list = download(
+                item["files_path"].name, item["files_digest"], sign_copy(files_copy, directory)
+            )
             identity = engine_id(target, commit)
             engine_unpacked = item["manifest"]["unpacked_bytes"]
             # Room to install: the package itself (an NSIS installer unpacks its bundled
@@ -497,6 +512,9 @@ def platform_entries(
                 "id": identity,
                 "manifest": engine_files[0],
                 "parts": engine_files[1:],
+                # Not in the release statement, whose fields older clients require exactly:
+                # the list's own signature and the identity it states authenticate it.
+                "files": file_list,
             }
             key = expected_update_identity(target, commit)["target"]
             _sign_statement(contract, release_version, key, workspace, sign)

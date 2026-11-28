@@ -1726,13 +1726,57 @@ fn check_retry_checkpoint_consent(state: &AppState, request: &Value) -> AppResul
         .check_model_file(path)
         .map_err(|_| confirm_again())?;
     let digest = catalog::sha256_file(path).map_err(|_| confirm_again())?;
-    let trusted = lock(&state.settings)?
-        .trusted_checkpoint_sha256
-        .contains(&digest);
-    if digest != approved || !trusted {
+    if digest != approved || !checkpoint_approved(state, &digest)? {
         return Err(confirm_again());
     }
     Ok(())
+}
+
+/// Whether the user approved the checkpoint with `digest` in LocalSR: it is in the
+/// settings' list and its seal verifies (checkpoint_approvals.rs).
+pub(crate) fn checkpoint_approved(state: &AppState, digest: &str) -> AppResult<bool> {
+    let listed = lock(&state.settings)?
+        .trusted_checkpoint_sha256
+        .iter()
+        .any(|item| item == digest);
+    Ok(listed && crate::checkpoint_approvals::sealed(&state.paths, digest))
+}
+
+/// Whether a queued request that names an approved pickle-based checkpoint still carries
+/// an approval the user made: the digest it names must be approved now. The engine loads
+/// only the file with that digest.
+pub(crate) fn queued_checkpoint_still_approved(state: &AppState, request: &Value) -> bool {
+    request_jobs(request).into_iter().all(|data| {
+        data["approved_checkpoint_sha256"]
+            .as_str()
+            .is_none_or(|digest| checkpoint_approved(state, digest).unwrap_or(false))
+    })
+}
+
+/// A queued request lets the engine load pickle-based checkpoints only through an
+/// approved digest: the general permission is withdrawn from every job without one.
+pub(crate) fn withdraw_unapproved_checkpoint_permission(message: &mut Value) {
+    let data = &mut message["data"];
+    let jobs: Vec<&mut Value> = match data.get_mut("jobs").and_then(Value::as_array_mut) {
+        Some(jobs) => jobs.iter_mut().collect(),
+        None => vec![data],
+    };
+    for job in jobs {
+        if job["approved_checkpoint_sha256"].as_str().is_none() {
+            if let Some(job) = job.as_object_mut() {
+                if job.contains_key("allow_unverified_checkpoint") {
+                    job.insert("allow_unverified_checkpoint".into(), Value::Bool(false));
+                }
+            }
+        }
+    }
+}
+
+fn request_jobs(request: &Value) -> Vec<&Value> {
+    match request["data"]["jobs"].as_array() {
+        Some(jobs) => jobs.iter().collect(),
+        None => vec![&request["data"]],
+    }
 }
 
 pub(crate) fn retry_job_on_cpu_checked(state: &AppState, job_id: &str) -> AppResult<()> {
@@ -3898,9 +3942,7 @@ pub async fn choose_custom_model(
 fn custom_checkpoint_trusted(state: &AppState, path: &Path) -> AppResult<bool> {
     state.grants.check_model_file(path)?;
     let digest = catalog::sha256_file(path)?;
-    Ok(lock(&state.settings)?
-        .trusted_checkpoint_sha256
-        .contains(&digest))
+    checkpoint_approved(state, &digest)
 }
 
 fn set_custom_checkpoint_consent(state: &AppState, path: &Path, allow: bool) -> AppResult<bool> {
@@ -3912,6 +3954,11 @@ fn set_custom_checkpoint_consent(state: &AppState, path: &Path, allow: bool) -> 
     }
     let digest = catalog::sha256_file(path)?;
     let _io = lock(&state.settings_io)?;
+    let was_approved = checkpoint_approved(state, &digest)?;
+    // Sealed before it is listed: a list entry without a seal approves nothing.
+    if allow {
+        crate::checkpoint_approvals::record(&state.paths, &digest, true)?;
+    }
     let previous = lock(&state.settings)?.trusted_checkpoint_sha256.clone();
     {
         let mut settings = lock(&state.settings)?;
@@ -3919,12 +3966,18 @@ fn set_custom_checkpoint_consent(state: &AppState, path: &Path, allow: bool) -> 
             .trusted_checkpoint_sha256
             .retain(|item| item != &digest);
         if allow {
-            settings.trusted_checkpoint_sha256.push(digest);
+            settings.trusted_checkpoint_sha256.push(digest.clone());
         }
     }
     if let Err(error) = state.write_settings() {
         lock(&state.settings)?.trusted_checkpoint_sha256 = previous;
+        if allow && !was_approved {
+            let _ = crate::checkpoint_approvals::record(&state.paths, &digest, false);
+        }
         return Err(error);
+    }
+    if !allow {
+        crate::checkpoint_approvals::record(&state.paths, &digest, false)?;
     }
     Ok(allow)
 }
@@ -5326,10 +5379,7 @@ fn resolve_model_selection_with(
         let extension = extension(&path).unwrap_or_default();
         if extension != "safetensors" && input.allow_unsafe_pickle_model {
             let digest = catalog::sha256_file(&path)?;
-            if lock(&state.settings)?
-                .trusted_checkpoint_sha256
-                .contains(&digest)
-            {
+            if checkpoint_approved(state, &digest)? {
                 approved_checkpoint_sha256 = Some(digest);
             }
         }

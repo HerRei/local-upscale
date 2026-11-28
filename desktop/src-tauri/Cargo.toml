@@ -38,6 +38,8 @@ sha2 = "0.11.0"
 tauri = { version = "2.11.5", features = ["protocol-asset", "tray-icon"] }
 tauri-plugin-updater = "2"
 minisign-verify = "0.3"
+# Already built for rustls; used directly for HMAC-SHA256 and random keys.
+ring = "0.17"
 semver = "1"
 tempfile = "3.23.0"
 tauri-plugin-dialog = "2.8.4"
@@ -48,6 +50,15 @@ tokio = { version = "1.48.0", features = ["fs", "io-util", "sync", "time"] }
 tower-http = { version = "0.7.1", features = ["fs"] }
 unicode-normalization = "0.1"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
+
+# Already built for other crates on these platforms: the Keychain item and the desktop
+# keyring that keep the model-approval key (checkpoint_approvals.rs).
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"
+security-framework-sys = "2.17"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
 
 [dev-dependencies]
 jsonschema = { version = "0.63", default-features = false }

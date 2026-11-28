@@ -3,6 +3,7 @@ mod appimage_gstreamer;
 mod cache_cleanup;
 mod cancellation;
 mod catalog;
+mod checkpoint_approvals;
 mod commands;
 mod compare;
 mod crash_reports;
@@ -11,6 +12,7 @@ mod disk_room;
 mod distribution;
 mod downloads;
 mod editing;
+mod engine_files;
 mod engine_manager;
 mod engine_payload;
 mod error;
@@ -196,6 +198,7 @@ pub fn run() {
             tauri::async_runtime::spawn_blocking(move || {
                 if !crate::distribution::managed_by_store() {
                     engine_manager::recover_engine_files_at_startup(&startup_state);
+                    engine_manager::anchor_installed_engines_at_start(&startup_state, &startup_app);
                 }
                 if let Err(error) = worker::start_worker(startup_state.clone(), startup_app.clone())
                 {

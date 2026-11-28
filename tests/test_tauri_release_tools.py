@@ -5,6 +5,7 @@ import hashlib
 import importlib.util
 import json
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -218,6 +219,7 @@ def test_updater_file_names_follow_the_published_package_names() -> None:
         "engine_prefix": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine.tar.gz",
         "engine_manifest": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-payload.json",
         "engine_update_manifest": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-update.json",
+        "engine_files": "LocalSR-v1.2.3-beta-Windows-CUDA-x86_64.engine-files.json",
         "payload_backend": "CUDA",
         "worker": "localsr-worker.exe",
     }
@@ -237,6 +239,114 @@ def fake_engine(root: Path, worker: str) -> Path:
     (engine / worker).write_bytes(b"worker")
     (engine / "lib" / "model.bin").write_bytes(bytes(range(256)) * 8)
     return engine
+
+
+def test_an_engine_package_lists_every_file_it_unpacks(tmp_path: Path) -> None:
+    engine = fake_engine(tmp_path, "localsr-worker")
+    output = tmp_path / "out"
+    output.mkdir()
+    manifest_path = engine_payload.prepare_for_target(
+        "linux-x86_64-cpu", output, engine=engine, release_version="1.2.3-beta", commit=COMMIT
+    )
+    names = release_targets.update_files(release_targets.target("linux-x86_64-cpu"), "1.2.3-beta")
+    listed = json.loads((output / names["engine_files"]).read_bytes())
+    manifest = json.loads(manifest_path.read_bytes())
+    assert listed == {
+        "schema_version": 1,
+        "engine_id": manifest["engine_id"],
+        "version": "1.2.3-beta",
+        "os": "linux",
+        "arch": "x86_64",
+        "backend": "CPU",
+        "protocol_version": manifest["protocol_version"],
+        "parts": manifest["parts"],
+        "files": [
+            {
+                "path": "lib/model.bin",
+                "size": 2048,
+                "sha256": hashlib.sha256(bytes(range(256)) * 8).hexdigest(),
+            },
+            {"path": "localsr-worker", "size": 6, "sha256": hashlib.sha256(b"worker").hexdigest()},
+        ],
+    }
+    # Adopting the same payload writes the same list, from the archive itself.
+    reused = tmp_path / "reused"
+    reused.mkdir()
+    for part in manifest["parts"]:
+        shutil.copyfile(output / part["filename"], reused / part["filename"])
+    shutil.copyfile(manifest_path, reused / "engine-payload.json")
+    engine_payload.prepare_for_target(
+        "linux-x86_64-cpu",
+        reused,
+        reuse=reused / "engine-payload.json",
+        release_version="1.2.3-beta",
+        commit=COMMIT,
+    )
+    assert (reused / names["engine_files"]).read_bytes() == (
+        output / names["engine_files"]
+    ).read_bytes()
+
+
+def test_the_feed_names_each_engine_file_list_and_the_check_refuses_a_changed_one(
+    tmp_path: Path,
+) -> None:
+    downloads = platform_downloads(tmp_path)
+    feed_path = tmp_path / "beta.json"
+    mac, _ = mac_feed(tmp_path)
+    signatures = update_signing.add_platforms(
+        downloads, feed_path, COMMIT, release_version="1.2.3-beta", sign=fake_sign
+    )
+    feed = json.loads(feed_path.read_text())
+    for key, entry in feed["platforms"].items():
+        listed = entry["localsr"]["engine"]["files"]
+        assert listed["name"].endswith(".engine-files.json"), key
+    cpu = feed["platforms"]["linux-x86_64-cpu-native"]["localsr"]["engine"]["files"]
+    path = downloads / "linux-x86_64-cpu" / cpu["name"]
+    assert path.with_name(path.name + ".sig") in signatures
+    assert verify_prepared.minisign_verify(
+        TEST_KEY.public_key, cpu["signature"], [path.read_bytes()]
+    )
+    verify_feed(feed_path, [downloads, mac])
+
+    # A list that names other files, even signed and described by the feed, is refused.
+    document = json.loads(path.read_bytes())
+    document["files"][0]["sha256"] = "0" * 64
+    path.write_bytes(json.dumps(document).encode())
+    fake_sign(path)
+    cpu.update(
+        size=path.stat().st_size,
+        sha256=hashlib.sha256(path.read_bytes()).hexdigest(),
+        signature=path.with_name(path.name + ".sig").read_text(),
+    )
+    feed_path.write_text(json.dumps(feed))
+    with pytest.raises(ValueError, match="file list"):
+        verify_feed(feed_path, [downloads, mac])
+    # A feed without the list is refused as well.
+    del feed["platforms"]["linux-x86_64-cpu-native"]["localsr"]["engine"]["files"]
+    feed_path.write_text(json.dumps(feed))
+    with pytest.raises(ValueError, match="file list"):
+        verify_feed(feed_path, [downloads, mac])
+
+
+@pytest.mark.parametrize("tag", ["v0.3.0-beta", *load_script("upgrade_check").OLDER_RELEASES])
+def test_older_updaters_accept_the_engine_file_list_in_the_feed(tag: str) -> None:
+    """The feed's engine object names the file list (`files`), which older updaters do not
+    know: every released updater must read the feed types without refusing unknown fields."""
+    shown = subprocess.run(
+        ["git", "show", f"{tag}:desktop/src-tauri/src/updates.rs"],
+        cwd=ROOT,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if shown.returncode:
+        pytest.skip(f"{tag} is not in this clone")
+    for name in ("DownloadFile", "EngineUpdate", "ReleaseContract"):
+        found = re.search(rf"((?:#\[[^\n]*\]\s*)*)pub struct {name}\b", shown.stdout)
+        if found is None:
+            assert name == "EngineUpdate" and tag == "v0.3.0-beta", (tag, name)
+            continue
+        assert "deny_unknown_fields" not in found.group(1), (tag, name)
 
 
 def test_engine_payload_cli_names_the_payload_for_its_edition(tmp_path: Path) -> None:
@@ -433,6 +543,7 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
         engine_id=identity,
     )
     manifest = written.rename(mac / f"{stem}.engine-payload.json")
+    listed = (mac / "engine-files.json").rename(mac / f"{stem}.engine-files.json")
     update = mac / f"{stem}.engine-update.json"
     update.write_bytes(engine_payload.legacy_update_manifest(json.loads(manifest.read_bytes())))
     for path in mac.iterdir():
@@ -469,6 +580,7 @@ def mac_feed(tmp_path: Path, release_version: str = "1.2.3-beta") -> tuple[Path,
                         "id": identity,
                         "manifest": file(update),
                         "parts": [file(mac / part["filename"]) for part in payload["parts"]],
+                        "files": file(listed),
                     },
                 },
             }
@@ -895,7 +1007,7 @@ def test_round2_signer_rejects_uninstallable_archives(tmp_path: Path, failure: s
         ],
     }
     with pytest.raises(ValueError):
-        engine_payload.validate_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
+        engine_payload.inspect_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
 
 
 def test_round2_identity_key_cannot_forge_minisign() -> None:
@@ -1397,7 +1509,7 @@ def test_round3_hard_linked_engine_files_are_archived_whole(tmp_path: Path) -> N
     output = tmp_path / "out"
     written = engine_payload.prepare(engine, output, "p", backend="CPU", worker="localsr-worker")
     manifest = json.loads(written.read_text())
-    engine_payload.validate_payload(manifest, output, "p", "CPU", "localsr-worker")
+    engine_payload.inspect_payload(manifest, output, "p", "CPU", "localsr-worker")
 
 
 linux_symlinks = pytest.mark.skipif(sys.platform == "win32", reason="symlinks need privileges")
@@ -1414,7 +1526,13 @@ def test_engine_payload_archives_an_internal_file_link_as_a_regular_file(tmp_pat
     output = tmp_path / "out"
     written = engine_payload.prepare(engine, output, "p", backend="CPU", worker="localsr-worker")
     manifest = json.loads(written.read_text())
-    engine_payload.validate_payload(manifest, output, "p", "CPU", "localsr-worker")
+    _, unpacked = engine_payload.inspect_payload(manifest, output, "p", "CPU", "localsr-worker")
+    # The list written while archiving names what the archive holds, links as their files.
+    listed = json.loads((output / "engine-files.json").read_bytes())["files"]
+    assert listed == unpacked
+    assert {f["path"]: f["sha256"] for f in listed}["lib/libfoo.so"] == hashlib.sha256(
+        b"shared-library"
+    ).hexdigest()
     regular = [p for p in engine.rglob("*") if not p.is_dir()]
     assert manifest["file_count"] == len(regular)
     assert manifest["unpacked_bytes"] == sum(p.stat().st_size for p in regular)
@@ -1488,7 +1606,7 @@ def test_round3_engine_parts_are_numbered_from_one_and_names_are_canonical(
         ],
     }
     with pytest.raises(ValueError):
-        engine_payload.validate_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
+        engine_payload.inspect_payload(manifest, tmp_path, "engine", "CPU", "localsr-worker")
 
 
 def test_round3_checksum_file_lines_are_unique_and_well_formed() -> None:
@@ -1702,6 +1820,12 @@ def test_upgrade_check_feed_is_one_older_updaters_read_and_as_in_052_is_not(
     assert verify_prepared.legacy_update_problem(manifest.read_bytes()) is None
     assert verify_prepared.minisign_verify(
         key.public_key, named["engine"]["manifest"]["signature"], [manifest.read_bytes()]
+    )
+    # The feed names the signed file list as a release does, for the new host's half.
+    listed = files / named["engine"]["files"]["name"]
+    assert listed.name.endswith(".engine-files.json")
+    assert verify_prepared.minisign_verify(
+        key.public_key, named["engine"]["files"]["signature"], [listed.read_bytes()]
     )
 
     broken, files_052, contract_052 = upgrade_check.candidate_feed(

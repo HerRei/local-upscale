@@ -9,6 +9,10 @@ engine package for one release target under its public names:
 
 --reuse adopts a payload that already exists in DIR (the CUDA installer's parts)
 after checking every part against its manifest.
+
+Beside the manifest it writes the engine's file list (`<package>.engine-files.json`):
+the path, size and SHA-256 of every file the package unpacks. The release signs it, and
+the app checks an installed engine against that signed list.
 """
 
 from __future__ import annotations
@@ -59,6 +63,33 @@ LEGACY_UPDATE_FIELDS = (
     "parts",
 )
 LEGACY_PART_FIELDS = ("filename", "size", "sha256")
+# desktop/src-tauri/src/engine_files.rs reads exactly these fields.
+ENGINE_FILES_SCHEMA = 1
+
+
+def engine_files_document(manifest: dict, files: list[dict]) -> bytes:
+    """The engine's file list as the release signs it and the app reads it.
+
+    `files` holds the path, size and SHA-256 of every file the package unpacks, sorted by
+    path; the identity fields and the parts bind the list to this one package.
+    """
+    document = {
+        "schema_version": ENGINE_FILES_SCHEMA,
+        "engine_id": manifest["engine_id"],
+        "version": manifest["version"],
+        "os": manifest["os"],
+        "arch": manifest["arch"],
+        "backend": manifest["backend"],
+        "protocol_version": manifest["protocol_version"],
+        "parts": [
+            {field: part[field] for field in LEGACY_PART_FIELDS} for part in manifest["parts"]
+        ],
+        "files": sorted(
+            ({"path": f["path"], "size": f["size"], "sha256": f["sha256"]} for f in files),
+            key=lambda f: f["path"].encode("utf-8"),
+        ),
+    }
+    return (json.dumps(document, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
 
 
 def legacy_update_manifest(manifest: dict) -> bytes:
@@ -219,6 +250,7 @@ def prepare(
         raise ValueError("the frozen worker is missing")
     output.mkdir(parents=True, exist_ok=True)
     files = _engine_files(engine)
+    listed: list[dict] = []
     writer = PartWriter(output, prefix, part_bytes)
     try:
         with gzip.GzipFile(fileobj=writer, mode="wb", compresslevel=1, mtime=0) as compressed:
@@ -235,7 +267,11 @@ def prepare(
                     info.uid = info.gid = info.mtime = 0
                     info.uname = info.gname = ""
                     with path.open("rb") as source:
-                        archive.addfile(info, source)
+                        hashed = _HashingReader(source)
+                        archive.addfile(info, hashed)
+                    listed.append(
+                        {"path": info.name, "size": hashed.size, "sha256": hashed.hexdigest()}
+                    )
     finally:
         writer.close_part()
     manifest = {
@@ -252,10 +288,30 @@ def prepare(
         "parts": writer.parts,
     }
     path = output / "engine-payload.json"
-    # Never replace a manifest that is already there (the caller renames this one).
+    # Never replace a manifest or list that is already there (the caller renames them).
     with path.open("x", encoding="utf-8") as stream:
         stream.write(json.dumps(manifest, indent=2, sort_keys=True) + "\n")
+    with (output / "engine-files.json").open("xb") as stream:
+        stream.write(engine_files_document(manifest, listed))
     return path
+
+
+class _HashingReader:
+    """A file read through tarfile, hashed on the way: the list states what was archived."""
+
+    def __init__(self, stream):
+        self.stream = stream
+        self.digest = hashlib.sha256()
+        self.size = 0
+
+    def read(self, count: int = -1) -> bytes:
+        data = self.stream.read(count)
+        self.digest.update(data)
+        self.size += len(data)
+        return data
+
+    def hexdigest(self) -> str:
+        return self.digest.hexdigest()
 
 
 class _JoinedParts:
@@ -289,7 +345,7 @@ def _positive_int(value: object) -> bool:
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
 
 
-def validate_payload(
+def inspect_payload(
     manifest: object,
     directory: Path,
     prefix: str,
@@ -301,13 +357,14 @@ def validate_payload(
     expected_arch: str | None = None,
     expected_protocol_version: int | None = None,
     expected_engine_id: str | None = None,
-) -> list[Path]:
+) -> tuple[list[Path], list[dict]]:
     """Check an engine payload in ``directory`` the way the app's installer will.
 
     Every part must be a regular file named ``<prefix>.part-NNNN`` directly in the
     folder, of the listed size and digest; together they must be a gzip tar archive of
     exactly ``file_count`` regular files with safe relative paths, ``unpacked_bytes`` in
-    all, and the worker at the top. Returns the part paths in order.
+    all, and the worker at the top. Returns the part paths in order and the path, size
+    and SHA-256 of every file in the archive.
     """
     parts = manifest.get("parts") if isinstance(manifest, dict) else None
     manifest_version = manifest.get("version") if isinstance(manifest, dict) else None
@@ -357,6 +414,7 @@ def validate_payload(
     count = total = 0
     has_worker = False
     names: set[str] = set()
+    listed: list[dict] = []
     try:
         with (
             gzip.GzipFile(fileobj=joined, mode="rb") as decoded,
@@ -379,6 +437,15 @@ def validate_payload(
                 count += 1
                 total += member.size
                 has_worker |= member.name == worker
+                digest = hashlib.sha256()
+                stream = archive.extractfile(member)
+                size = 0
+                while stream is not None and (chunk := stream.read(4 * 1024**2)):
+                    digest.update(chunk)
+                    size += len(chunk)
+                if size != member.size:
+                    raise ValueError(f"engine payload entry {member.name!r} is truncated")
+                listed.append({"path": member.name, "size": size, "sha256": digest.hexdigest()})
             # tar stops at its end markers; finish the gzip decoder as the runtime
             # does, so a corrupt or missing trailer cannot be signed.
             while decoded.read(4 * 1024**2):
@@ -391,7 +458,7 @@ def validate_payload(
         raise ValueError(f"the {prefix} parts do not match their engine payload manifest")
     if count != manifest["file_count"] or total != manifest["unpacked_bytes"] or not has_worker:
         raise ValueError(f"the {prefix} archive does not match its engine payload manifest")
-    return paths
+    return paths, sorted(listed, key=lambda f: f["path"].encode("utf-8"))
 
 
 def prepare_for_target(
@@ -429,11 +496,12 @@ def prepare_for_target(
             engine_id=resolved_engine_id,
         )
         written.replace(destination)
+        (output / "engine-files.json").replace(output / files["engine_files"])
         _write_update_manifest(destination, output / files["engine_update_manifest"])
         return destination
     assert reuse is not None
     data = reuse.read_bytes()
-    validate_payload(
+    _, listed = inspect_payload(
         json.loads(data),
         output,
         files["engine_prefix"],
@@ -446,6 +514,7 @@ def prepare_for_target(
         expected_engine_id=resolved_engine_id,
     )
     destination.write_bytes(data)
+    (output / files["engine_files"]).write_bytes(engine_files_document(json.loads(data), listed))
     _write_update_manifest(destination, output / files["engine_update_manifest"])
     return destination
 

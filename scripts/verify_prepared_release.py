@@ -5,7 +5,8 @@ With --feed, check the update feed instead: one entry per release target, each
 with its edition's backend, kind, engine identity and an engine package, files below
 GitHub's size limit, and AppImage parts that add up to the package. Every signature is
 verified against the updater public key, over the local copies of the files (--files)
-and over each entry's two signed release statements (format 1 and format 2).
+and over each entry's two signed release statements (format 1 and format 2). Each
+engine file list must name exactly the files its engine package unpacks.
 """
 
 from __future__ import annotations
@@ -23,6 +24,8 @@ from prepare_engine_payload import (
     BACKENDS,
     LEGACY_PART_FIELDS,
     LEGACY_UPDATE_FIELDS,
+    engine_files_document,
+    inspect_payload,
     legacy_update_manifest,
 )
 from release_targets import (
@@ -423,6 +426,27 @@ def _engine_manifest(
             )
 
 
+def _engine_file_list(
+    key: str, list_path: Path, manifest_path: Path, parts_folder: Path, target: dict, files: dict
+) -> None:
+    """The signed file list names exactly the files the engine package unpacks."""
+    manifest = json.loads(manifest_path.read_bytes())
+    try:
+        _, unpacked = inspect_payload(
+            manifest,
+            parts_folder,
+            files["engine_prefix"],
+            files["payload_backend"],
+            files["worker"],
+        )
+    except ValueError as error:
+        raise ValueError(f"{key}: the engine package cannot be read: {error}") from error
+    if list_path.read_bytes() != engine_files_document(manifest, unpacked):
+        raise ValueError(
+            f"{key}: {list_path.name} is not the file list of the {target['id']} engine package"
+        )
+
+
 def verify_feed(
     feed_path: Path,
     commit: str,
@@ -514,6 +538,9 @@ def verify_feed(
             _download(
                 part, base, f"{files['engine_prefix']}.part-{index:04d}", f"{key} engine {index}"
             )
+        if engine.get("files") is None:
+            raise ValueError(f"{key} names no signed engine file list")
+        _download(engine["files"], base, files["engine_files"], f"{key} engine file list")
         # The shape is right; now the signatures, over the bytes that will be published.
         _statement(key, contract, release_version, channel, public_key)
         _engine_manifest(
@@ -527,6 +554,14 @@ def verify_feed(
             identity=identity,
             update_path=local(files["engine_update_manifest"]),
         )
+        _engine_file_list(
+            key,
+            local(files["engine_files"]),
+            local(files["engine_manifest"]),
+            local(engine_parts[0]["name"]).parent,
+            target,
+            files,
+        )
         package = [local(part["name"]) for part in parts] if parts else [local(name)]
         _signed_file(
             {"size": size, "sha256": contract["sha256"], "signature": entry.get("signature")},
@@ -534,7 +569,7 @@ def verify_feed(
             public_key,
             key,
         )
-        for item in [*(parts or []), engine["manifest"], *engine_parts]:
+        for item in [*(parts or []), engine["manifest"], *engine_parts, engine["files"]]:
             _signed_file(item, [local(item["name"])], public_key, f"{key}: {item['name']}")
 
 

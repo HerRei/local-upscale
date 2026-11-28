@@ -293,15 +293,8 @@ pub(crate) fn parse_feed_engines_for(
             continue;
         };
         let size = engine
-            .manifest
-            .size
-            .checked_add(
-                engine
-                    .parts
-                    .iter()
-                    .try_fold(0u64, |acc, part| acc.checked_add(part.size))
-                    .ok_or_else(|| invalid("Engine package size overflow"))?,
-            )
+            .downloads()
+            .try_fold(0u64, |acc, file| acc.checked_add(file.size))
             .ok_or_else(|| invalid("Engine package size overflow"))?;
         entries.push(VerifiedCatalogEntry {
             backend: backend.to_string(),
@@ -753,6 +746,7 @@ pub(crate) async fn refresh_engine_catalog_in(
     )?;
     *lock(&state.engines.catalog)? = parsed;
     *lock(&state.engines.catalog_error)? = None;
+    anchor_from_catalog(state, app, config).await;
     let snapshot = snapshot_for(state, config, gpu_notice::detect_engine_recommendation());
     if let Some(app) = app {
         emit_state_changed(app);
@@ -859,8 +853,8 @@ pub(crate) async fn install_engine_for(
         .join(&engine_id);
     fs::create_dir_all(&cache_dir)?;
 
-    let already_present = std::iter::once(&engine.manifest)
-        .chain(&engine.parts)
+    let already_present = engine
+        .downloads()
         .map(|file| file_on_disk_progress(&cache_dir, file))
         .sum::<u64>();
     let total = entry.size;
@@ -920,6 +914,29 @@ pub(crate) async fn install_engine_for(
             {
                 return Err(invalid(
                     "Engine payload manifest metadata does not match this platform or engine",
+                ));
+            }
+            let list_file = engine.file_list()?;
+            download_file_resumable(
+                list_file,
+                &cache_dir,
+                config,
+                &state.engines.cancel,
+                &mut on_progress,
+            )
+            .await?;
+            let list = crate::engine_files::EngineFileList::verify(
+                &updates::read_verified(
+                    &cache_dir.join(&list_file.name),
+                    list_file,
+                    &config.public_key,
+                )?,
+                &list_file.signature,
+                &config.public_key,
+            )?;
+            if !list.names(&engine_id, os, arch) || !list.describes(&parsed_manifest) {
+                return Err(invalid(
+                    "The engine file list does not belong to this engine package or host",
                 ));
             }
             let parts_remaining = engine
@@ -1243,6 +1260,11 @@ pub(crate) fn verify_engine_for(
     // A worker start can restore a backup over this engine; read, check and mark
     // one copy. Lock order: scheduler, then engine_files, as in use_engine_for.
     let engine_files = lock(&state.worker.engine_files)?;
+    if updates::engine_lacks_file_list(&state.paths.next_root, id) {
+        return Err(invalid(
+            "This engine was installed by an earlier version of LocalSR. Check for updates to download its signed file list, or install it again.",
+        ));
+    }
     let verification = match read_engine_meta(&state.paths.next_root, id) {
         Some(meta) if engine_meta_valid_for_host(&meta, os, arch) && meta.id == id => {
             updates::full_verify_engine_files(&state.paths.next_root, id, &meta)
@@ -1382,6 +1404,35 @@ fn read_signature_file(path: &Path) -> AppResult<String> {
     Ok(fs::read_to_string(sig_path)?.trim().to_owned())
 }
 
+/// Where an offline package keeps its file list: `<package>.engine-files.json` beside
+/// `<package>.engine-payload.json`, or `engine-files.json` beside a manifest of another name.
+fn imported_list_path(manifest_path: &Path) -> PathBuf {
+    let name = manifest_path
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let list = name.strip_suffix(".engine-payload.json").map_or_else(
+        || "engine-files.json".to_owned(),
+        |stem| format!("{stem}.engine-files.json"),
+    );
+    manifest_path.with_file_name(list)
+}
+
+fn read_imported_list(path: &Path) -> AppResult<Vec<u8>> {
+    let meta = fs::symlink_metadata(path)
+        .map_err(|_| invalid(format!("Missing engine file list: {}", path.display())))?;
+    if meta.file_type().is_symlink() || !meta.file_type().is_file() || meta.len() > 32 * 1024 * 1024
+    {
+        return Err(invalid(format!(
+            "Invalid engine file list: {}",
+            path.display()
+        )));
+    }
+    Ok(fs::read(path)?)
+}
+
+/// Check the offline package's signatures. Returns the id of the catalog entry it matches,
+/// if any, and its signed file list.
 fn verify_imported_files(
     manifest_path: &Path,
     manifest_bytes: &[u8],
@@ -1390,7 +1441,7 @@ fn verify_imported_files(
     public_key: &str,
     catalog: &[VerifiedCatalogEntry],
     backend: &str,
-) -> AppResult<Option<String>> {
+) -> AppResult<(Option<String>, crate::engine_files::EngineFileList)> {
     if public_key.is_empty() {
         return Err(invalid(
             "Signature verification key is not configured for this build",
@@ -1426,7 +1477,13 @@ fn verify_imported_files(
             .iter()
             .find(|entry| entry.backend == backend && entry.engine.manifest.sha256 == manifest_sha)
             .map(|entry| entry.engine_id.clone());
-        return Ok(matching_id);
+        let list_path = imported_list_path(manifest_path);
+        let list = crate::engine_files::EngineFileList::verify(
+            &read_imported_list(&list_path)?,
+            &read_signature_file(&list_path)?,
+            public_key,
+        )?;
+        return Ok((matching_id, list));
     }
 
     // Fallback when .sig files are absent: match a verified catalog entry's manifest & part signatures.
@@ -1459,7 +1516,16 @@ fn verify_imported_files(
         }
         verify_file(&source_dir.join(&part.filename), signed_part, public_key)?;
     }
-    Ok(Some(entry.engine_id.clone()))
+    let list_file = entry.engine.file_list()?;
+    if !safe_file_name(&list_file.name) {
+        return Err(invalid("Invalid engine file list name in the catalog"));
+    }
+    let list = crate::engine_files::EngineFileList::verify(
+        &updates::read_verified(&source_dir.join(&list_file.name), list_file, public_key)?,
+        &list_file.signature,
+        public_key,
+    )?;
+    Ok((Some(entry.engine_id.clone()), list))
 }
 
 pub(crate) fn recover_interrupted_reimport(next_root: &Path, id: &str) -> AppResult<()> {
@@ -1522,11 +1588,20 @@ pub(crate) fn recover_engine_copy_for(
     }
     // Older versions backed up only the payload. Use its old metadata if it
     // still verifies the copy that will occupy the installed path.
+    // This chooses the copy that stays; starting it still needs the signed list. An
+    // engine an earlier version installed has none yet and is compared with its metadata.
     let verifies = |directory: &Path| {
         read_engine_meta(next_root, id).is_some_and(|meta| {
+            let files = if updates::engine_lacks_file_list(next_root, id) {
+                Some(meta.files.clone())
+            } else {
+                updates::signed_engine_files(&root, id, os, arch)
+            };
             meta.id == id
                 && engine_meta_valid_for_host(&meta, os, arch)
-                && updates::check_engine_directory_files(directory, &meta, true)
+                && files.is_some_and(|files| {
+                    updates::check_engine_directory_files(directory, &files, true)
+                })
         })
     };
     let existing = updates::engine_directory_exists(&engine)?;
@@ -1865,7 +1940,7 @@ pub(crate) fn import_engine_for(
         )?;
     }
     let catalog_snapshot = lock(&state.engines.catalog)?.clone();
-    let catalog_id = verify_imported_files(
+    let (catalog_id, list) = verify_imported_files(
         manifest_path,
         &manifest_bytes,
         &parsed,
@@ -1883,27 +1958,20 @@ pub(crate) fn import_engine_for(
             }
         }
     }
-    let os_key = if os == "macos" { "darwin" } else { os };
-    let engine_id = parsed
-        .engine_id
-        .clone()
-        .or_else(|| catalog_id.clone())
-        .unwrap_or_else(|| format!("{os_key}-{arch}-{backend}-{}", sha256_hex(&manifest_bytes)));
-    if !safe_id(&engine_id) {
-        return Err(invalid("Derived engine identity is invalid"));
+    // The signed list names the engine; the manifest and a matching catalog entry agree.
+    let engine_id = list.engine_id.clone();
+    if catalog_id.as_ref().is_some_and(|cid| *cid != engine_id)
+        || !list.names(&engine_id, os, arch)
+        || !list.describes(&parsed)
+    {
+        return Err(invalid(
+            "The engine file list does not belong to this engine package or host",
+        ));
     }
     let version_str = parsed
         .version
         .clone()
-        .or_else(|| {
-            catalog_id.as_ref().and_then(|cid| {
-                catalog_snapshot
-                    .iter()
-                    .find(|entry| entry.engine_id == *cid)
-                    .map(|entry| entry.version.clone())
-            })
-        })
-        .unwrap_or_default();
+        .unwrap_or_else(|| list.version.clone());
 
     let source_dir_owned = source_dir.to_path_buf();
     let manifest_bytes_owned = manifest_bytes;
@@ -1912,12 +1980,13 @@ pub(crate) fn import_engine_for(
         &state.paths.next_root,
         &engine_id,
         |staged| {
-            engine_payload::install_manifest_with_files(
+            let files = engine_payload::install_manifest_with_files(
                 &manifest_bytes_owned,
                 &source_dir_owned,
                 staged,
             )
-            .map_err(|error| invalid(error.to_string()))
+            .map_err(|error| invalid(error.to_string()))?;
+            Ok((files, list))
         },
         handshake,
     )?;
@@ -1976,6 +2045,235 @@ pub async fn import_engine(
     })
     .await
     .map_err(|e| invalid(e.to_string()))?
+}
+
+/// Installed engines that an earlier version of LocalSR left without a signed file list
+/// and that can take one: those with valid host metadata, and the engine this host was
+/// built for when it has no metadata (installed by the updaters of 0.4.0 to 0.5.0).
+pub(crate) fn engines_without_file_list(
+    next_root: &Path,
+    compiled_id: &str,
+    os: &str,
+    arch: &str,
+) -> Vec<String> {
+    let engines = next_root.join("engines");
+    let Ok(entries) =
+        updates::real_engine_directory(&engines).and_then(|()| fs::read_dir(&engines))
+    else {
+        return Vec::new();
+    };
+    let mut ids = Vec::new();
+    for entry in entries.flatten() {
+        let id = entry.file_name().to_string_lossy().into_owned();
+        if !safe_id(&id)
+            || !updates::engine_lacks_file_list(next_root, &id)
+            || engine_executable_path(next_root, &id).is_none()
+        {
+            continue;
+        }
+        let recorded = read_engine_meta(next_root, &id)
+            .is_some_and(|meta| meta.id == id && engine_meta_valid_for_host(&meta, os, arch));
+        let unrecorded = matches!(
+            fs::symlink_metadata(entry.path().join("meta.json")),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound
+        );
+        if recorded || (unrecorded && id == compiled_id) {
+            ids.push(id);
+        }
+    }
+    ids.sort();
+    ids
+}
+
+/// Fetch the signed file lists that the verified catalog `entries` name for the installed
+/// engines `ids`, and keep each with its engine once the engine's files match it
+/// (updates::anchor_installed_engine). Returns the engines that now have their list.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn anchor_installed_engines(
+    state: &Arc<AppState>,
+    app: Option<&AppHandle>,
+    config: &UpdateConfig,
+    entries: &[VerifiedCatalogEntry],
+    ids: Vec<String>,
+    os: &str,
+    arch: &str,
+    handshake: impl Fn(&Path) -> bool + Clone + Send + 'static,
+) -> Vec<String> {
+    let mut anchored = Vec::new();
+    for id in ids {
+        let Some(file) = entries
+            .iter()
+            .find(|entry| entry.engine_id == id)
+            .and_then(|entry| entry.engine.files.clone())
+        else {
+            continue;
+        };
+        let cache = state
+            .paths
+            .next_root
+            .join("updates")
+            .join("engine-cache")
+            .join(&id);
+        let fetched = async {
+            fs::create_dir_all(&cache)?;
+            download_file_resumable(&file, &cache, config, &AtomicBool::new(false), &mut |_| {})
+                .await?;
+            let bytes = updates::read_verified(&cache.join(&file.name), &file, &config.public_key);
+            let _ = fs::remove_file(cache.join(&file.name));
+            let _ = fs::remove_dir(&cache);
+            crate::engine_files::EngineFileList::verify(
+                &bytes?,
+                &file.signature,
+                &config.public_key,
+            )
+        }
+        .await;
+        let list = match fetched {
+            Ok(list) => list,
+            Err(error) => {
+                eprintln!("LocalSR could not fetch the file list of engine {id}: {error}");
+                continue;
+            }
+        };
+        let state_for_check = state.clone();
+        let id_for_check = id.clone();
+        let compiled_id = config.engine_id.clone();
+        let (os_owned, arch_owned) = (os.to_owned(), arch.to_owned());
+        let handshake = handshake.clone();
+        // Hashing runs off the async threads, under the lock a worker start takes.
+        let checked = tauri::async_runtime::spawn_blocking(move || -> AppResult<()> {
+            let _busy = acquire(&state_for_check.engines.busy)?;
+            let _engine_files = lock(&state_for_check.worker.engine_files)?;
+            updates::anchor_installed_engine(
+                &state_for_check.paths.next_root,
+                &id_for_check,
+                &list,
+                &compiled_id,
+                &os_owned,
+                &arch_owned,
+                handshake,
+            )
+        })
+        .await
+        .map_err(|error| invalid(error.to_string()))
+        .and_then(|result| result);
+        match checked {
+            Ok(()) => anchored.push(id),
+            Err(error) => {
+                eprintln!(
+                    "LocalSR could not check engine {id} against its signed file list: {error}"
+                )
+            }
+        }
+    }
+    if !anchored.is_empty() {
+        if let Some(app) = app {
+            emit_state_changed(app);
+        }
+    }
+    anchored
+}
+
+fn start_handshake(work_root: PathBuf) -> impl Fn(&Path) -> bool + Clone + Send + 'static {
+    move |executable| {
+        crate::headless_smoke::run_worker_handshake(
+            executable,
+            Duration::from_secs(60),
+            true,
+            &work_root,
+        )
+        .is_ok()
+    }
+}
+
+/// After the catalog was read from the feed: every installed engine without a signed
+/// list gets the one its catalog entry names.
+pub(crate) async fn anchor_from_catalog(
+    state: &Arc<AppState>,
+    app: Option<&AppHandle>,
+    config: &UpdateConfig,
+) {
+    if crate::distribution::managed_by_store() || !config.enabled() {
+        return;
+    }
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let ids = engines_without_file_list(&state.paths.next_root, &config.engine_id, os, arch);
+    if ids.is_empty() {
+        return;
+    }
+    let entries = lock(&state.engines.catalog)
+        .map(|catalog| catalog.clone())
+        .unwrap_or_default();
+    let handshake = start_handshake(state.paths.work_root.clone());
+    anchor_installed_engines(state, app, config, &entries, ids, os, arch, handshake).await;
+}
+
+/// At start, before an engine is chosen. An engine an earlier version installed (the
+/// update that just ran, for one) has no signed file list yet and is not started without
+/// one. Its list is fetched from the update feed when LocalSR may read the feed at launch,
+/// or when that engine was installed by the update the user just ran.
+pub(crate) fn anchor_installed_engines_at_start(state: &Arc<AppState>, app: &AppHandle) {
+    let config = UpdateConfig::load();
+    if crate::distribution::managed_by_store() || !config.enabled() {
+        return;
+    }
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let next_root = &state.paths.next_root;
+    let active = fs::read_to_string(next_root.join("active-engine.txt"))
+        .ok()
+        .map(|raw| raw.trim().to_owned());
+    let ids: Vec<String> = engines_without_file_list(next_root, &config.engine_id, os, arch)
+        .into_iter()
+        .filter(|id| active.as_deref() == Some(id.as_str()) || *id == config.engine_id)
+        .collect();
+    let allowed = lock(&state.settings).is_ok_and(|settings| {
+        settings.privacy_choice_made
+            && (settings.check_updates_at_launch
+                || ids
+                    .iter()
+                    .any(|id| updates::pending_engine_token(next_root, id).is_some()))
+    });
+    if ids.is_empty() || !allowed {
+        return;
+    }
+    if let Ok(mut runtime) = state.runtime.lock() {
+        runtime.status_title = "Checking the inference engine".into();
+        runtime.status_detail =
+            "LocalSR downloads the signed file list of the installed engine and checks it once."
+                .into();
+    }
+    emit_state_changed(app);
+    let feed_channel = channel(state);
+    let version = app.package_info().version.to_string();
+    let handshake = start_handshake(state.paths.work_root.clone());
+    let fetched = tauri::async_runtime::block_on(async {
+        tokio::time::timeout(Duration::from_secs(60), async {
+            let feed = fetch_feed_json(&config, &feed_channel).await?;
+            let entries =
+                parse_feed_engines_for(&feed, &config, &feed_channel, &version, os, arch)?;
+            Ok::<_, AppError>(
+                anchor_installed_engines(
+                    state,
+                    Some(app),
+                    &config,
+                    &entries,
+                    ids,
+                    os,
+                    arch,
+                    handshake,
+                )
+                .await,
+            )
+        })
+        .await
+    });
+    match fetched {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => {
+            eprintln!("LocalSR could not read the update feed for engine file lists: {error}")
+        }
+        Err(_) => eprintln!("LocalSR stopped waiting for the update feed's engine file lists"),
+    }
 }
 
 #[cfg(test)]

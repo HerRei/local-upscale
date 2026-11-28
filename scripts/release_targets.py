@@ -228,6 +228,9 @@ def update_files(entry: dict, release_version: str) -> dict[str, str]:
         # The same engine package described the way every updater since 0.4.0 reads it;
         # the feed names this one (prepare_engine_payload.legacy_update_manifest).
         "engine_update_manifest": f"{stem}.engine-update.json",
+        # Every file the engine package unpacks, signed: what the app checks an installed
+        # engine against (prepare_engine_payload.engine_files_document).
+        "engine_files": f"{stem}.engine-files.json",
         "payload_backend": entry["update"]["backend"].upper(),
         "worker": "localsr-worker.exe" if entry["platform"] == "windows" else "localsr-worker",
     }
@@ -259,6 +262,17 @@ def download_table(release_version: str) -> str:
         ("Linux, AMD", f"all `{package('linux-x86_64-rocm')}.part-*` files, joined"),
         ("Linux, NVIDIA", f"all `{package('linux-x86_64-cuda')}.part-*` files, joined"),
     ]
+    # Releases from 0.7.0 publish each engine's signed file list; earlier ones have none.
+    core = re.match(r"(\d+)\.(\d+)\.(\d+)", release_version)
+    listed = core is not None and tuple(map(int, core.groups())) >= (0, 7, 0)
+    file_list = "its `*.engine-files.json` file list, " if listed else ""
+    engine_files = (
+        "- `*.engine-payload.json`, `*.engine-update.json`, `*.engine-files.json` and "
+        "`*.engine.tar.gz.part-*`: the GPU engines that the app downloads by itself.\n"
+        if listed
+        else "- `*.engine-payload.json`, `*.engine-update.json` and `*.engine.tar.gz.part-*`: "
+        "the GPU engines that the app downloads by itself.\n"
+    )
     return (
         "## Which file do I need?\n\n"
         + "Download one file for your computer; it is all you need. The Mac version includes "
@@ -274,12 +288,12 @@ def download_table(release_version: str) -> str:
         + "| Computer | Download |\n|---|---|\n"
         + "".join(f"| {computer} | {download} |\n" for computer, download in offline_rows)
         + "\nTo import an engine offline, download the `*.engine-payload.json` manifest, "
+        + file_list
         + "its `.engine.tar.gz.part-*` files and their `.sig` signature files into one folder, "
         + "then open **Advanced -> Engine -> Change… -> Import engine from file…** "
         + "and choose the `*.engine-payload.json` file.\n\n"
         + "### What are all the other files?\n\n"
-        + "- `*.engine-payload.json`, `*.engine-update.json` and `*.engine.tar.gz.part-*`: "
-        + "the GPU engines that the app downloads by itself.\n"
+        + engine_files
         + "- `*.app.tar.gz` and `*.sig`: update files and their signatures, which the app "
         + "checks before it installs an update.\n"
         + "- `*.sha256` and `SHA256SUMS`: checksums to check a download by hand.\n"

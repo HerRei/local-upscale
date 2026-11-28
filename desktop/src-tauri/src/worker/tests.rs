@@ -1204,6 +1204,39 @@ fn a_dispatched_batch_shows_its_first_photo_and_keeps_the_others_queued() {
 }
 
 #[test]
+fn a_queued_job_naming_an_unapproved_checkpoint_fails_and_the_next_runs_without_the_permission() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    let output = directory.path().join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    let db = lock(&state.database).unwrap();
+    // Requests as the queue file holds them.
+    for (id, approved) in [("a", Some("1".repeat(64))), ("b", None)] {
+        let mut job = photo_job(id);
+        job["data"]["output_path"] = json!(output.join(format!("{id}.png")));
+        job["data"]["model_path"] = json!("/models/own.pth");
+        job["data"]["approved_checkpoint_sha256"] = json!(approved);
+        job["data"]["allow_unverified_checkpoint"] = json!(true);
+        db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+            .unwrap();
+        db.insert_job(id, id, &job.to_string()).unwrap();
+    }
+    drop(db);
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    assert!(begin_dispatch(&state, false).unwrap());
+    assert_eq!(status(&state, "a"), "failed");
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["data"]["job_id"], "b");
+    assert_eq!(sent["data"]["allow_unverified_checkpoint"], json!(false));
+    assert!(receiver.try_recv().is_err());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
 fn hosts_other_than_a_mac_send_one_job_at_a_time() {
     let directory = tempfile::tempdir().unwrap();
     let state = batch_state(directory.path());
@@ -2489,6 +2522,7 @@ fn write_installed_engine(
         files: crate::updates::test_engine_files(next_root, id),
     };
     crate::updates::write_engine_meta(next_root, &meta).unwrap();
+    crate::engine_files::test_signing::write_list_for_installed(next_root, id);
     meta
 }
 
@@ -2511,7 +2545,8 @@ fn codec_helper_reuses_the_verified_worker_run_and_never_changes_engine_state() 
                 destination.join(crate::updates::worker_executable_name()),
                 b"new",
             )?;
-            Ok(files)
+            let list = crate::engine_files::test_signing::list_of(id, &files);
+            Ok((files, list))
         },
         |_| Ok(()),
     )

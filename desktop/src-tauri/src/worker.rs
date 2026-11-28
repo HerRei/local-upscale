@@ -939,6 +939,21 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if lock(&state.runtime)?.worker != "ready" {
         return Ok(Dispatch::Idle);
     }
+    // A queued job comes from the queue file: one that lets the engine load a pickle-based
+    // checkpoint runs only with an approval the user still holds.
+    let approved = |request_json: &str| {
+        serde_json::from_str::<Value>(request_json)
+            .is_ok_and(|request| crate::commands::queued_checkpoint_still_approved(state, &request))
+    };
+    if !approved(&pending.request_json) {
+        lock(&state.database)?.finish_job(
+            &pending.id,
+            "failed",
+            "",
+            "Confirm your own model again in the model library before running this job.",
+        )?;
+        return Ok(Dispatch::Failed);
+    }
     // Space changes while a queue runs: the next job is checked again before it is sent.
     if let Some(reason) = short_of_disk(state, &pending.request_json)? {
         lock(&state.database)?.finish_job(&pending.id, "failed", "", &reason)?;
@@ -952,6 +967,10 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     }
     if window.first().map(|job| &job.id) != Some(&pending.id) {
         window = vec![pending];
+    }
+    // A later photo is sent with this one only once it has been checked the same way.
+    if let Some(unapproved) = window.iter().position(|job| !approved(&job.request_json)) {
+        window.truncate(unapproved.max(1));
     }
     let dispatch = match &support {
         BatchSupport::None => next_dispatch_for(&window, BatchPolicy::CoreMlOnly, |_| false)?,
@@ -967,6 +986,7 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     let Some((ids, mut message)) = dispatch else {
         return Ok(Dispatch::Idle);
     };
+    crate::commands::withdraw_unapproved_checkpoint_permission(&mut message);
     let first = ids[0].clone();
     let prepared = lock(&state.worker.cancellation)?.prepare(&first, &mut message);
     if let Err(error) = prepared {
@@ -3051,34 +3071,6 @@ pub(crate) fn codec_helper_command(state: &AppState, _app: &AppHandle) -> AppRes
     Ok(command)
 }
 
-fn adopt_engine_installed_by_older_updater(state: &AppState, app: &AppHandle) {
-    let compiled_id = option_env!("LOCALSR_ENGINE_ID").unwrap_or("");
-    let backend = option_env!("LOCALSR_UPDATE_BACKEND").unwrap_or("");
-    let work_root = state.paths.work_root.clone();
-    crate::updates::adopt_engine_from_older_updater(
-        &state.paths.next_root,
-        compiled_id,
-        backend,
-        || {
-            if let Ok(mut runtime) = state.runtime.lock() {
-                runtime.status_title = "Checking the inference engine".into();
-                runtime.status_detail =
-                    "The engine the update installed is checked once before it is used.".into();
-            }
-            emit_state_changed(app);
-        },
-        |executable| {
-            crate::headless_smoke::run_worker_handshake(
-                executable,
-                Duration::from_secs(60),
-                true,
-                &work_root,
-            )
-            .is_ok()
-        },
-    );
-}
-
 pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<PathBuf> {
     Ok(resolve_worker_command(state, app)?.program)
 }
@@ -3148,11 +3140,6 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
         bundled.map(|path| (path, None))
     } else {
-        // An edition without a bundled engine updated by 0.4.0 to 0.5.0 has that release's
-        // engine installed without metadata; record it before choosing.
-        if bundled.is_none() && !crate::distribution::managed_by_store() {
-            adopt_engine_installed_by_older_updater(state, app);
-        }
         let mut failed = lock(&state.worker.failed_engines)?.clone();
         let (choice, verification_failed) =
             crate::updates::verified_worker_engine_choice(&state.paths, bundled, &mut failed);
