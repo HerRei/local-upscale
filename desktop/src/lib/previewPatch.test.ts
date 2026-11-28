@@ -3,6 +3,7 @@ import {
   PATCH_SIZE,
   movePatch,
   patchChips,
+  patchPlanEntries,
   patchRequestKey,
   pickPatchRegion,
   shownStep,
@@ -145,5 +146,28 @@ describe('previewPatch', () => {
       key(),
     );
     expect(key(region, { ...(input as object), output_directory: '/x' } as never)).toBe(key());
+  });
+});
+
+describe('Patch, video', () => {
+  it('names a frame-by-frame video plan without De-flicker, added frames and audio', () => {
+    const stage = (kind: string, role: string, label: string, fix?: string) =>
+      ({ kind, role, label, fix, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [
+        stage('audio_denoise', 'audio_denoise', 'Clean up audio'),
+        stage('restore', 'fix', 'Noise', 'noise'),
+        stage('upscale', 'primary', 'Upscale ×2'),
+        stage('deflicker', 'step', 'De-flicker'),
+        stage('interpolate', 'interpolate', 'Interpolate 2×'),
+      ],
+      {
+        task: 'video',
+        output_scale: 2,
+        video_target_resolution: 0,
+        video_interpolation: 'x2',
+      },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['Noise', '2×']);
   });
 });

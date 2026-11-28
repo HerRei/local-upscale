@@ -298,9 +298,9 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         .get_media(&ask.media_id)?
         .ok_or_else(|| AppError::Validation("the picture no longer exists".into()))?;
     state.grants.check_media_input(Path::new(&media.path))?;
-    if media.kind != "image" || media.probe_status != "ready" {
+    if !matches!(media.kind.as_str(), "image" | "video") || media.probe_status != "ready" {
         return Err(AppError::Validation(
-            "the preview patch needs a photo that is ready".into(),
+            "the preview patch needs a photo or video that is ready".into(),
         ));
     }
     if !Path::new(&media.path).is_file() {
@@ -437,7 +437,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
             "patch_id": patch_id,
             "slot": slot,
             "image_path": media.path,
-            "frame_index": -1,
+            "frame_index": if media.kind == "video" { 0 } else { -1 },
             "region": {
                 "x": ask.region.x,
                 "y": ask.region.y,

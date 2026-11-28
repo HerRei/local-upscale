@@ -38,6 +38,8 @@
   export let onDone: () => void = () => {};
   /** The plan line's names, one per step. */
   export let plan: PatchPlanEntry[] = [];
+  /** The patch is cut from a video's first frame. */
+  export let video = false;
   /** A chip the user pressed (`original` or a step key); null follows the newest step. */
   export let picked: string | null = null;
   /** `M` is held: the patch shows the original. */
@@ -259,6 +261,10 @@
   >
     <div class="patch-row">
       <span class="patch-grip" title="Drag to move · arrow keys move it" aria-hidden="true">⠿</span>
+      {#if video}<span
+          class="patch-label"
+          title="De-flicker, added frames and sound cannot be shown on one frame.">This frame</span
+        >{/if}
       <StepChips chips={stepChips} ariaLabel="Preview steps" onSelect={pick} />
       <span class="patch-state" role="status">
         {#if failed}

@@ -221,6 +221,75 @@ fn a_valid_request_sends_the_stages_the_job_would() {
     assert_eq!(job["data"]["stages"], data["stages"]);
 }
 
+fn add_video(harness: &Harness) {
+    let clip = harness._directory.path().join("clip.mp4");
+    std::fs::write(&clip, "source").unwrap();
+    harness.state.grants.grant_media_file(&clip);
+    let database = lock(&harness.state.database).unwrap();
+    database
+        .insert_media("clip", clip.to_str().unwrap(), "clip.mp4", "video")
+        .unwrap();
+    database
+        .update_media_probe(
+            clip.to_str().unwrap(),
+            "video",
+            1280,
+            720,
+            240,
+            24.0,
+            10.0,
+            "preview",
+            "",
+            "",
+            true,
+        )
+        .unwrap();
+}
+
+fn video_ask(harness: &Harness, input: StartBatchInput) -> PatchAsk {
+    let mut ask = harness.ask("a", input);
+    ask.media_id = "clip".into();
+    ask
+}
+
+#[test]
+fn a_video_patch_uses_its_first_frame_and_leaves_out_deflicker_frames_and_audio() {
+    let harness = Harness::new();
+    add_video(&harness);
+    let mut video = input();
+    video.task = "video".into();
+    video.video_model_id = "frame_by_frame".into();
+    video.deflicker = true;
+    video.video_interpolation = "2x".into();
+    video.video_clean_audio = true;
+    request_checked(&harness.state, video_ask(&harness, video)).unwrap();
+    let sent = harness.messages();
+    assert_eq!(sent.len(), 1);
+    let data = &sent[0]["data"];
+    assert_eq!(data["frame_index"], 0);
+    assert!(data["image_path"].as_str().unwrap().ends_with("clip.mp4"));
+    // The fix and the primary upscale: the same steps a photo gets.
+    let stages = data["stages"].as_array().unwrap();
+    assert_eq!(stages.len(), 2);
+    assert!(stages
+        .iter()
+        .all(|stage| !["deflicker", "interpolate", "audio_denoise"]
+            .contains(&stage["kind"].as_str().unwrap_or_default())));
+    assert_eq!(data["output_scale"], 4);
+}
+
+#[test]
+fn a_temporal_video_engine_gets_no_patch() {
+    let harness = Harness::new();
+    add_video(&harness);
+    let mut video = input();
+    video.task = "video".into();
+    video.video_model_id = "seedvr2_3b".into();
+    let error = request_checked(&harness.state, video_ask(&harness, video)).unwrap_err();
+    assert!(error.to_string().contains("frame-by-frame"));
+    assert!(harness.messages().is_empty());
+}
+
 #[test]
 fn a_stage_limit_sends_that_many_and_a_missing_model_stops_the_run() {
     let harness = Harness::new();

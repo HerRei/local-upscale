@@ -180,7 +180,8 @@
                 <button
                   class="link-button"
                   type="button"
-                  on:click={() => seeFixOnPhoto(row.id as FixKind)}>See it on this photo</button
+                  on:click={() => seeFixOnPhoto(row.id as FixKind)}
+                  >See it on this {mediaKind === 'video' ? 'frame' : 'photo'}</button
                 >
               {:else}
                 <button
