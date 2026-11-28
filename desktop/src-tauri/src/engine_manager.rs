@@ -2208,16 +2208,15 @@ pub(crate) async fn anchor_from_catalog(
     anchor_installed_engines(state, app, config, &entries, ids, os, arch, handshake).await;
 }
 
-/// At start, before an engine is chosen. An engine an earlier version installed (the
-/// update that just ran, for one) has no signed file list yet and is not started without
-/// one. Its list is fetched from the update feed when LocalSR may read the feed at launch,
-/// or when that engine was installed by the update the user just ran.
-pub(crate) fn anchor_installed_engines_at_start(state: &Arc<AppState>, app: &AppHandle) {
-    let config = UpdateConfig::load();
-    if crate::distribution::managed_by_store() || !config.enabled() {
-        return;
-    }
-    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+/// The installed engines a start would check against the signed lists the update feed
+/// names (the active one and the one this host was built for, when an earlier version
+/// installed them), and whether this start may read the feed for them.
+fn engines_to_anchor_at_start(
+    state: &AppState,
+    config: &UpdateConfig,
+    os: &str,
+    arch: &str,
+) -> (Vec<String>, bool) {
     let next_root = &state.paths.next_root;
     let active = fs::read_to_string(next_root.join("active-engine.txt"))
         .ok()
@@ -2233,6 +2232,41 @@ pub(crate) fn anchor_installed_engines_at_start(state: &Arc<AppState>, app: &App
                     .iter()
                     .any(|id| updates::pending_engine_token(next_root, id).is_some()))
     });
+    (ids, allowed)
+}
+
+/// The start-up notice while an engine an earlier version installed waits for its signed
+/// file list because LocalSR does not read the update feed at launch.
+pub(crate) fn engine_waiting_notice(
+    state: &AppState,
+    config: &UpdateConfig,
+    os: &str,
+    arch: &str,
+) -> Option<String> {
+    if crate::distribution::managed_by_store() || !config.enabled() {
+        return None;
+    }
+    let (ids, allowed) = engines_to_anchor_at_start(state, config, os, arch);
+    let asked = lock(&state.settings).is_ok_and(|settings| settings.privacy_choice_made);
+    (!ids.is_empty() && !allowed && asked).then(|| {
+        "LocalSR checks the engine you installed earlier against its signed file list once \
+         before it uses that engine again. Choose Check for Updates… once, then restart \
+         LocalSR."
+            .to_owned()
+    })
+}
+
+/// At start, before an engine is chosen. An engine an earlier version installed (the
+/// update that just ran, for one) has no signed file list yet and is not started without
+/// one. Its list is fetched from the update feed when LocalSR may read the feed at launch,
+/// or when that engine was installed by the update the user just ran.
+pub(crate) fn anchor_installed_engines_at_start(state: &Arc<AppState>, app: &AppHandle) {
+    let config = UpdateConfig::load();
+    if crate::distribution::managed_by_store() || !config.enabled() {
+        return;
+    }
+    let (os, arch) = (std::env::consts::OS, std::env::consts::ARCH);
+    let (ids, allowed) = engines_to_anchor_at_start(state, &config, os, arch);
     if ids.is_empty() || !allowed {
         return;
     }

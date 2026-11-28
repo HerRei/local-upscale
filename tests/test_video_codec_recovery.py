@@ -332,7 +332,7 @@ def test_cache_write_error_does_not_stop_export(monkeypatch, tmp_path):
     def fail(*args, **kwargs):
         raise OSError(errno.ENOSPC, "No space left")
 
-    monkeypatch.setattr(recovery.pickle, "dump", fail)
+    monkeypatch.setattr(recovery.np, "save", fail)
     output = tmp_path / "out.mp4"
     result = recovery.automatic_export(
         pictures(),
@@ -395,3 +395,49 @@ def test_replay_snapshots_pixels_before_the_first_export_mutates_them(tmp_path):
     np.testing.assert_array_equal(replayed[0].rgb, expected)
     assert replayed[0].timestamp == source.timestamp
     assert replayed[0].rgb.flags.owndata
+
+
+@pytest.mark.parametrize("timed", [True, False])
+def test_the_replay_cache_is_read_back_without_unpickling(monkeypatch, tmp_path, timed):
+    import pickle
+
+    from localsr.core.video_codec_recovery import automatic_export
+
+    def refuse(*args, **kwargs):
+        raise AssertionError("the replay cache was unpickled")
+
+    for name in ("load", "loads", "Unpickler"):
+        monkeypatch.setattr(pickle, name, refuse)
+    source = list(pictures(3))
+    frames = source if timed else [frame.rgb.astype(np.uint16) * 257 for frame in source]
+
+    def export(frames, codec):
+        if codec == "hevc":
+            for _ in frames:
+                pass
+            raise SystemCodecsError("Cannot Encode Media")
+        return list(frames)
+
+    replayed = automatic_export(
+        iter(frames),
+        tmp_path / "out.mp4",
+        export=export,
+        cancel_event=None,
+        temporary_directory=str(tmp_path),
+        note_callback=None,
+        warning_callback=None,
+    )
+    assert len(replayed) == 3
+    for actual, expected in zip(replayed, frames, strict=True):
+        if timed:
+            assert isinstance(actual, TimedVideoFrame)
+            assert (actual.index, actual.timestamp, actual.duration, actual.time_base) == (
+                expected.index,
+                expected.timestamp,
+                expected.duration,
+                expected.time_base,
+            )
+            actual, expected = actual.rgb, expected.rgb
+        assert actual.dtype == expected.dtype
+        np.testing.assert_array_equal(actual, expected)
+        assert actual.flags.owndata and actual.flags.writeable

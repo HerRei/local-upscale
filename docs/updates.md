@@ -307,7 +307,8 @@ but is not started until it has one; until then the bundled engine runs. LocalSR
 the list that the feed names for that engine id and keeps it once the engine's files
 match it: at start, before an engine is chosen, when the launch check is allowed or the
 engine was installed by the update that just ran, and whenever the feed is read (update
-checks and the engine catalog). An engine whose files do not match its release's list
+checks and the engine catalog). While the launch check is off, a notice at start asks
+for one **Check for Updates…** and a restart. An engine whose files do not match its release's list
 shows **Needs reinstall**. An engine an updater of 0.4.0 to 0.5.0 left without metadata
 is recorded the same way, for the id the host was built for, after a handshake.
 
@@ -479,8 +480,13 @@ or AppImage:
   removing engines require real directories under `engines/`. LocalSR refuses
   symbolic links and Windows reparse points, including junctions. At every worker
   start, LocalSR checks file sizes and hashes the worker executable, native
-  libraries, Python code and archives such as `base_library.zip`, and the native
-  editing helper. It rejects code files missing from the signed file list.
+  libraries, Python code and archives such as `base_library.zip`, the packages'
+  `entry_points.txt` and the native editing helper. It rejects every file the signed
+  file list does not name, except the `.DS_Store`, `Thumbs.db` and `desktop.ini` that
+  Finder and Explorer leave in folders; empty folders do not count. Nothing the engine
+  runs writes into its folder (caches go to the user's cache folders, and the frozen
+  worker writes no bytecode). After an engine stopped in a way LocalSR did not ask for,
+  its next start hashes every code file again.
   Startup verification runs in the background with the bundled engine available
   as fallback. The **Verify** button runs a full SHA-256 check of every recorded
   listed file. If verification fails and no previous copy can be recovered at startup,

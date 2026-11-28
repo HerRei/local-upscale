@@ -52,9 +52,11 @@ unicode-normalization = "0.1"
 uuid = { version = "1.26.0", features = ["v4", "serde"] }
 
 # Already built for other crates on these platforms: the Keychain item and the desktop
-# keyring that keep the model-approval key (checkpoint_approvals.rs).
+# keyring that keep the model-approval key (checkpoint_approvals.rs), and the account's
+# home folder that holds its login keychain.
 [target.'cfg(target_os = "macos")'.dependencies]
 core-foundation = "0.10"
+libc = "0.2"
 security-framework-sys = "2.17"
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -2194,6 +2194,8 @@ fn every_engine_start_rejects_same_size_changes_to_code_files() {
         "_internal/PYZ-00.pyz",
         "_internal/module.py",
         "_internal/module.pyc",
+        "_internal/script.PYW",
+        "_internal/torch-2.14.0.dist-info/entry_points.txt",
         "_internal/edit/sd-cli",
     ] {
         let root = tempfile::tempdir().unwrap();
@@ -2201,6 +2203,7 @@ fn every_engine_start_rejects_same_size_changes_to_code_files() {
         let id = "gpu";
         let engine = paths.next_root.join("engines/gpu/engine");
         fs::create_dir_all(engine.join("_internal/edit")).unwrap();
+        fs::create_dir_all(engine.join(name).parent().unwrap()).unwrap();
         fs::write(engine.join(worker_executable_name()), b"good").unwrap();
         fs::write(engine.join(name), b"good").unwrap();
         fs::write(engine.join("model.safetensors"), b"good").unwrap();
@@ -2270,6 +2273,61 @@ fn engine_start_rejects_code_without_an_installed_checksum() {
         verify_active_engine_at_start(&paths, &mut failed).as_deref(),
         Some(id)
     );
+}
+
+#[test]
+fn engine_start_refuses_every_file_its_list_does_not_name() {
+    let install = |root: &Path| {
+        let paths = crate::paths::AppPaths::under(root);
+        let engine = paths.next_root.join("engines/gpu/engine");
+        fs::create_dir_all(engine.join("_internal")).unwrap();
+        fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+        write_test_engine_meta(&paths.next_root, "gpu");
+        fs::write(paths.next_root.join("active-engine.txt"), "gpu").unwrap();
+        (paths, engine)
+    };
+    for name in [
+        "_internal/script.pyw",
+        "_internal/torch-2.14.0.dist-info/entry_points.txt",
+        "_internal/notes.txt",
+        "_internal/.ds_store",
+        "_internal/cache/index.json",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (paths, engine) = install(root.path());
+        let path = engine.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"extra").unwrap();
+
+        // Reported as an engine whose files changed.
+        assert!(
+            !installed_engine_looks_intact(&paths.next_root, "gpu"),
+            "{name}"
+        );
+        let mut failed = HashSet::new();
+        assert_eq!(
+            verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+            Some("gpu"),
+            "{name}"
+        );
+        assert!(
+            !read_engine_meta(&paths.next_root, "gpu")
+                .unwrap()
+                .verified_install
+        );
+        assert!(!paths.next_root.join("active-engine.txt").exists());
+    }
+
+    // What file managers leave in a folder that was opened, and empty folders, do not count.
+    let root = tempfile::tempdir().unwrap();
+    let (paths, engine) = install(root.path());
+    fs::write(engine.join(".DS_Store"), b"finder").unwrap();
+    fs::write(engine.join("_internal/Thumbs.db"), b"explorer").unwrap();
+    fs::write(engine.join("_internal/desktop.ini"), b"explorer").unwrap();
+    fs::create_dir_all(engine.join("_internal/empty")).unwrap();
+    assert!(installed_engine_looks_intact(&paths.next_root, "gpu"));
+    let mut failed = HashSet::new();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
 }
 
 fn setup_cached_check_engine(root: &Path, id: &str) -> (crate::paths::AppPaths, PathBuf) {
@@ -2354,6 +2412,29 @@ fn replacing_code_file_by_rename_hashes_again() {
     reset_engine_file_hash_count();
     assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
     assert_eq!(engine_file_hash_count(), 1);
+}
+
+#[test]
+fn a_forgotten_engine_is_hashed_again_and_other_engines_keep_their_checks() {
+    let root = tempfile::tempdir().unwrap();
+    let other_root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, _engine) = setup_cached_check_engine(root.path(), id);
+    let (other, _other_engine) = setup_cached_check_engine(other_root.path(), id);
+    let mut failed = HashSet::new();
+    for paths in [&paths, &other] {
+        reset_engine_file_hash_count();
+        assert_eq!(verify_active_engine_at_start(paths, &mut failed), None);
+        assert_eq!(engine_file_hash_count(), 2);
+    }
+
+    forget_verified_engine_code(&paths.next_root, id);
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&other, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 0);
 }
 
 #[test]

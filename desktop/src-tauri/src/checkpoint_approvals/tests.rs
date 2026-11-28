@@ -117,11 +117,11 @@ fn the_keychain_item_is_found_by_its_access_list_and_a_replaced_key_is_refused()
     };
     let folder = tempfile::tempdir().unwrap();
     let scratch = keychain::scratch::Scratch::new(&folder.path().join("test.keychain"));
-    let created = match keychain::load_or_create(Some(&scratch.0)).unwrap() {
+    let created = match keychain::load_or_create(&scratch.0).unwrap() {
         Loaded::Created(key) => key,
         Loaded::Existing(_) => panic!("a new keychain holds no key"),
     };
-    match keychain::load_or_create(Some(&scratch.0)).unwrap() {
+    match keychain::load_or_create(&scratch.0).unwrap() {
         Loaded::Existing(key) => assert_eq!(key, created),
         Loaded::Created(_) => panic!("the key was made twice"),
     }
@@ -159,7 +159,7 @@ fn the_keychain_item_is_found_by_its_access_list_and_a_replaced_key_is_refused()
         )
     };
     assert_eq!(status, 0);
-    match keychain::load_or_create(Some(&scratch.0)).unwrap() {
+    match keychain::load_or_create(&scratch.0).unwrap() {
         Loaded::Existing(key) => assert_eq!(key, created),
         Loaded::Created(_) => panic!("a renamed item was not found"),
     }
@@ -175,6 +175,48 @@ fn the_keychain_item_is_found_by_its_access_list_and_a_replaced_key_is_refused()
         )
     };
     assert_eq!(status, 0);
-    let error = keychain::load_or_create(Some(&scratch.0)).err().unwrap();
+    let error = keychain::load_or_create(&scratch.0).err().unwrap();
     assert!(error.contains("replaced"), "{error}");
+}
+
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "creates and removes keychain files of its own; run by hand on a Mac"]
+fn only_the_keychain_opened_by_its_path_is_searched_and_written() {
+    use super::key_store::{keychain, Loaded};
+    let folder = tempfile::tempdir().unwrap();
+    // Another keychain, made first, holds an item with LocalSR's marks and a key its maker
+    // knows.
+    let other = keychain::scratch::Scratch::new(&folder.path().join("other.keychain-db"));
+    let planted = match keychain::load_or_create(&other.0).unwrap() {
+        Loaded::Created(key) => key,
+        Loaded::Existing(_) => panic!("a new keychain holds no key"),
+    };
+    // LocalSR's keychain, opened by its path as the login keychain is.
+    let path = folder.path().join("own.keychain-db");
+    let own = keychain::scratch::Scratch::new(&path);
+    let opened = keychain::open(&path).unwrap();
+    let created = match keychain::load_or_create(&opened).unwrap() {
+        Loaded::Created(key) => key,
+        Loaded::Existing(_) => panic!("the item of another keychain was used"),
+    };
+    assert_ne!(created, planted);
+    // The new item went into that keychain; the other one still holds only its own.
+    match keychain::load_or_create(&own.0).unwrap() {
+        Loaded::Existing(key) => assert_eq!(key, created),
+        Loaded::Created(_) => panic!("the item went into another keychain"),
+    }
+    match keychain::load_or_create(&other.0).unwrap() {
+        Loaded::Existing(key) => assert_eq!(key, planted),
+        Loaded::Created(_) => panic!("the other keychain lost its item"),
+    }
+    // A keychain file that does not exist is refused before anything is searched or added:
+    // the Keychain would add the item to the default keychain instead. Only that check
+    // runs here, so a failure cannot write into this Mac's own keychains.
+    let missing = keychain::open(&folder.path().join("missing.keychain-db")).unwrap();
+    assert!(keychain::existing_path(&missing).is_err());
+    assert_eq!(
+        keychain::existing_path(&opened).unwrap(),
+        keychain::existing_path(&own.0).unwrap()
+    );
 }

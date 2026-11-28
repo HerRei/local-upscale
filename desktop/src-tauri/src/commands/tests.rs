@@ -5117,6 +5117,39 @@ fn a_queued_request_loads_a_pickle_checkpoint_only_with_an_approval_made_in_loca
 }
 
 #[test]
+fn a_queued_job_without_an_approved_digest_is_sent_with_the_permission_off() {
+    let digest = "1".repeat(64);
+    for kind in ["job_request", "video_job_request"] {
+        let mut message = json!({"type": kind, "data": {"model_path": "/models/own.pth"}});
+        withdraw_unapproved_checkpoint_permission(&mut message);
+        assert_eq!(
+            message["data"]["allow_unverified_checkpoint"],
+            json!(false),
+            "{kind}"
+        );
+    }
+    let mut batch = json!({"type": "image_batch_request", "data": {"jobs": [
+        {"model_path": "/models/own.pth"},
+        {"model_path": "/models/own.pth", "approved_checkpoint_sha256": digest,
+         "allow_unverified_checkpoint": true},
+    ]}});
+    withdraw_unapproved_checkpoint_permission(&mut batch);
+    assert_eq!(
+        batch["data"]["jobs"][0]["allow_unverified_checkpoint"],
+        json!(false)
+    );
+    assert_eq!(
+        batch["data"]["jobs"][1]["allow_unverified_checkpoint"],
+        json!(true)
+    );
+    // Requests whose format has no such field are left as they are.
+    let edit = json!({"type": "edit_job_request", "data": {"job_id": "e"}});
+    let mut sent = edit.clone();
+    withdraw_unapproved_checkpoint_permission(&mut sent);
+    assert_eq!(sent, edit);
+}
+
+#[test]
 fn retry_on_cpu_rechecks_the_approval_of_an_own_checkpoint() {
     let dir = tempfile::tempdir().unwrap();
     let checkpoint = dir.path().join("mine.pth");

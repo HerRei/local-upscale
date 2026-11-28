@@ -1754,8 +1754,16 @@ pub(crate) fn queued_checkpoint_still_approved(state: &AppState, request: &Value
 }
 
 /// A queued request lets the engine load pickle-based checkpoints only through an
-/// approved digest: the general permission is withdrawn from every job without one.
+/// approved digest: every job without one is sent with the general permission off. Other
+/// requests have no such field (worker-protocol.schema.json), and an engine LocalSR starts
+/// takes it as off for them.
 pub(crate) fn withdraw_unapproved_checkpoint_permission(message: &mut Value) {
+    if !matches!(
+        message["type"].as_str(),
+        Some("job_request" | "video_job_request" | "image_batch_request")
+    ) {
+        return;
+    }
     let data = &mut message["data"];
     let jobs: Vec<&mut Value> = match data.get_mut("jobs").and_then(Value::as_array_mut) {
         Some(jobs) => jobs.iter_mut().collect(),
@@ -1764,9 +1772,7 @@ pub(crate) fn withdraw_unapproved_checkpoint_permission(message: &mut Value) {
     for job in jobs {
         if job["approved_checkpoint_sha256"].as_str().is_none() {
             if let Some(job) = job.as_object_mut() {
-                if job.contains_key("allow_unverified_checkpoint") {
-                    job.insert("allow_unverified_checkpoint".into(), Value::Bool(false));
-                }
+                job.insert("allow_unverified_checkpoint".into(), Value::Bool(false));
             }
         }
     }

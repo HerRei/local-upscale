@@ -36,7 +36,11 @@ fn helper_override_path(value: &std::ffi::OsStr, host_directory: &Path) -> PathB
     }
 }
 
+/// The environment of an engine process: helper paths from LocalSR's own environment, and
+/// never the general permission to load pickle-based checkpoints, which a job grants only
+/// through an approved checkpoint.
 pub(crate) fn set_helper_overrides(command: &mut Command) -> std::io::Result<()> {
+    command.env_remove("LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS");
     for name in ["LOCALSR_MEDIA_HELPER", "LOCALSR_EXTERNAL_FFMPEG"] {
         if let Some(value) = env::var_os(name).filter(|value| !value.is_empty()) {
             let path = helper_override_path(&value, &env::current_dir()?);
@@ -538,6 +542,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         // Whatever ended the engine, nothing it started may outlive it: a helper
         // would keep writing into scratch the host removes next.
         tree.terminate();
+        if engine_exit_unexpected(&status, stopped_by_app) {
+            if let Some(id) = &specification.installed_engine_id {
+                crate::updates::forget_verified_engine_code(&state.paths.next_root, id);
+            }
+        }
         if !stopped_by_app && engine_crashed(&status) {
             state
                 .worker
@@ -926,6 +935,13 @@ enum Dispatch {
     Failed,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Runs once between the two reads of the queue in `dispatch_once`.
+    static BETWEEN_QUEUE_READS: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Ok(Dispatch::Idle);
@@ -945,14 +961,17 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         serde_json::from_str::<Value>(request_json)
             .is_ok_and(|request| crate::commands::queued_checkpoint_still_approved(state, &request))
     };
-    if !approved(&pending.request_json) {
+    let fail_unapproved = |id: &str| -> AppResult<Dispatch> {
         lock(&state.database)?.finish_job(
-            &pending.id,
+            id,
             "failed",
             "",
             "Confirm your own model again in the model library before running this job.",
         )?;
-        return Ok(Dispatch::Failed);
+        Ok(Dispatch::Failed)
+    };
+    if !approved(&pending.request_json) {
+        return fail_unapproved(&pending.id);
     }
     // Space changes while a queue runs: the next job is checked again before it is sent.
     if let Some(reason) = short_of_disk(state, &pending.request_json)? {
@@ -963,14 +982,21 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     let support = batch_support(state, batches)?;
     let mut window = Vec::new();
     if !matches!(support, BatchSupport::None) {
+        #[cfg(test)]
+        if let Some(change) = BETWEEN_QUEUE_READS.take() {
+            change();
+        }
         window = lock(&state.database)?.queued_job_window(MAX_BATCH_PHOTOS)?;
     }
     if window.first().map(|job| &job.id) != Some(&pending.id) {
         window = vec![pending];
     }
-    // A later photo is sent with this one only once it has been checked the same way.
-    if let Some(unapproved) = window.iter().position(|job| !approved(&job.request_json)) {
-        window.truncate(unapproved.max(1));
+    // Each request is sent as it was checked: the window read the first job again, and a
+    // later photo goes with it only once it has been checked the same way.
+    match window.iter().position(|job| !approved(&job.request_json)) {
+        Some(0) => return fail_unapproved(&window[0].id),
+        Some(unapproved) => window.truncate(unapproved),
+        None => {}
     }
     let dispatch = match &support {
         BatchSupport::None => next_dispatch_for(&window, BatchPolicy::CoreMlOnly, |_| false)?,
@@ -1624,6 +1650,15 @@ const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 
 /// How long an engine that asked for a restart may take to exit before it is stopped.
 const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
+
+/// Whether an engine ended in a way LocalSR did not ask for: a crash, a kill or a failing
+/// exit. Its code files are then hashed again before it starts once more.
+fn engine_exit_unexpected(
+    status: &std::io::Result<std::process::ExitStatus>,
+    stopped_by_app: bool,
+) -> bool {
+    !stopped_by_app && !status.as_ref().is_ok_and(|exit| exit.success())
+}
 
 /// Whether an engine that ended on its own died of a fault in native code, such as an
 /// access violation in a graphics driver. A kill (the OOM killer, Task Manager) or an

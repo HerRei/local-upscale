@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import errno
-import pickle
 import tempfile
 from contextlib import suppress
+from fractions import Fraction
 
 import numpy as np
 
@@ -86,13 +86,25 @@ def automatic_export(
                         cache = None
                     else:
                         try:
+                            # Plain arrays only, read back without pickle: the pixels, then
+                            # the frame's index and times as exact text.
                             timing = (
-                                (frame.index, frame.timestamp, frame.duration, frame.time_base)
+                                [
+                                    str(frame.index),
+                                    *(
+                                        str(Fraction(value))
+                                        for value in (
+                                            frame.timestamp,
+                                            frame.duration,
+                                            frame.time_base,
+                                        )
+                                    ),
+                                ]
                                 if isinstance(frame, TimedVideoFrame)
-                                else None
+                                else []
                             )
-                            record = (pixels.tobytes(), pixels.shape, pixels.dtype.str, timing)
-                            pickle.dump(record, cache, protocol=pickle.HIGHEST_PROTOCOL)
+                            np.save(cache, pixels, allow_pickle=False)
+                            np.save(cache, np.array(timing, dtype=str), allow_pickle=False)
                             count += 1
                             size += frame_size
                         except OSError:
@@ -122,9 +134,17 @@ def automatic_export(
             for _ in range(count):
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("video job cancelled")
-                data, shape, dtype, timing = pickle.load(cache)
-                pixels = np.frombuffer(data, dtype=np.dtype(dtype)).reshape(shape).copy()
-                yield TimedVideoFrame(timing[0], pixels, *timing[1:]) if timing else pixels
+                pixels = np.load(cache, allow_pickle=False)
+                if not (pixels.flags.owndata and pixels.flags.writeable):
+                    pixels = pixels.copy()
+                timing = np.load(cache, allow_pickle=False)
+                yield (
+                    TimedVideoFrame(
+                        int(timing[0]), pixels, *(Fraction(str(value)) for value in timing[1:])
+                    )
+                    if timing.size
+                    else pixels
+                )
             yield from iterator
 
         result = export(replay(), "av1")

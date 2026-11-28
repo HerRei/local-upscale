@@ -1576,13 +1576,31 @@ fn engine_code_file(relative: &str) -> bool {
     };
     let name = name.to_ascii_lowercase();
     // The worker contains the PYZ archive. The bootloader also imports from
-    // base_library.zip, and the frozen importer can load modules from disk.
+    // base_library.zip, and the frozen importer can load modules from disk. Packages
+    // load the modules their distribution's entry_points.txt names.
     matches!(
         name.as_str(),
-        "localsr-worker" | "localsr-worker.pkg" | "sd-cli" | "python" | "base_library.zip"
+        "localsr-worker"
+            | "localsr-worker.pkg"
+            | "sd-cli"
+            | "python"
+            | "base_library.zip"
+            | "entry_points.txt"
     ) || matches!(
         Path::new(&name).extension().and_then(|ext| ext.to_str()),
-        Some("exe" | "dll" | "pyd" | "so" | "dylib" | "pyz" | "py" | "pyc" | "pth" | "manifest")
+        Some(
+            "exe"
+                | "dll"
+                | "pyd"
+                | "so"
+                | "dylib"
+                | "pyz"
+                | "py"
+                | "pyw"
+                | "pyc"
+                | "pth"
+                | "manifest"
+        )
     ) || name.rsplit_once(".so.").is_some_and(|(_, version)| {
         version
             .split('.')
@@ -1594,6 +1612,14 @@ fn engine_code_file(relative: &str) -> bool {
                 .file_stem()
                 .is_some_and(|stem| stem.eq_ignore_ascii_case(&name))
     })
+}
+
+/// A file Finder or Explorer writes into a folder someone looked at, by its exact name.
+fn folder_view_file(path: &Path) -> bool {
+    matches!(
+        path.file_name().and_then(|name| name.to_str()),
+        Some(".DS_Store" | "Thumbs.db" | "desktop.ini")
+    )
 }
 
 /// Whether a file is a program by its permissions or contents: helpers such as
@@ -1807,6 +1833,18 @@ fn remove_cached_code_key(key: &Option<PathBuf>) {
     }
 }
 
+/// Hash every code file of engine `id` again at its next start, rather than trusting the
+/// stamps recorded when they last passed: after its worker ended in a way LocalSR did not
+/// ask for.
+pub(crate) fn forget_verified_engine_code(next_root: &Path, id: &str) {
+    let Some(engine) = code_cache_key(&next_root.join("engines").join(id).join("engine")) else {
+        return;
+    };
+    if let Ok(mut cache) = ENGINE_CODE_HASH_CACHE.lock() {
+        cache.retain(|path, _| !path.starts_with(&engine));
+    }
+}
+
 fn hash_opened_engine_file(file: &mut fs::File) -> io::Result<(u64, String)> {
     #[cfg(test)]
     record_engine_file_hash();
@@ -1893,17 +1931,17 @@ fn verify_engine_directory(
             .expect("file is inside the engine");
         let relative = crate::engine_payload::canonical_relative_path(relative);
         let code = || engine_code_file(&relative) || executable_content(path, stat);
+        // The signed list names every file of the engine.
         let Some(entry) = expected.remove(relative.as_str()) else {
-            return if code() {
-                if matches!(check, EngineCheck::Code) {
-                    remove_cached_code_key(&code_cache_key(path));
-                }
-                Err(invalid(format!(
-                    "Engine code file has no checksum: {relative}"
-                )))
-            } else {
-                Ok(())
-            };
+            if folder_view_file(path) {
+                return Ok(());
+            }
+            if matches!(check, EngineCheck::Code) {
+                remove_cached_code_key(&code_cache_key(path));
+            }
+            return Err(invalid(format!(
+                "Engine file is not on its list: {relative}"
+            )));
         };
         if stat.len() != entry.size {
             if matches!(check, EngineCheck::Code) {

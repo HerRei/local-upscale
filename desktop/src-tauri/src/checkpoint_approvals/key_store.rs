@@ -3,7 +3,8 @@
 //! - macOS release builds: an item in the login Keychain that LocalSR creates, readable
 //!   without a prompt only by LocalSR's code signature. The item's access list carries a
 //!   digest of the key, which every read checks, and the item is found by that access
-//!   list rather than by its name.
+//!   list rather than by its name. Only the login keychain is searched and written, opened
+//!   by its path, whatever the keychain search list or the default keychain are.
 //! - Windows: a file in the profile folder holding the key protected with DPAPI for the
 //!   current user.
 //! - Linux: an item in the Secret Service (the desktop keyring) when one runs; a file in
@@ -43,7 +44,7 @@ pub(super) fn load_or_create(next_root: &Path) -> Result<Loaded, String> {
 
 #[cfg(all(not(test), target_os = "macos", not(debug_assertions)))]
 pub(super) fn load_or_create(_next_root: &Path) -> Result<Loaded, String> {
-    keychain::load_or_create(None)
+    keychain::load_or_create(&keychain::login()?)
 }
 
 #[cfg(all(not(test), windows))]
@@ -337,16 +338,22 @@ pub(crate) mod keychain {
         string::{CFString, CFStringRef},
     };
     use security_framework_sys::{
-        base::{errSecDuplicateItem, errSecItemNotFound, SecAccessRef, SecKeychainItemRef},
+        base::{
+            errSecDuplicateItem, errSecItemNotFound, SecAccessRef, SecKeychainItemRef,
+            SecKeychainRef,
+        },
         item::{
             kSecAttrAccount, kSecAttrLabel, kSecAttrService, kSecClass, kSecClassGenericPassword,
             kSecMatchLimit, kSecMatchLimitAll, kSecMatchSearchList, kSecReturnRef, kSecUseKeychain,
             kSecValueData,
         },
-        keychain_item::{SecItemAdd, SecItemCopyMatching},
+        keychain::SecKeychainOpen,
+        keychain_item::{SecItemAdd, SecItemCopyMatching, SecKeychainItemDelete},
     };
     use std::{
-        ffi::{c_char, c_void},
+        ffi::{c_char, c_void, CStr, CString, OsStr},
+        os::unix::ffi::OsStrExt,
+        path::{Path, PathBuf},
         ptr,
     };
 
@@ -387,6 +394,16 @@ pub(crate) mod keychain {
         fn SecKeychainItemFreeContent(attributes: *mut c_void, data: *mut c_void) -> OsStatus;
         fn SecKeychainGetUserInteractionAllowed(state: *mut u8) -> OsStatus;
         fn SecKeychainSetUserInteractionAllowed(state: u8) -> OsStatus;
+        fn SecKeychainGetStatus(keychain: SecKeychainRef, status: *mut u32) -> OsStatus;
+        fn SecKeychainGetPath(
+            keychain: SecKeychainRef,
+            length: *mut u32,
+            path: *mut c_char,
+        ) -> OsStatus;
+        fn SecKeychainItemCopyKeychain(
+            item: SecKeychainItemRef,
+            keychain: *mut SecKeychainRef,
+        ) -> OsStatus;
     }
 
     const SERVICE: &str = "com.localsr.app.checkpoint-approvals";
@@ -470,8 +487,8 @@ pub(crate) mod keychain {
 
     /// Every generic password item whose access list carries the marker, with that list's
     /// description.
-    fn marked_items(keychain: Option<&CFType>) -> Result<Vec<(CFType, String)>, String> {
-        let mut pairs = vec![
+    fn marked_items(keychain: &CFType) -> Result<Vec<(CFType, String)>, String> {
+        let pairs = [
             (
                 key_of(unsafe { kSecClass }),
                 key_of(unsafe { kSecClassGenericPassword }).as_CFType(),
@@ -484,13 +501,11 @@ pub(crate) mod keychain {
                 key_of(unsafe { kSecMatchLimit }),
                 key_of(unsafe { kSecMatchLimitAll }).as_CFType(),
             ),
-        ];
-        if let Some(keychain) = keychain {
-            pairs.push((
+            (
                 key_of(unsafe { kSecMatchSearchList }),
                 CFArray::from_CFTypes(std::slice::from_ref(keychain)).as_CFType(),
-            ));
-        }
+            ),
+        ];
         let query = CFDictionary::from_CFType_pairs(&pairs);
         let mut result: CFTypeRef = ptr::null();
         let status = unsafe { SecItemCopyMatching(query.as_concrete_TypeRef(), &mut result) };
@@ -538,7 +553,37 @@ pub(crate) mod keychain {
         Ok(Loaded::Existing(key))
     }
 
-    fn create(keychain: Option<&CFType>) -> Result<Loaded, String> {
+    /// The path of `keychain` when its file exists.
+    pub(crate) fn existing_path(keychain: &CFType) -> Result<Vec<u8>, String> {
+        let keychain = keychain.as_CFTypeRef() as SecKeychainRef;
+        let mut status = 0u32;
+        let found = unsafe { SecKeychainGetStatus(keychain, &mut status) };
+        if found != 0 {
+            return Err(format!("the login keychain is not available ({found})"));
+        }
+        let mut path = vec![0 as c_char; 4096];
+        // One byte less than the buffer, so the path always ends in a zero.
+        let mut length = (path.len() - 1) as u32;
+        if unsafe { SecKeychainGetPath(keychain, &mut length, path.as_mut_ptr()) } != 0 {
+            return Err("the login keychain has no path".into());
+        }
+        Ok(unsafe { CStr::from_ptr(path.as_ptr()) }.to_bytes().to_vec())
+    }
+
+    /// The path of the keychain that holds `item`.
+    fn item_keychain_path(item: &CFType) -> Result<Vec<u8>, String> {
+        let mut keychain: SecKeychainRef = ptr::null_mut();
+        let status = unsafe {
+            SecKeychainItemCopyKeychain(item.as_CFTypeRef() as SecKeychainItemRef, &mut keychain)
+        };
+        if status != 0 || keychain.is_null() {
+            return Err(format!("the Keychain item has no keychain ({status})"));
+        }
+        existing_path(&unsafe { CFType::wrap_under_create_rule(keychain as CFTypeRef) })
+    }
+
+    /// A new item with a new key in `keychain`, the file at `path`.
+    fn create(keychain: &CFType, path: &[u8]) -> Result<Loaded, String> {
         let key = random_key()?;
         let mut application: *mut OpaqueTrustedApplication = ptr::null_mut();
         if unsafe { SecTrustedApplicationCreateFromPath(ptr::null(), &mut application) } != 0
@@ -562,7 +607,7 @@ pub(crate) mod keychain {
             return Err("the Keychain access list could not be made".into());
         }
         let access = unsafe { CFType::wrap_under_create_rule(access as CFTypeRef) };
-        let mut pairs = vec![
+        let pairs = [
             (
                 key_of(unsafe { kSecClass }),
                 key_of(unsafe { kSecClassGenericPassword }).as_CFType(),
@@ -575,28 +620,87 @@ pub(crate) mod keychain {
                 CFData::from_buffer(&key).as_CFType(),
             ),
             (key_of(unsafe { kSecAttrAccess }), access),
+            (key_of(unsafe { kSecUseKeychain }), keychain.clone()),
+            (
+                key_of(unsafe { kSecReturnRef }),
+                CFBoolean::true_value().as_CFType(),
+            ),
         ];
-        if let Some(keychain) = keychain {
-            pairs.push((key_of(unsafe { kSecUseKeychain }), keychain.clone()));
-        }
         let attributes = CFDictionary::from_CFType_pairs(&pairs);
-        match unsafe { SecItemAdd(attributes.as_concrete_TypeRef(), ptr::null_mut()) } {
-            0 => Ok(Loaded::Created(key)),
+        let mut result: CFTypeRef = ptr::null();
+        match unsafe { SecItemAdd(attributes.as_concrete_TypeRef(), &mut result) } {
+            0 if !result.is_null() => {}
+            0 => return Err("the Keychain did not return the new item".into()),
             status if status == errSecDuplicateItem => {
-                Err("a Keychain item LocalSR did not make has its name".into())
+                return Err("a Keychain item LocalSR did not make has its name".into())
             }
-            status => Err(format!("the Keychain item could not be added ({status})")),
+            status => return Err(format!("the Keychain item could not be added ({status})")),
         }
+        let item = unsafe { CFType::wrap_under_create_rule(result) };
+        // The Keychain adds to the default keychain when the one named has gone: such an
+        // item is removed again and its key never used.
+        if item_keychain_path(&item).as_deref() != Ok(path) {
+            unsafe { SecKeychainItemDelete(item.as_CFTypeRef() as SecKeychainItemRef) };
+            return Err("the Keychain item went into another keychain".into());
+        }
+        Ok(Loaded::Created(key))
     }
 
-    /// The key from the one item LocalSR made, found by its access list; made when there
-    /// is none. Two such items leave the key unavailable. `keychain` limits the search to
-    /// one keychain, for tests; LocalSR uses the user's default search list.
-    pub(crate) fn load_or_create(keychain: Option<&CFType>) -> Result<Loaded, String> {
+    /// The login keychain of the account LocalSR runs as, opened by its path in the home
+    /// folder the user database names; $HOME is whatever started LocalSR set.
+    pub(crate) fn login() -> Result<CFType, String> {
+        open(&account_home()?.join("Library/Keychains/login.keychain-db"))
+    }
+
+    fn account_home() -> Result<PathBuf, String> {
+        let mut entry: libc::passwd = unsafe { std::mem::zeroed() };
+        let mut found: *mut libc::passwd = ptr::null_mut();
+        let mut buffer = vec![0 as c_char; 16 * 1024];
+        let status = unsafe {
+            libc::getpwuid_r(
+                libc::getuid(),
+                &mut entry,
+                buffer.as_mut_ptr(),
+                buffer.len(),
+                &mut found,
+            )
+        };
+        if status != 0 || found.is_null() || entry.pw_dir.is_null() {
+            return Err("the home folder of this account is unknown".into());
+        }
+        // The text lives in `buffer`, which outlives this copy.
+        let home = unsafe { CStr::from_ptr(entry.pw_dir) };
+        let home = PathBuf::from(OsStr::from_bytes(home.to_bytes()));
+        if !home.is_absolute() {
+            return Err("the home folder of this account is unknown".into());
+        }
+        Ok(home)
+    }
+
+    /// The keychain file at `path`. Opening does not check that it exists; searching or
+    /// adding to a keychain that does not exist fails.
+    pub(crate) fn open(path: &Path) -> Result<CFType, String> {
+        let path = CString::new(path.as_os_str().as_bytes())
+            .map_err(|_| "the keychain path is not valid".to_owned())?;
+        let mut keychain: SecKeychainRef = ptr::null_mut();
+        let status = unsafe { SecKeychainOpen(path.as_ptr(), &mut keychain) };
+        if status != 0 || keychain.is_null() {
+            return Err(format!("the login keychain could not be opened ({status})"));
+        }
+        Ok(unsafe { CFType::wrap_under_create_rule(keychain as CFTypeRef) })
+    }
+
+    /// The key from the one item LocalSR made in `keychain`, found by its access list; made
+    /// there when there is none. Two such items leave the key unavailable. No other keychain
+    /// is searched or written.
+    pub(crate) fn load_or_create(keychain: &CFType) -> Result<Loaded, String> {
         let _no_prompts = NoPrompts::new();
+        // A keychain that does not exist is searched as an empty one, and an item added to
+        // it goes into the default keychain.
+        let path = existing_path(keychain)?;
         let marked = marked_items(keychain)?;
         match marked.as_slice() {
-            [] => create(keychain),
+            [] => create(keychain, &path),
             [(item, text)] => read(item, text),
             _ => Err("the Keychain holds more than one LocalSR approvals item".into()),
         }

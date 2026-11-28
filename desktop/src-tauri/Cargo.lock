@@ -2501,6 +2501,7 @@ dependencies = [
  "fs2",
  "futures-util",
  "jsonschema",
+ "libc",
  "minisign-verify",
  "open",
  "proptest",

@@ -376,7 +376,13 @@ pub fn run() {
 fn show_startup_notices(app: &tauri::AppHandle, state: &AppState) {
     use tauri_plugin_dialog::{DialogExt, MessageDialogKind};
 
-    let notices = state.take_startup_notices();
+    let mut notices = state.take_startup_notices();
+    notices.extend(engine_manager::engine_waiting_notice(
+        state,
+        &updates::UpdateConfig::load(),
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+    ));
     if notices.is_empty() {
         return;
     }

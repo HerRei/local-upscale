@@ -815,6 +815,40 @@ fn only_a_native_fault_counts_as_a_crash() {
 }
 
 #[test]
+fn an_engine_that_ended_unasked_is_hashed_again_before_its_restart() {
+    #[cfg(unix)]
+    use std::os::unix::process::ExitStatusExt;
+    #[cfg(windows)]
+    use std::os::windows::process::ExitStatusExt;
+    use std::process::ExitStatus;
+
+    #[cfg(unix)]
+    let (clean, failure, killed, fault) = (
+        ExitStatus::from_raw(0),
+        ExitStatus::from_raw(1 << 8),
+        ExitStatus::from_raw(9),
+        ExitStatus::from_raw(11),
+    );
+    #[cfg(windows)]
+    let (clean, failure, killed, fault) = (
+        ExitStatus::from_raw(0),
+        ExitStatus::from_raw(2),
+        ExitStatus::from_raw(1),
+        ExitStatus::from_raw(0xC000_0005),
+    );
+    for status in [failure, killed, fault] {
+        assert!(engine_exit_unexpected(&Ok(status), false), "{status:?}");
+        // A stop LocalSR asked for (Stop, quitting, a late restart) keeps the checks.
+        assert!(!engine_exit_unexpected(&Ok(status), true), "{status:?}");
+    }
+    assert!(!engine_exit_unexpected(&Ok(clean), false));
+    assert!(engine_exit_unexpected(
+        &Err(std::io::Error::other("no status")),
+        false
+    ));
+}
+
+#[test]
 fn counters_at_the_largest_value_do_not_overflow() {
     for (kind, data) in [
         (
@@ -1234,6 +1268,57 @@ fn a_queued_job_naming_an_unapproved_checkpoint_fails_and_the_next_runs_without_
     assert_eq!(sent["data"]["allow_unverified_checkpoint"], json!(false));
     assert!(receiver.try_recv().is_err());
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_first_job_changed_in_the_queue_file_after_its_check_is_not_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    // Another program rewrites the first job between the two reads of the queue: it now
+    // names an own checkpoint the user never approved.
+    let mut changed = photo_job("a");
+    changed["data"]["output_path"] = json!(directory.path().join("out/a.png"));
+    changed["data"]["model_path"] = json!("/models/own.pth");
+    changed["data"]["approved_checkpoint_sha256"] = json!("1".repeat(64));
+    changed["data"]["allow_unverified_checkpoint"] = json!(true);
+    let queue = state.paths.database.clone();
+    BETWEEN_QUEUE_READS.set(Some(Box::new(move || {
+        rusqlite::Connection::open(queue)
+            .unwrap()
+            .execute(
+                "UPDATE jobs SET request_json=?1 WHERE id='a'",
+                [changed.to_string()],
+            )
+            .unwrap();
+    })));
+
+    assert!(begin_dispatch(&state, true).unwrap());
+    assert_eq!(status(&state, "a"), "failed");
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["type"], "image_batch_request");
+    let jobs = sent["data"]["jobs"].as_array().unwrap();
+    assert_eq!(
+        jobs.iter()
+            .map(|job| string(job, "job_id"))
+            .collect::<Vec<_>>(),
+        ["b", "c"]
+    );
+    assert!(jobs
+        .iter()
+        .all(|job| job["allow_unverified_checkpoint"] != json!(true)));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn engine_processes_never_take_the_pickle_permission_from_the_environment() {
+    let mut command = Command::new("engine");
+    set_helper_overrides(&mut command).unwrap();
+    assert!(command
+        .get_envs()
+        .any(|(name, value)| name == "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS" && value.is_none()));
 }
 
 #[test]

@@ -3144,6 +3144,38 @@ fn an_engine_an_earlier_version_installed_takes_its_signed_list_from_the_feed() 
 }
 
 #[test]
+fn an_engine_waiting_for_its_list_is_named_at_start_while_launch_checks_are_off() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(root.path());
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    let os = host_test_os();
+    let config = UpdateConfig {
+        public_key: crate::engine_files::test_signing::public_key(),
+        feed: "https://example.test/feed.json".into(),
+        backend: "cpu".into(),
+        engine_id: "compiled".into(),
+        kind: "native".into(),
+    };
+    let notice = || engine_waiting_notice(&state, &config, os, "x86_64");
+    // Nothing waits.
+    lock(&state.settings).unwrap().privacy_choice_made = true;
+    assert_eq!(notice(), None);
+
+    engine_from_an_earlier_version(&paths.next_root, "linux-x86_64-rocm-070", os);
+    lock(&state.settings).unwrap().check_updates_at_launch = false;
+    assert!(notice().is_some_and(|text| text.contains("Check for Updates")));
+    // The start reads the feed for it itself.
+    lock(&state.settings).unwrap().check_updates_at_launch = true;
+    assert_eq!(notice(), None);
+    // The first start asks about the feed before anything else.
+    let mut settings = lock(&state.settings).unwrap();
+    settings.check_updates_at_launch = false;
+    settings.privacy_choice_made = false;
+    drop(settings);
+    assert_eq!(notice(), None);
+}
+
+#[test]
 fn a_verify_request_leaves_an_engine_without_a_list_as_it_is() {
     let root = tempfile::tempdir().unwrap();
     let paths = AppPaths::under(root.path());
