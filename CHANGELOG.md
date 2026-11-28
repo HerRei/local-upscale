@@ -13,7 +13,8 @@
   photo. It downloads a model only when you click Download … and preview, and it pauses
   while a job runs or waits. In the Model library, Try on this photo puts a second model
   on the same square: the tab shows A and B, X flips between them, and Use B takes the
-  second one over.
+  second one over. For a video with a frame-by-frame engine, the same preview works on
+  the first frame (This frame), without de-flicker, added frames or audio.
 - **Every step is visible while a job runs and after it.** A job with several steps no
   longer drops to a small, soft picture between steps. The viewer keeps the sharp photo
   until the next step's picture is ready, labels it Step 2 of 4 · Colour, and the status
