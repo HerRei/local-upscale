@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { mediaFacts } from './enhancePanel';
+import { demoSnapshot } from './demo';
+import { mediaFacts, outputSummary } from './enhancePanel';
 import type { MediaItem } from './types';
 
 function makeMedia(overrides: Partial<MediaItem> = {}): MediaItem {
@@ -65,5 +66,16 @@ describe('mediaFacts', () => {
         }),
       ),
     ).toBe('3840 × 2160 · 23.976 fps · 1:15 · HLG');
+  });
+});
+
+describe('outputSummary', () => {
+  it('omits the folder when includeFolder is false', () => {
+    const { settings } = demoSnapshot();
+    settings.task = 'upscale';
+    settings.output_format = 'png';
+    settings.output_directory = '/tmp/Results';
+    expect(outputSummary(settings)).toBe('PNG · Results');
+    expect(outputSummary(settings, { includeFolder: false })).toBe('PNG');
   });
 });

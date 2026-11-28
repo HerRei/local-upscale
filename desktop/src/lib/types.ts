@@ -397,6 +397,8 @@ export interface UiSettings {
   content: Exclude<ContentKind, 'face'>;
   fixes: FixKind[];
   preset_pins: Record<string, string>;
+  recipe_pins?: string[];
+  recipe_recent?: string[];
   // Image editing: the chosen Qwen bundle, the longest output edge in pixels
   // and the sampler settings. The prompt is kept in memory only.
   edit_model_id: string;

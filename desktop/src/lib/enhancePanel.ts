@@ -93,11 +93,12 @@ export function outputSummary(
   options: {
     preservingHdr?: boolean;
     audioDisabled?: boolean;
+    includeFolder?: boolean;
     /** The step registry; tests add steps that exist only in them. */
     steps?: readonly StepDefinition[];
   } = {},
 ): string {
-  const folder = outputFolderName(settings.output_directory);
+  const folder = options.includeFolder === false ? '' : outputFolderName(settings.output_directory);
   if (settings.task === 'video') {
     const container = (settings.video_container ?? 'mp4').toUpperCase();
     const codec = settings.video_codec ?? 'auto';
@@ -149,6 +150,7 @@ export interface EnhancePanelView {
   quickDownload: string;
   bestDownload: string;
   activeRecipeIds: Set<string>;
+  updatableRecipe: Recipe | undefined;
   sizeResult: string;
   sizeMaxScale: number;
   bestModel: CatalogModel | undefined;
@@ -186,10 +188,11 @@ export interface EnhancePanelActions {
   ) => void;
   updateSettings: (patch: Partial<UiSettings>) => void;
   openRecipeEditor: () => Promise<void>;
+  openRecipesLibrary: () => void;
   applyPreset: (kind: 'quick' | 'best') => void;
-  deleteRecipe: (recipeId: string) => void;
   applyRecipe: (recipe: Recipe) => void;
   addRecipe: () => Promise<void>;
+  updateRecipe: () => Promise<void>;
   setContent: (content: UiSettings['content']) => void;
   radioGroupKeydown: (event: KeyboardEvent) => void;
   toggleFix: (fix: FixKind) => void;

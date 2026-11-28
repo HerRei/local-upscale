@@ -35,7 +35,6 @@
   export let editPrompt: string;
   export let recipeName: string;
   export let recipeEditorOpen: boolean;
-  export let deletingRecipeId: string | null;
   export let termsAccepted: Record<string, boolean>;
   export let inspectorScroll: HTMLDivElement | undefined = undefined;
   export let failureNote: HTMLElement | undefined = undefined;
@@ -50,10 +49,11 @@
     setTask,
     updateSettings,
     openRecipeEditor,
+    openRecipesLibrary,
     applyPreset,
-    deleteRecipe,
     applyRecipe,
     addRecipe,
+    updateRecipe,
     setContent,
     radioGroupKeydown,
     toggleFix,
@@ -107,6 +107,7 @@
     quickDownload,
     bestDownload,
     activeRecipeIds,
+    updatableRecipe,
     sizeResult,
     sizeMaxScale,
     imageFixes,
@@ -135,7 +136,6 @@
   } = view);
 
   $: if (!recipesOpen) {
-    deletingRecipeId = null;
     recipeEditorOpen = false;
   }
   $: if (!settings.task || settings.task === 'edit' || planState.status === 'error') {
@@ -375,16 +375,20 @@
         </svelte:fragment>
         <RecipesMenu
           recipes={snapshot.recipes}
+          catalog={snapshot.catalog}
+          pins={settings.recipe_pins ?? []}
+          recent={settings.recipe_recent ?? []}
           {activeRecipeIds}
           selectedMediaKind={selectedMedia?.kind}
           canSave={Boolean(settings.task) && settings.task !== 'edit'}
           bind:recipeName
           bind:recipeEditorOpen
-          bind:deletingRecipeId
           {openRecipeEditor}
+          {openRecipesLibrary}
           {applyRecipe}
-          {deleteRecipe}
           {addRecipe}
+          {updatableRecipe}
+          {updateRecipe}
           onClose={() => close(false)}
         />
       </Popover>

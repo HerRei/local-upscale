@@ -1,9 +1,43 @@
+use std::sync::LazyLock;
+
+use serde::Deserialize;
 use tauri::{
     menu::{Menu, MenuBuilder, MenuItemBuilder, SubmenuBuilder},
     App, AppHandle, Emitter, Manager, Runtime,
 };
 
 use crate::types::Recipe;
+
+/// Pins with a shortcut: Cmd+3 to Cmd+9.
+pub const SHORTCUT_PINS: usize = 7;
+const RECIPE_ID_PREFIX: &str = "preset.recipe.";
+const BROWSE_RECIPES_ID: &str = "preset.browse";
+const BROWSE_RECIPES_ACCELERATOR: &str = "CmdOrCtrl+Shift+R";
+
+#[derive(Deserialize)]
+struct WorkflowFile {
+    workflows: Vec<WorkflowName>,
+}
+
+/// The part of a built-in workflow the menu shows: its id and name.
+#[derive(Deserialize)]
+struct WorkflowName {
+    id: String,
+    name: String,
+}
+
+static WORKFLOWS: LazyLock<Vec<WorkflowName>> = LazyLock::new(|| {
+    serde_json::from_str::<WorkflowFile>(include_str!("../resources/workflows.json"))
+        .expect("bundled workflows.json must be valid")
+        .workflows
+});
+
+fn workflow_name(id: &str) -> Option<&'static str> {
+    WORKFLOWS
+        .iter()
+        .find(|workflow| workflow.id == id)
+        .map(|workflow| workflow.name.as_str())
+}
 
 pub const EVENT_NAME: &str = "native-menu-action";
 const REPORT_PROBLEM_ID: &str = "help.report-problem";
@@ -48,19 +82,24 @@ pub fn set_comparison_labels(app: &AppHandle, reference_is_result: bool) {
     }
 }
 
-pub fn install<R: Runtime>(app: &App<R>, recipes: &[Recipe]) -> tauri::Result<()> {
-    install_for_manager(app, recipes)
+pub fn install<R: Runtime>(app: &App<R>, recipes: &[Recipe], pins: &[String]) -> tauri::Result<()> {
+    install_for_manager(app, recipes, pins)
 }
 
-pub fn rebuild<R: Runtime>(app: &AppHandle<R>, recipes: &[Recipe]) -> tauri::Result<()> {
-    install_for_manager(app, recipes)
+pub fn rebuild<R: Runtime>(
+    app: &AppHandle<R>,
+    recipes: &[Recipe],
+    pins: &[String],
+) -> tauri::Result<()> {
+    install_for_manager(app, recipes, pins)
 }
 
 fn install_for_manager<R: Runtime, M: Manager<R>>(
     manager: &M,
     recipes: &[Recipe],
+    pins: &[String],
 ) -> tauri::Result<()> {
-    let menu = build_menu(manager, recipes)?;
+    let menu = build_menu(manager, recipes, pins)?;
     manager.app_handle().set_menu(menu)?;
     Ok(())
 }
@@ -105,7 +144,46 @@ fn entry(id: &str, label: &str, accelerator: Option<&str>) -> LayoutEntry {
     }
 }
 
-fn menu_layout(recipes: &[Recipe]) -> Vec<SubmenuLayout> {
+/// Quick and Best, the first pins with Cmd+3 to Cmd+9 in pin order, and Browse Recipes.
+/// A recipe that is not pinned has no item; a pin that names no recipe or workflow is
+/// skipped and gives its shortcut to the next.
+fn presets_items(recipes: &[Recipe], pins: &[String]) -> Vec<LayoutEntry> {
+    let mut items = vec![
+        entry("preset.quick", "Quick Preset (Fast)", Some("CmdOrCtrl+1")),
+        entry("preset.best", "Best Quality Preset", Some("CmdOrCtrl+2")),
+        LayoutEntry::Separator,
+    ];
+    let pinned: Vec<LayoutEntry> = pins
+        .iter()
+        .filter_map(|id| {
+            let name = recipes
+                .iter()
+                .find(|recipe| &recipe.id == id)
+                .map(|recipe| recipe.name.as_str())
+                .or_else(|| workflow_name(id))?;
+            Some((id, name))
+        })
+        .take(SHORTCUT_PINS)
+        .enumerate()
+        .map(|(index, (id, name))| LayoutEntry::Item {
+            id: format!("{RECIPE_ID_PREFIX}{id}"),
+            label: name.to_owned(),
+            accelerator: Some(format!("CmdOrCtrl+{}", index + 3)),
+        })
+        .collect();
+    if !pinned.is_empty() {
+        items.extend(pinned);
+        items.push(LayoutEntry::Separator);
+    }
+    items.push(entry(
+        BROWSE_RECIPES_ID,
+        "Browse Recipes…",
+        Some(BROWSE_RECIPES_ACCELERATOR),
+    ));
+    items
+}
+
+fn menu_layout(recipes: &[Recipe], pins: &[String]) -> Vec<SubmenuLayout> {
     #[cfg_attr(target_os = "macos", allow(unused_mut))]
     let mut file_items = vec![
         entry("file.add-media", "Add Media…", Some("CmdOrCtrl+O")),
@@ -127,21 +205,6 @@ fn menu_layout(recipes: &[Recipe]) -> Vec<SubmenuLayout> {
     {
         file_items.push(LayoutEntry::Separator);
         file_items.push(entry(SETTINGS_ID, "Settings…", Some(SETTINGS_ACCELERATOR)));
-    }
-
-    let mut presets_items = vec![
-        entry("preset.quick", "Quick Preset (Fast)", Some("CmdOrCtrl+1")),
-        entry("preset.best", "Best Quality Preset", Some("CmdOrCtrl+2")),
-    ];
-    if !recipes.is_empty() {
-        presets_items.push(LayoutEntry::Separator);
-    }
-    for (index, recipe) in recipes.iter().take(7).enumerate() {
-        presets_items.push(LayoutEntry::Item {
-            id: format!("preset.recipe.{}", recipe.id),
-            label: recipe.name.clone(),
-            accelerator: Some(format!("CmdOrCtrl+{}", index + 3)),
-        });
     }
 
     let view_items = vec![
@@ -233,7 +296,7 @@ fn menu_layout(recipes: &[Recipe]) -> Vec<SubmenuLayout> {
         },
         SubmenuLayout {
             title: "Presets",
-            items: presets_items,
+            items: presets_items(recipes, pins),
         },
         SubmenuLayout {
             title: "View",
@@ -253,9 +316,10 @@ fn menu_layout(recipes: &[Recipe]) -> Vec<SubmenuLayout> {
 fn build_menu<R: Runtime, M: Manager<R>>(
     manager: &M,
     recipes: &[Recipe],
+    pins: &[String],
 ) -> tauri::Result<Menu<R>> {
     let mut menu_builder = MenuBuilder::new(manager);
-    for submenu in menu_layout(recipes) {
+    for submenu in menu_layout(recipes, pins) {
         let mut builder = SubmenuBuilder::new(manager, submenu.title);
         for item in submenu.items {
             builder = match item {
@@ -297,18 +361,21 @@ fn build_menu<R: Runtime, M: Manager<R>>(
     menu_builder.build()
 }
 
-/// Rebuild the native menu so the saved recipes stay current. The rebuild runs on the
-/// UI thread, so when several overlap, the last one shows the newest state.
+/// Rebuild the native menu so the saved recipes and pins stay current. The rebuild runs on
+/// the UI thread, so when several overlap, the last one shows the newest state.
 pub fn reconcile(app: &AppHandle) {
     let handle = app.clone();
     let _ = app.run_on_main_thread(move || {
         let Some(state) = handle.try_state::<std::sync::Arc<crate::state::AppState>>() else {
             return;
         };
+        let Ok(pins) = crate::state::lock(&state.settings).map(|ui| ui.recipe_pins.clone()) else {
+            return;
+        };
         let Ok(recipes) = crate::state::lock(&state.recipes).map(|recipes| recipes.clone()) else {
             return;
         };
-        if let Err(error) = rebuild(&handle, &recipes) {
+        if let Err(error) = rebuild(&handle, &recipes, &pins) {
             eprintln!("LocalSR: could not refresh the menu: {error}");
         }
     });
@@ -360,7 +427,7 @@ mod tests {
 
     #[test]
     fn settings_item_exists_with_shortcut_and_removed_ids_are_absent() {
-        let submenus = menu_layout(&[]);
+        let submenus = menu_layout(&[], &[]);
         let ids = collect_menu_ids(&submenus);
         assert!(ids.contains(&SETTINGS_ID.to_owned()));
         assert_eq!(SETTINGS_ID, "app.settings");
@@ -421,6 +488,151 @@ mod tests {
             super::comparison_labels(true),
             ("Show Reference", "Show Showing Result")
         );
+    }
+
+    fn recipe(id: &str, name: &str) -> Recipe {
+        serde_json::from_value(serde_json::json!({
+            "id": id, "name": name, "task": "upscale", "model_id": "m", "output_scale": 2,
+            "tile_size": 256, "halo": 16, "precision": "fp32", "safe_memory": false
+        }))
+        .unwrap()
+    }
+
+    fn presets(recipes: &[Recipe], pins: &[&str]) -> Vec<LayoutEntry> {
+        let pins: Vec<String> = pins.iter().map(|pin| (*pin).to_owned()).collect();
+        menu_layout(recipes, &pins)
+            .into_iter()
+            .find(|submenu| submenu.title == "Presets")
+            .unwrap()
+            .items
+    }
+
+    const QUICK_AND_BEST: [(&str, &str, &str); 2] = [
+        ("preset.quick", "Quick Preset (Fast)", "CmdOrCtrl+1"),
+        ("preset.best", "Best Quality Preset", "CmdOrCtrl+2"),
+    ];
+
+    fn quick_and_best() -> Vec<LayoutEntry> {
+        QUICK_AND_BEST
+            .iter()
+            .map(|(id, label, accelerator)| entry(id, label, Some(accelerator)))
+            .collect()
+    }
+
+    fn browse_recipes() -> LayoutEntry {
+        entry(
+            "preset.browse",
+            "Browse Recipes…",
+            Some("CmdOrCtrl+Shift+R"),
+        )
+    }
+
+    #[test]
+    fn presets_give_cmd_3_onwards_to_the_pins_in_pin_order_and_end_with_browse_recipes() {
+        let recipes = [
+            recipe("a", "Phone photos"),
+            recipe("b", "Old slides"),
+            recipe("c", "Web banners"),
+        ];
+        let mut expected = quick_and_best();
+        expected.extend([
+            LayoutEntry::Separator,
+            entry("preset.recipe.b", "Old slides", Some("CmdOrCtrl+3")),
+            entry(
+                "preset.recipe.workflow.old-scan",
+                "Old scan",
+                Some("CmdOrCtrl+4"),
+            ),
+            entry("preset.recipe.a", "Phone photos", Some("CmdOrCtrl+5")),
+            LayoutEntry::Separator,
+            browse_recipes(),
+        ]);
+        // `c` is not pinned and has no item.
+        assert_eq!(
+            presets(&recipes, &["b", "workflow.old-scan", "a"]),
+            expected
+        );
+
+        let mut unpinned = quick_and_best();
+        unpinned.extend([LayoutEntry::Separator, browse_recipes()]);
+        assert_eq!(presets(&recipes, &[]), unpinned);
+        assert_eq!(presets(&[], &[]), unpinned);
+    }
+
+    #[test]
+    fn only_seven_pins_that_name_a_recipe_or_workflow_get_a_shortcut() {
+        let recipes: Vec<Recipe> = (0..9)
+            .map(|index| recipe(&format!("r{index}"), &format!("Recipe {index}")))
+            .collect();
+        // A deleted recipe's id may still come in with a window's older copy of the pins.
+        let items = presets(
+            &recipes,
+            &[
+                "deleted",
+                "r8",
+                "r0",
+                "r1",
+                "r2",
+                "r3",
+                "workflow.gone",
+                "r4",
+                "r5",
+                "r6",
+                "r7",
+            ],
+        );
+        let shortcuts: Vec<(String, String)> = items
+            .iter()
+            .filter_map(|item| match item {
+                LayoutEntry::Item {
+                    id,
+                    accelerator: Some(accelerator),
+                    ..
+                } if id.starts_with(RECIPE_ID_PREFIX) => {
+                    Some((id[RECIPE_ID_PREFIX.len()..].to_owned(), accelerator.clone()))
+                }
+                _ => None,
+            })
+            .collect();
+        let expected: Vec<(String, String)> = ["r8", "r0", "r1", "r2", "r3", "r4", "r5"]
+            .iter()
+            .zip(3..)
+            .map(|(id, key)| ((*id).to_owned(), format!("CmdOrCtrl+{key}")))
+            .collect();
+        assert_eq!(shortcuts, expected);
+        assert_eq!(items.last(), Some(&browse_recipes()));
+
+        let pins: Vec<String> = recipes.iter().map(|recipe| recipe.id.clone()).collect();
+        let mut accelerators: Vec<String> = menu_layout(&recipes, &pins)
+            .iter()
+            .flat_map(|submenu| submenu.items.iter())
+            .filter_map(|item| match item {
+                LayoutEntry::Item {
+                    accelerator: Some(accelerator),
+                    ..
+                } => Some(accelerator.clone()),
+                _ => None,
+            })
+            .collect();
+        let count = accelerators.len();
+        accelerators.sort();
+        accelerators.dedup();
+        assert_eq!(accelerators.len(), count, "a shortcut is used twice");
+    }
+
+    #[test]
+    fn the_menu_names_the_four_workflows_from_the_file_the_window_reads() {
+        for (id, name) in [
+            ("workflow.old-scan", "Old scan"),
+            ("workflow.low-light", "Low-light phone photo"),
+            ("workflow.drawing", "Drawing or anime"),
+            ("workflow.web-jpeg", "Web image (JPEG)"),
+        ] {
+            assert_eq!(workflow_name(id), Some(name));
+            assert!(crate::types::is_valid_recipe_list_id(id));
+        }
+        assert_eq!(WORKFLOWS.len(), 4);
+        assert_eq!(workflow_name("workflow.unknown"), None);
     }
 
     #[test]

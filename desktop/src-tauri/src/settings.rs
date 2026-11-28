@@ -6,7 +6,10 @@ use serde_json::Value;
 use crate::{
     error::{AppError, AppResult},
     paths::AppPaths,
-    types::{BenchmarkResult, CatalogManifest, Recipe, UiSettings},
+    types::{
+        is_valid_recipe_list_id, BenchmarkResult, CatalogManifest, Recipe, UiSettings,
+        MAX_RECIPE_PINS, MAX_RECIPE_RECENT,
+    },
 };
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -49,6 +52,7 @@ pub fn load(paths: &AppPaths) -> (UiSettings, Vec<Recipe>) {
             audio_models: Vec::new(),
         });
         keep_runnable_step_stages(&mut document.ui, &catalog);
+        keep_valid_recipe_lists(&mut document.ui);
         return (document.ui, document.recipes);
     }
 
@@ -103,6 +107,19 @@ fn keep_runnable_step_stages(settings: &mut UiSettings, catalog: &CatalogManifes
     });
 }
 
+/// A newer LocalSR may allow longer lists or other ids; keeping them would make every later
+/// save of these settings fail its validation.
+fn keep_valid_recipe_lists(settings: &mut UiSettings) {
+    for (list, limit) in [
+        (&mut settings.recipe_pins, MAX_RECIPE_PINS),
+        (&mut settings.recipe_recent, MAX_RECIPE_RECENT),
+    ] {
+        let mut seen = std::collections::HashSet::new();
+        list.retain(|id| is_valid_recipe_list_id(id) && seen.insert(id.clone()));
+        list.truncate(limit);
+    }
+}
+
 fn read_document(path: &Path) -> Option<SettingsDocument> {
     let contents = fs::read_to_string(path).ok()?;
     parse_document(&contents)
@@ -116,7 +133,29 @@ fn parse_document(contents: &str) -> Option<SettingsDocument> {
         // A newer LocalSR wrote this; never read or overwrite it with defaults.
         _ => return None,
     }
+    pin_the_first_recipes_of_an_older_file(&mut value);
     serde_json::from_value(value).ok()
+}
+
+/// Before pins, the Presets menu gave its shortcuts to the first recipes in storage order.
+/// A file from then pins those, so Cmd+3 to Cmd+9 keep their targets. An empty list that
+/// was saved stays empty.
+fn pin_the_first_recipes_of_an_older_file(value: &mut Value) {
+    let first: Vec<Value> = value
+        .get("recipes")
+        .and_then(Value::as_array)
+        .map(|recipes| {
+            recipes
+                .iter()
+                .take(crate::native_menu::SHORTCUT_PINS)
+                .filter_map(|recipe| recipe.get("id")?.as_str())
+                .map(|id| Value::String(id.to_owned()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(ui) = value.get_mut("ui").and_then(Value::as_object_mut) {
+        ui.entry("recipe_pins").or_insert(Value::Array(first));
+    }
 }
 
 /// Schema 2 replaced the single `preprocess_model_id` with the ordered `fix_stages`.
@@ -927,5 +966,97 @@ mod precision_tests {
         fs::write(&paths.settings, saved_fp32.to_string()).unwrap();
         let (loaded, _) = load(&paths);
         assert_eq!(loaded.precision, "fp32");
+    }
+}
+
+#[cfg(test)]
+mod recipe_list_tests {
+    use super::*;
+
+    fn recipe(id: &str) -> Value {
+        serde_json::json!({
+            "id": id, "name": id, "task": "upscale", "model_id": "m", "output_scale": 2,
+            "tile_size": 256, "halo": 16, "precision": "fp32", "safe_memory": false
+        })
+    }
+
+    fn write(paths: &AppPaths, document: Value) {
+        fs::create_dir_all(&paths.next_root).unwrap();
+        fs::write(&paths.settings, document.to_string()).unwrap();
+    }
+
+    #[test]
+    fn a_file_from_before_pins_pins_its_first_seven_recipes_and_an_empty_list_stays_empty() {
+        let ids: Vec<String> = (1..=9).map(|index| format!("r{index}")).collect();
+        let recipes: Vec<Value> = ids.iter().map(|id| recipe(id)).collect();
+        for schema_version in [1, 2] {
+            let directory = tempfile::tempdir().unwrap();
+            let paths = AppPaths::under(directory.path());
+            write(
+                &paths,
+                serde_json::json!({
+                    "schema_version": schema_version, "ui": {}, "recipes": recipes
+                }),
+            );
+            let (settings, loaded) = load(&paths);
+            assert_eq!(settings.recipe_pins, ids[..7]);
+            assert!(settings.recipe_recent.is_empty());
+
+            // Unpinning everything is a choice the next start keeps.
+            let unpinned = UiSettings {
+                recipe_pins: Vec::new(),
+                ..settings
+            };
+            save(&paths, &unpinned, &loaded).unwrap();
+            let written: Value =
+                serde_json::from_slice(&fs::read(&paths.settings).unwrap()).unwrap();
+            assert_eq!(written["ui"]["recipe_pins"], serde_json::json!([]));
+            assert!(load(&paths).0.recipe_pins.is_empty());
+        }
+
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        write(
+            &paths,
+            serde_json::json!({
+                "schema_version": 2, "ui": {"recipe_pins": []}, "recipes": recipes
+            }),
+        );
+        assert!(load(&paths).0.recipe_pins.is_empty());
+
+        // Fewer than seven recipes, or none: each is pinned, and nothing is made up.
+        for count in [0, 3] {
+            let directory = tempfile::tempdir().unwrap();
+            let paths = AppPaths::under(directory.path());
+            write(
+                &paths,
+                serde_json::json!({
+                    "schema_version": 2, "ui": {}, "recipes": recipes[..count]
+                }),
+            );
+            assert_eq!(load(&paths).0.recipe_pins, ids[..count]);
+        }
+    }
+
+    #[test]
+    fn pin_and_recent_lists_this_version_cannot_save_are_cut_to_what_it_can() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let mut pins: Vec<String> = vec!["a".into(), "a".into(), String::new(), "x".repeat(65)];
+        pins.extend((0..25).map(|index| format!("p{index}")));
+        let recent: Vec<String> = (0..15).map(|index| format!("r{index}")).collect();
+        write(
+            &paths,
+            serde_json::json!({
+                "schema_version": 2,
+                "ui": {"recipe_pins": pins, "recipe_recent": recent},
+                "recipes": []
+            }),
+        );
+        let (settings, _) = load(&paths);
+        let mut expected = vec!["a".to_owned()];
+        expected.extend((0..19).map(|index| format!("p{index}")));
+        assert_eq!(settings.recipe_pins, expected);
+        assert_eq!(settings.recipe_recent, recent[..12]);
     }
 }

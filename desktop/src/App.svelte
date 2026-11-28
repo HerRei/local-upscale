@@ -7,7 +7,8 @@
   import { createThemeController } from './lib/theme';
 
   import { tabFromKey } from './lib/keyboard';
-  import { isRestoreRecipe, recipeFixStages, recipeMatches } from './lib/recipes';
+  import { recipeMatches, recipeSettingsPatch } from './lib/recipes';
+  import { duplicateName, recordUse, togglePin } from './lib/recipeList';
   import {
     benchmarkDeviceBarWidth,
     benchmarkOneMpExample,
@@ -68,6 +69,7 @@
   import CustomEditModelModal from './CustomEditModelModal.svelte';
   import * as api from './lib/api';
   import ModelLibrary from './ModelLibrary.svelte';
+  import RecipesLibrary from './RecipesLibrary.svelte';
   import {
     editDevice,
     editDimensions,
@@ -319,7 +321,7 @@
   }
 
   let recipeEditorOpen = false;
-  let deletingRecipeId: string | null = null;
+  let recipesLibraryOpen = false;
   let recipeName = '';
   // Model terms are accepted per model: several fixes can each need their own.
   let termsAccepted: Record<string, boolean> = {};
@@ -3673,6 +3675,7 @@
       return;
     }
     upscalerBeforeSameSize = '';
+    lastAppliedRecipeId = '';
     // Keep the current size: Quick and Best choose the upscaler and every fix model.
     resolveRecipe({ quality: kind }, { keepScale: true });
   }
@@ -4026,15 +4029,14 @@
     }
   }
 
-  async function addRecipe(): Promise<void> {
-    const name = recipeName.trim() || `My Recipe ${snapshot.recipes.length + 1}`;
-    if (!settings.task) return;
+  function buildRecipe(id: string, name: string): Recipe | undefined {
+    if (!settings.task) return undefined;
     // The fixes that run before the model; a fix without a model has nothing to keep.
     const recipeFixPrefix = (
       usingTemporalVideo ? [] : restoring ? imageFixes.slice(0, -1) : imageFixes
     ).filter((selection) => selection.model_id);
-    const recipe: Recipe = {
-      id: crypto.randomUUID(),
+    return {
+      id,
       name,
       task: settings.task,
       ...(settings.task === 'video' ? { video_task: videoTask } : {}),
@@ -4099,6 +4101,12 @@
             },
           ],
     };
+  }
+
+  async function addRecipe(): Promise<void> {
+    const name = recipeName.trim() || `My Recipe ${snapshot.recipes.length + 1}`;
+    const recipe = buildRecipe(crypto.randomUUID(), name);
+    if (!recipe) return;
     try {
       await api.saveRecipe(recipe);
     } catch (error) {
@@ -4107,7 +4115,34 @@
     }
     recipeName = '';
     recipeEditorOpen = false;
+    lastAppliedRecipeId = recipe.id;
     await refresh();
+  }
+
+  // The recipe applied last in this session; Update offers to save the changes back to it.
+  let lastAppliedRecipeId = '';
+  $: updatableRecipe = snapshot.recipes.find(
+    (recipe) => recipe.id === lastAppliedRecipeId && !activeRecipeIds.has(recipe.id),
+  );
+
+  async function updateRecipe(): Promise<void> {
+    const target = updatableRecipe;
+    if (!target) return;
+    const recipe = buildRecipe(target.id, target.name);
+    if (!recipe) return;
+    try {
+      await api.saveRecipe(recipe);
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return;
+    }
+    if (api.isTauri()) await refresh();
+    else {
+      snapshot = {
+        ...snapshot,
+        recipes: snapshot.recipes.map((entry) => (entry.id === recipe.id ? recipe : entry)),
+      };
+    }
   }
 
   async function openRecipeEditor(): Promise<void> {
@@ -4131,74 +4166,12 @@
       return;
     }
     upscalerBeforeSameSize = '';
-    const fix_stages = recipeFixStages(recipe, snapshot.catalog);
-    const recipeModel = snapshot.catalog.models.find((model) => model.model_id === recipe.model_id);
-    const targetRestoring = isRestoreRecipe(recipe);
-    const targetTask: TaskKind =
-      recipe.task === 'upscale' && targetRestoring ? 'denoise' : recipe.task;
-    const targetVideoTask =
-      targetTask === 'video' ? (targetRestoring ? 'denoise' : 'upscale') : 'upscale';
-    if (targetTask !== 'video') lastImageTask = targetTask;
-    const migratedFromUpscale1x =
-      targetRestoring &&
-      recipe.task !== 'denoise' &&
-      !(recipe.task === 'video' && recipe.video_task === 'denoise');
-    const recipeQuality: 'quick' | 'best' =
-      recipe.quality === 'quick' || recipe.quality === 'best' ? recipe.quality : 'best';
-    const targetModelId = migratedFromUpscale1x
-      ? (fix_stages.at(-1)?.model_id ??
-        (targetTask === 'video'
-          ? ''
-          : recipeModel?.native_scale === 1
-            ? recipe.model_id
-            : (choosePresetModel(
-                snapshot,
-                'denoise',
-                recipeQuality,
-                recipe.content || settings.content,
-                settings.preset_pins,
-              )?.model_id ?? '')))
-      : recipe.model_id;
+    lastAppliedRecipeId = recipe.id;
+    const patch = recipeSettingsPatch(recipe, snapshot, settings);
+    if (patch.task && patch.task !== 'video') lastImageTask = patch.task;
     updateSettings({
-      task: targetTask,
-      ...(targetTask === 'video' ? { video_task: targetVideoTask } : {}),
-      selected_model_id: targetModelId,
-      selected_video_model_id: targetRestoring
-        ? 'frame_by_frame'
-        : recipe.video_model_id || 'frame_by_frame',
-      fix_stages,
-      custom_model_path: recipe.custom_model_path ?? '',
-      output_scale: targetRestoring
-        ? 1
-        : Math.min(recipeModel?.native_scale ?? recipe.output_scale, recipe.output_scale),
-      output_format: recipe.output_format ?? settings.output_format,
-      output_bit_depth: recipe.output_bit_depth ?? settings.output_bit_depth,
-      preserve_metadata: recipe.preserve_metadata ?? settings.preserve_metadata,
-      jpeg_quality: recipe.jpeg_quality ?? settings.jpeg_quality,
-      tile_size: recipe.tile_size,
-      halo: recipe.halo,
-      precision: recipe.precision,
-      safe_memory: recipe.safe_memory,
-      deflicker: recipe.deflicker ?? settings.deflicker,
-      deflicker_window: recipe.deflicker_window ?? settings.deflicker_window,
-      video_container: recipe.video_container || settings.video_container,
-      video_codec: recipe.video_codec || settings.video_codec || 'auto',
-      external_ffmpeg_path: settings.external_ffmpeg_path ?? '',
-      video_hdr_mode: recipe.video_hdr_mode ?? 'tone_map',
-      video_target_resolution: recipe.video_target_resolution ?? 0,
-      video_low_memory: recipe.video_low_memory ?? true,
-      video_crf: recipe.video_crf ?? settings.video_crf,
-      // Recipes saved before 0.3.7 carry no interpolation, so they run without it.
-      video_interpolation: recipe.video_interpolation || 'off',
-      video_interpolation_order: recipe.video_interpolation_order || 'after_upscale',
-      video_clean_audio: recipe.video_clean_audio ?? false,
-      video_audio_model: recipe.video_audio_model ?? '',
-      enable_face_model: false,
-      face_fidelity: recipe.face_fidelity ?? settings.face_fidelity,
-      allow_unsafe_pickle_model: false,
-      quality: recipe.quality || 'custom',
-      content: recipe.content || settings.content,
-      fixes: fix_stages.map((selection) => selection.fix),
+      ...patch,
+      recipe_recent: recordUse(snapshot.settings.recipe_recent, recipe.id),
     });
     termsAccepted = {};
   }
@@ -4362,6 +4335,7 @@
         reportOpen ||
         settings.privacy_choice_made === false ||
         libraryOpen ||
+        recipesLibraryOpen ||
         settingsOpen ||
         ffmpegNotice ||
         $updateDialogOpen) &&
@@ -4372,7 +4346,9 @@
       if (action.startsWith('preset.recipe.')) {
         const id = action.slice('preset.recipe.'.length);
         const recipe = snapshot.recipes.find((candidate) => candidate.id === id);
+        // A pinned workflow carries its own id; it is not a stored recipe.
         if (recipe) applyRecipe(recipe);
+        else lastAppliedRecipeId = '';
         return;
       }
       switch (action) {
@@ -4700,22 +4676,88 @@
     previewPane?.queueProgressiveTile(message, snapshot.runtime.active_job_id);
   }
 
-  function deleteRecipe(recipeId: string): void {
-    deletingRecipeId = null;
-    void attempt('Could not delete the recipe', async () => {
+  function openRecipesLibrary(): void {
+    recipesLibraryOpen = true;
+  }
+
+  function closeRecipesLibrary(): void {
+    recipesLibraryOpen = false;
+    void tick().then(() => document.querySelector<HTMLButtonElement>('.recipes-trigger')?.focus());
+  }
+
+  function togglePinRecipe(id: string): void {
+    updateSettings({ recipe_pins: togglePin(snapshot.settings.recipe_pins, id) });
+  }
+
+  async function duplicateRecipe(recipe: Recipe): Promise<string | undefined> {
+    if (snapshot.recipes.length >= 100) return undefined;
+    const copy: Recipe = {
+      ...structuredClone(recipe),
+      id: crypto.randomUUID(),
+      name: duplicateName(recipe.name, snapshot.recipes),
+    };
+    try {
+      await api.saveRecipe(copy);
+      if (api.isTauri()) await refresh();
+      else snapshot = { ...snapshot, recipes: [...snapshot.recipes, copy] };
+      return copy.id;
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return undefined;
+    }
+  }
+
+  async function renameRecipe(recipe: Recipe, name: string): Promise<boolean> {
+    const trimmed = name.trim().slice(0, 60);
+    if (!trimmed) return false;
+    const updated: Recipe = { ...structuredClone(recipe), name: trimmed };
+    try {
+      await api.saveRecipe(updated);
+      if (api.isTauri()) await refresh();
+      else {
+        snapshot = {
+          ...snapshot,
+          recipes: snapshot.recipes.map((entry) => (entry.id === updated.id ? updated : entry)),
+        };
+      }
+      return true;
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return false;
+    }
+  }
+
+  async function deleteRecipe(recipeId: string): Promise<boolean> {
+    try {
       await api.deleteRecipe(recipeId);
-      await refresh();
-    });
+      if (api.isTauri()) await refresh();
+      else {
+        snapshot = {
+          ...snapshot,
+          recipes: snapshot.recipes.filter((entry) => entry.id !== recipeId),
+          settings: {
+            ...snapshot.settings,
+            recipe_pins: (snapshot.settings.recipe_pins ?? []).filter((id) => id !== recipeId),
+            recipe_recent: (snapshot.settings.recipe_recent ?? []).filter((id) => id !== recipeId),
+          },
+        };
+      }
+      return true;
+    } catch (error) {
+      showModal('Could not delete the recipe', String(error));
+      return false;
+    }
   }
 
   const enhanceActions: EnhancePanelActions = {
     setTask,
     updateSettings,
     openRecipeEditor,
+    openRecipesLibrary,
     applyPreset,
-    deleteRecipe,
     applyRecipe,
     addRecipe,
+    updateRecipe,
     setContent,
     radioGroupKeydown,
     toggleFix,
@@ -4781,6 +4823,7 @@
     quickDownload,
     bestDownload,
     activeRecipeIds,
+    updatableRecipe,
     sizeResult,
     sizeMaxScale,
     bestModel,
@@ -4810,24 +4853,6 @@
     interpolationSupported,
   };
 </script>
-
-<svelte:window
-  on:click={(event) => {
-    if (deletingRecipeId === null) return;
-    // The path is fixed when the click starts. The X that opened the question is already
-    // gone from the page when this runs, so its row must not be looked up from the target.
-    const inRow = event
-      .composedPath()
-      .some(
-        (node) =>
-          node instanceof Element && node.getAttribute('data-recipe-id') === deletingRecipeId,
-      );
-    if (!inRow) deletingRecipeId = null;
-  }}
-  on:keydown={(event) => {
-    if (event.key === 'Escape') deletingRecipeId = null;
-  }}
-/>
 
 <svelte:head
   ><title>{selectedMedia ? `${selectedMedia.name} — LocalSR` : 'LocalSR'}</title></svelte:head
@@ -5058,7 +5083,6 @@
       bind:editPrompt
       bind:recipeName
       bind:recipeEditorOpen
-      bind:deletingRecipeId
       bind:termsAccepted
       bind:inspectorScroll
       bind:failureNote
@@ -5338,6 +5362,22 @@
     openCustomEdit={() => (customEditOpen = true)}
     openLicense={openAnyLicense}
     openSource={openAnySource}
+  />
+{/if}
+
+{#if recipesLibraryOpen}
+  <RecipesLibrary
+    {snapshot}
+    {settings}
+    {activeRecipeIds}
+    selectedMediaKind={selectedMedia?.kind}
+    busy={settingsLocked}
+    close={closeRecipesLibrary}
+    {applyRecipe}
+    {togglePinRecipe}
+    {duplicateRecipe}
+    {renameRecipe}
+    {deleteRecipe}
   />
 {/if}
 
