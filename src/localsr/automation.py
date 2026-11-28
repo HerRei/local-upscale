@@ -265,19 +265,36 @@ class AutomationRunner:
         if is_video_input(source):
             from localsr.core.external_ffmpeg import ExternalFFmpegError
             from localsr.core.media_bridge import load_media_bridge
-            from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+            from localsr.core.video_pipeline import VideoFixStage, VideoJobConfig, run_video_job
 
             try:
                 user_ffmpeg = load_media_bridge(external_ffmpeg)
             except ExternalFFmpegError as error:
                 raise AutomationError(str(error)) from error
 
+            primary_path, primary_info, stages = model_path, model_info, ()
+            if model_info.architecture == "DDColor":
+                # The colour model returns chroma only, so it runs as the colour stage (key
+                # frames and propagation) with no main model, as the app sends it.
+                primary_path, primary_info = "", None
+                stages = (
+                    VideoFixStage(
+                        model_path=str(model_path),
+                        model_info=model_info,
+                        model_id=model_id,
+                        halo=model.recommended_halo,
+                        fix="colour",
+                        time_factor=model.time_factor,
+                        step_id="colour",
+                    ),
+                )
             result = run_video_job(
                 VideoJobConfig(
                     video_path=str(source),
-                    model_path=model_path,
+                    model_path=primary_path,
                     output_video_path=str(output),
-                    model_info=model_info,
+                    model_info=primary_info,
+                    preprocess_stages=stages,
                     device_str=device,
                     precision_str=precision,
                     tile_size=tile_size,
