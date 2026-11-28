@@ -120,6 +120,7 @@
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { videoAvailability } from './lib/videoEngines';
   import { buildStartInput } from './lib/startInput';
+  import { createStartEstimate } from './lib/startEstimate';
   import { patchPlanEntries, patchRequestKey } from './lib/previewPatch';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
@@ -1527,6 +1528,33 @@
     });
   }
   $: plan = $planState.stages;
+  // The run time on the cost line: asked for what Start would process, never while a job
+  // runs (the host reads every measured run from the queue database to answer).
+  const startEstimate = createStartEstimate();
+  const startSeconds = startEstimate.seconds;
+  $: startEstimate.want(
+    !booting &&
+      settings.task &&
+      settings.task !== 'edit' &&
+      $planState.status === 'ready' &&
+      !snapshot.runtime.active_job_id &&
+      !startingJob &&
+      !movingModels &&
+      queueSelection.length > 0 &&
+      queueSelection.every((media) => media.probe_status === 'ready')
+      ? {
+          mediaIds: queueSelection.map((media) => media.id),
+          input: makeStartInput(
+            queueSelection.map((media) => media.id),
+            settings.task,
+            settings.batch_mode,
+          ),
+          stamp: `${$planState.stages.map((stage) => (stage.installed ? '1' : '0')).join('')}|${
+            snapshot.jobs.filter((job) => job.status === 'completed' && job.elapsed_seconds).length
+          }`,
+        }
+      : null,
+  );
   $: if ($planState.status === 'error' && !planErrorRecorded) {
     planErrorRecorded = true;
     void api.recordFrontendError(`plan_job: ${$planState.message}`, '').catch(() => {});
@@ -5138,6 +5166,7 @@
     acceleratorFailure,
     interpolationSupported,
     patchLink: patchLinkOffer,
+    startSeconds: $startSeconds,
   };
 </script>
 

@@ -24,6 +24,7 @@
     type EnhancePanelActions,
     type EnhancePanelView,
   } from './lib/enhancePanel';
+  import { formatEta } from './lib/eta-display';
   import { formatBytes } from './lib/format';
   import { displayName, fitFor, FIT_LABELS, resultFps, type PlanStage } from './lib/plan';
   import { planMarks } from './lib/jobSteps';
@@ -142,6 +143,7 @@
     acceleratorFailure,
     interpolationSupported,
     patchLink,
+    startSeconds,
   } = view);
 
   $: if (!recipesOpen) {
@@ -260,6 +262,7 @@
     );
   }, 0);
 
+  $: costTime = startSeconds === null ? null : formatEta(startSeconds);
   $: planSteps = planLine(plan, settings, selectedMedia);
   $: activeJobMediaId = snapshot.runtime.active_job_id
     ? (snapshot.jobs.find((job) => job.id === snapshot.runtime.active_job_id)?.media_id ?? '')
@@ -1072,16 +1075,19 @@
             onOpenFfmpegSettings={() => openSettings('storage', 'ffmpeg')}
           />
         </Popover>
-      {/if}{#if costBytes > 0}
+      {/if}{#if costBytes > 0 || costTime}
         <div class="foot-line foot-cost">
-          <span class="foot-cost-download"
-            >{formatBytes(costBytes)} to download<HelpTip
-              label="Downloads"
-              text={`Models download once when you start and stay on this computer. Each file is checked before it is used. Your ${
-                settings.task === 'video' ? 'videos' : 'photos'
-              } never leave it.`}
-            /></span
-          >
+          {#if costTime}<span class="foot-cost-time">about {costTime}</span>{/if}
+          {#if costBytes > 0}
+            <span class="foot-cost-download"
+              >{formatBytes(costBytes)} to download<HelpTip
+                label="Downloads"
+                text={`Models download once when you start and stay on this computer. Each file is checked before it is used. Your ${
+                  settings.task === 'video' ? 'videos' : 'photos'
+                } never leave it.`}
+              /></span
+            >
+          {/if}
         </div>
       {/if}
     </div>

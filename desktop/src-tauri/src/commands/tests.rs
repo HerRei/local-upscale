@@ -6365,3 +6365,128 @@ fn background_models_cannot_be_used_for_primary_or_fix_tasks() {
         assert!(!crate::job_plan::fits_fix(&model, fix));
     }
 }
+
+fn estimate_state() -> (tempfile::TempDir, Arc<AppState>) {
+    const MODELS: [&str; 3] = ["scunet_color_real_psnr", "fbcnn_color", "hat_s_x4"];
+    let directory = tempfile::tempdir().unwrap();
+    let state = Arc::new(AppState::from_paths(AppPaths::under(directory.path())).unwrap());
+    let checkpoint = directory.path().join("model.pth");
+    fs::write(&checkpoint, "weights").unwrap();
+    for id in ["a", "b", "c"] {
+        let image = directory.path().join(format!("{id}.png"));
+        fs::write(&image, "source").unwrap();
+        state.grants.grant_media_file(&image);
+        let database = lock(&state.database).unwrap();
+        database
+            .insert_media(id, image.to_str().unwrap(), &format!("{id}.png"), "image")
+            .unwrap();
+        database
+            .update_media_probe(
+                image.to_str().unwrap(),
+                "image",
+                2000,
+                1500,
+                1,
+                0.0,
+                0.0,
+                "preview",
+                "",
+                "",
+                true,
+            )
+            .unwrap();
+    }
+    for model in &mut lock(&state.catalog).unwrap().models {
+        if MODELS.contains(&model.model_id.as_str()) {
+            model.installed = true;
+            model.installed_path = Some(checkpoint.to_string_lossy().into_owned());
+        }
+    }
+    lock(&state.capabilities).unwrap().system_ram_total = 8 << 30;
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "0".into(),
+        features: vec!["image_multi_fix".into(), "stage_params_and_masks".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    (directory, state)
+}
+
+fn estimate_input(scale: u32) -> StartBatchInput {
+    StartBatchInput {
+        model_id: "hat_s_x4".into(),
+        output_scale: scale,
+        fix_stages: vec![
+            crate::types::FixStageSelection {
+                fix: "jpeg".into(),
+                model_id: "fbcnn_color".into(),
+                ..Default::default()
+            },
+            crate::types::FixStageSelection {
+                fix: "noise".into(),
+                model_id: "scunet_color_real_psnr".into(),
+                ..Default::default()
+            },
+        ],
+        ..input("upscale")
+    }
+}
+
+#[test]
+fn estimate_start_waits_for_two_measured_runs_of_the_same_work() {
+    let (_directory, state) = estimate_state();
+    let ask = |ids: &[&str], scale: u32| {
+        estimate_start_checked(
+            &state,
+            ids.iter().map(|id| (*id).to_owned()).collect(),
+            estimate_input(scale),
+        )
+        .unwrap()
+    };
+    assert_eq!(ask(&["c"], 4), None);
+
+    // The same two-fix plan Start queues, run and measured on two other photos.
+    for (media, seconds) in [("a", 12.0), ("b", 4.0)] {
+        start_jobs_checked(
+            &state,
+            StartBatchInput {
+                media_ids: vec![media.into()],
+                ..estimate_input(4)
+            },
+        )
+        .unwrap();
+        let job = lock(&state.database)
+            .unwrap()
+            .next_queued_job()
+            .unwrap()
+            .unwrap();
+        let database = lock(&state.database).unwrap();
+        database
+            .finish_job(&job.id, "completed", "out.png", "")
+            .unwrap();
+        database.record_job_duration(&job.id, seconds).unwrap();
+        drop(database);
+        if media == "a" {
+            assert_eq!(ask(&["c"], 4), None, "one run is not enough");
+        }
+    }
+    assert_eq!(ask(&["c"], 4), Some(4.0));
+    // A batch is the sum of its items, and any item without a number removes the total.
+    assert_eq!(ask(&["a", "b", "c"], 4), Some(12.0));
+    assert_eq!(ask(&["c", "missing"], 4), None);
+    // Another scale is other work: no number.
+    assert_eq!(ask(&["c"], 2), None);
+    // Settings Start would refuse give an error, not a number.
+    assert!(estimate_start_checked(
+        &state,
+        vec!["c".into()],
+        StartBatchInput {
+            model_id: "no_such_model".into(),
+            ..estimate_input(4)
+        }
+    )
+    .is_err());
+}

@@ -291,6 +291,7 @@ pub fn run() {
             commands::cancel_jobs_for_media,
             commands::start_model_trials,
             commands::estimate_model_trials,
+            commands::estimate_start,
             commands::list_media_results,
             commands::list_all_media_results,
             commands::refresh_capabilities,

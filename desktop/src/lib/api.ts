@@ -439,6 +439,12 @@ export const estimateModelTrials = (
   modelIds: string[],
   baseSettings: StartBatchInput,
 ): Promise<TrialEstimate[]> => invoke('estimate_model_trials', { mediaId, modelIds, baseSettings });
+/** Seconds Start would take for these files, from earlier measured runs; null when unknown. */
+export const estimateStart = (
+  mediaIds: string[],
+  input: StartBatchInput,
+): Promise<number | null> =>
+  isTauri() ? invoke('estimate_start', { mediaIds, input }) : Promise.resolve(null);
 export const cancelJobsForMedia = (mediaId: string, keepPartial = false): Promise<void> =>
   invoke('cancel_jobs_for_media', { mediaId, keepPartial });
 export const probePath = (path: string): Promise<void> => invoke('probe_path', { path });

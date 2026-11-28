@@ -786,16 +786,33 @@ impl Database {
         request: &str,
         media: &MediaItem,
     ) -> AppResult<Option<f64>> {
-        let (key, units) = crate::queue_timing::work_profile(
-            request,
-            media.width,
-            media.height,
-            media.frame_count,
-            &media.hdr_format,
-        );
-        if key.is_empty() || units <= 0.0 {
+        let runs = self.completed_runs()?;
+        Ok(estimate_from_runs(&runs, request, media))
+    }
+
+    /// The time of everything one Start would queue: the sum of each item's estimate, or
+    /// None when any item has none (a total with a hole in it would be too small). The
+    /// measured runs are read once for the whole batch.
+    pub fn estimate_requests_seconds(
+        &self,
+        items: &[(String, &MediaItem)],
+    ) -> AppResult<Option<f64>> {
+        if items.is_empty() {
             return Ok(None);
         }
+        let runs = self.completed_runs()?;
+        let mut total = 0.0;
+        for (request, media) in items {
+            match estimate_from_runs(&runs, request, media) {
+                Some(seconds) => total += seconds,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(total))
+    }
+
+    /// Every completed, measured job as (work profile, units, seconds), newest first.
+    fn completed_runs(&self) -> AppResult<Vec<(String, f64, f64)>> {
         let mut statement = self.connection.prepare(
             "SELECT jobs.request_json, media.width, media.height, media.frame_count, media.hdr_format, jobs.elapsed_seconds
                FROM jobs JOIN media ON media.id = jobs.media_id
@@ -805,18 +822,18 @@ impl Database {
         let mut rows = statement.query([])?;
         let mut runs = Vec::new();
         while let Some(row) = rows.next()? {
-            let (candidate, measured_units) = crate::queue_timing::work_profile(
+            let (key, units) = crate::queue_timing::work_profile(
                 &row.get::<_, String>(0)?,
                 row.get(1)?,
                 row.get(2)?,
                 u64::try_from(row.get::<_, i64>(3)?).unwrap_or_default(),
                 &row.get::<_, String>(4)?,
             );
-            if candidate == key && measured_units > 0.0 {
-                runs.push((measured_units, row.get::<_, f64>(5)?));
+            if !key.is_empty() && units > 0.0 {
+                runs.push((key, units, row.get::<_, f64>(5)?));
             }
         }
-        Ok(crate::queue_timing::typical_seconds_per_unit(&runs).map(|speed| speed * units))
+        Ok(runs)
     }
 
     /// A step of a preview patch that ran (was not answered from the cache). A patch is a
@@ -1186,6 +1203,29 @@ impl Database {
         )?;
         Ok(())
     }
+}
+
+fn estimate_from_runs(
+    runs: &[(String, f64, f64)],
+    request: &str,
+    media: &MediaItem,
+) -> Option<f64> {
+    let (key, units) = crate::queue_timing::work_profile(
+        request,
+        media.width,
+        media.height,
+        media.frame_count,
+        &media.hdr_format,
+    );
+    if key.is_empty() || units <= 0.0 {
+        return None;
+    }
+    let same: Vec<(f64, f64)> = runs
+        .iter()
+        .filter(|(candidate, _, _)| *candidate == key)
+        .map(|(_, measured_units, seconds)| (*measured_units, *seconds))
+        .collect();
+    crate::queue_timing::typical_seconds_per_unit(&same).map(|speed| speed * units)
 }
 
 /// Where a saved job request writes its result: an image or edit output, or a video.

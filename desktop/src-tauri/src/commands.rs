@@ -2120,6 +2120,64 @@ pub fn estimate_model_trials(
         .collect()
 }
 
+/// The run time of what Start would queue now, for the cost line: built from the same
+/// job message Start would send (every stage of the host plan), then looked up in earlier
+/// runs of the same work profile. None means "no honest number": too few measured runs,
+/// or a file that is not ready. A request Start would refuse is an error.
+#[tauri::command]
+pub async fn estimate_start(
+    state: State<'_, Arc<AppState>>,
+    media_ids: Vec<String>,
+    input: StartBatchInput,
+) -> AppResult<Option<f64>> {
+    let state = Arc::clone(&state);
+    tauri::async_runtime::spawn_blocking(move || estimate_start_checked(&state, media_ids, input))
+        .await
+        .map_err(|error| AppError::Config(format!("Could not estimate the run: {error}")))?
+}
+
+pub(crate) fn estimate_start_checked(
+    state: &AppState,
+    media_ids: Vec<String>,
+    mut input: StartBatchInput,
+) -> AppResult<Option<f64>> {
+    if media_ids.is_empty() || input.task == "edit" {
+        return Ok(None);
+    }
+    input.media_ids.clone_from(&media_ids);
+    input.device = resolve_device(state, &input.device)?;
+    keep_alpha_output_format(&mut input);
+    validate_start(&input, state)?;
+    let selection = resolve_model_selection(state, &input)?;
+    let engine = lock(&state.engine)?.clone();
+    let database = lock(&state.database)?;
+    let mut requests = Vec::with_capacity(media_ids.len());
+    let mut items = Vec::with_capacity(media_ids.len());
+    for id in &media_ids {
+        let Some(media) = database.get_media(id)? else {
+            return Ok(None);
+        };
+        if media.probe_status != "ready" {
+            return Ok(None);
+        }
+        // The work profile ignores paths and ids; these placeholders never run.
+        let message = build_job_message_for_engine(
+            "estimate",
+            &media,
+            Path::new(""),
+            &state.paths.work_root,
+            &input,
+            &selection,
+            engine.as_ref(),
+        )?;
+        requests.push(message.to_string());
+        items.push(media);
+    }
+    let pairs: Vec<(String, &crate::types::MediaItem)> =
+        requests.into_iter().zip(items.iter()).collect();
+    database.estimate_requests_seconds(&pairs)
+}
+
 /// The finished attempts of one media for the result choosers, with catalog
 /// names. `before` is the `next_before` of the previous page.
 #[tauri::command]
