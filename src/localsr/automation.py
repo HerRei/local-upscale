@@ -307,6 +307,9 @@ class AutomationRunner:
 
             manager = ImageManager()
             image_data = manager.load(str(source))
+            if model_info.architecture == "DDColor":
+                # A grey source is saved as luma only; the colour model's whole output is chroma.
+                manager.grayscale = False
             writer = None
             try:
                 if output_scale == 1 and native_scale > 1:

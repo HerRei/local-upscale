@@ -437,3 +437,51 @@ def test_automation_accepts_h264_when_only_an_installed_ffmpeg_can_write_it(monk
     monkeypatch.setattr("localsr.core.media_bridge.implicit_user_ffmpeg", lambda: None)
     with pytest.raises(AutomationError, match="No FFmpeg was found"):
         _validate_automation_args(args)
+
+
+def test_cli_colour_model_keeps_its_colour_for_a_grey_source(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    import numpy as np
+    from PIL import Image
+
+    from localsr import automation
+    from localsr.core.output_writer import OutputWriter
+
+    source = tmp_path / "grey.png"
+    Image.new("L", (16, 12), 128).convert("RGB").save(source)
+    monkeypatch.setattr(
+        automation,
+        "_trusted_model",
+        lambda _model_id: (SimpleNamespace(name="DDColor"), tmp_path / "ddcolor.pth"),
+    )
+    runner = automation.AutomationRunner(Reporter())
+
+    def colourise(**kwargs):
+        writer = OutputWriter((3, 12, 16), dtype=np.uint8, temporary_directory=str(tmp_path))
+        writer.mmap[:] = np.array([200, 120, 60], dtype=np.uint8)[:, None, None]
+        writer.mmap.flush()
+        return writer
+
+    monkeypatch.setattr(
+        runner.adapter, "inspect", lambda _path: SimpleNamespace(scale=1, architecture="DDColor")
+    )
+    monkeypatch.setattr(runner.engine, "process_image", colourise)
+    result = runner.process(
+        source,
+        tmp_path / "out",
+        model_id="ddcolor_modelscope",
+        device="cpu",
+        output_scale=1,
+        output_format="png",
+        video_container="mp4",
+        tile_size=0,
+        halo=0,
+        precision="fp32",
+        preserve_metadata=False,
+        jpeg_quality=95,
+        crf=20,
+    )
+
+    pixels = np.asarray(Image.open(result["output_path"]).convert("RGB"))
+    assert tuple(pixels[0, 0]) == (200, 120, 60)
