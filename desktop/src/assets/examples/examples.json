@@ -8,14 +8,14 @@
     "after": "noise-after.webp",
     "alt": "Example: a noisy photo before and after the Noise fix",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Strawberries ISO denoise test, ISO 12800 photo untouched JPEG from camera",
+      "author": "Alexis Jazz",
+      "url": "https://commons.wikimedia.org/wiki/File:Strawberries_ISO_denoise_test,_ISO_12800_photo_untouched_JPEG_from_camera.jpg",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "Same size · Noise · RealPLKSR Denoise"
     }
   },
   {
@@ -27,14 +27,14 @@
     "after": "jpeg-after.webp",
     "alt": "Example: a heavily compressed JPEG before and after the JPEG fix",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Plaque place des Jacobins, Nantes",
+      "author": "Kalepom",
+      "url": "https://commons.wikimedia.org/wiki/File:Plaque_place_des_Jacobins,_Nantes.jpg",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "Same size · JPEG · FBCNN Color (source saved at JPEG quality 20 by us)"
     }
   },
   {
@@ -46,14 +46,14 @@
     "after": "blur-after.webp",
     "alt": "Example: a photo with camera shake before and after the Blur fix",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Plaque rue la Bourdonnais, Nantes",
+      "author": "Kalepom",
+      "url": "https://commons.wikimedia.org/wiki/File:Plaque_rue_la_Bourdonnais,_Nantes.jpg",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "Same size · Blur · NAFNet GoPro Deblur (motion blur added by us)"
     }
   },
   {
@@ -65,14 +65,14 @@
     "after": "colour-after.webp",
     "alt": "Example: a black-and-white photo before and after the Colour fix",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
-      "licence": "CC0-1.0"
+      "title": "Chicago's Michigan Avenue",
+      "author": "John Vachon (Farm Security Administration)",
+      "url": "https://commons.wikimedia.org/wiki/File:Chicago%27s_Michigan_Avenue_by_John_Vachon,_1940.jpg",
+      "licence": "Public domain (PD-USGov-FSA)"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "Same size · Colour · DDColor"
     }
   },
   {
@@ -83,14 +83,14 @@
     "after": "photo-quick-after.webp",
     "alt": "Example: a photo enlarged 4 times, before and after",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Clothes line in use, Nowa Huta",
+      "author": "Mateusz Konieczny",
+      "url": "https://commons.wikimedia.org/wiki/File:Clothes_line_in_use,_Nowa_Huta.jpg",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "4× · LocalSR Photo S"
     }
   },
   {
@@ -101,14 +101,14 @@
     "after": "photo-best-after.webp",
     "alt": "Example: a photo enlarged 4 times, before and after",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Clothes line in use, Nowa Huta",
+      "author": "Mateusz Konieczny",
+      "url": "https://commons.wikimedia.org/wiki/File:Clothes_line_in_use,_Nowa_Huta.jpg",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "4× · RealPLKSR ×4 NomosWebPhoto"
     }
   },
   {
@@ -119,14 +119,14 @@
     "after": "art-quick-after.webp",
     "alt": "Example: line art enlarged 4 times, before and after",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Colonel Montgomery J. Klaxon - Lil' Monty (separated)",
+      "author": "Jayvee Enaguas (The Harvett Vault)",
+      "url": "https://commons.wikimedia.org/wiki/File:Colonel_Montgomery_J._Klaxon_-_Lil%27_Monty_(separated).png",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "4× · Real-ESRGAN ×4 Anime"
     }
   },
   {
@@ -137,14 +137,14 @@
     "after": "art-best-after.webp",
     "alt": "Example: line art enlarged 4 times, before and after",
     "source": {
-      "title": "Placeholder until the real example is made",
-      "author": "LocalSR",
-      "url": "https://localsr.com",
+      "title": "Colonel Montgomery J. Klaxon - Lil' Monty (separated)",
+      "author": "Jayvee Enaguas (The Harvett Vault)",
+      "url": "https://commons.wikimedia.org/wiki/File:Colonel_Montgomery_J._Klaxon_-_Lil%27_Monty_(separated).png",
       "licence": "CC0-1.0"
     },
     "made": {
       "app": "0.7.0",
-      "settings": "Placeholder"
+      "settings": "4× · ESRGAN ×4 HFA2k"
     }
   }
 ]
