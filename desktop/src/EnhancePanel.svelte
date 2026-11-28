@@ -88,6 +88,7 @@
     radioGroupKeydown,
     toggleFix,
     seeFixOnPhoto,
+    showCropGuide,
     setSize,
     openLibrary,
     moveFix,
@@ -682,6 +683,7 @@
                 {openLibrary}
                 {toggleFix}
                 {seeFixOnPhoto}
+                {showCropGuide}
                 {radioGroupKeydown}
                 {patchLink}
                 {updateSettings}

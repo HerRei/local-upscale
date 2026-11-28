@@ -98,6 +98,7 @@
     presetSlot,
     type PlanStage,
   } from './lib/plan';
+  import { withStepStage } from './lib/stepRows';
   import { createPlanClient, fetchPlan } from './lib/jobPlanClient';
   import {
     chooseFixModel,
@@ -2868,6 +2869,7 @@
       else if (selectedMedia?.hdr_format) {
         next.precision = 'fp32';
         next.deflicker = false;
+        next.step_stages = withStepStage(next.step_stages, 'stabilise', null);
         next.video_interpolation = 'off';
       }
     }
@@ -4045,6 +4047,12 @@
     if (!findDownloadModel(target.model_id)?.installed) patchForceNext = false;
   }
 
+  let cropGuide: number | null = null;
+
+  function showCropGuide(fraction: number | null): void {
+    cropGuide = fraction;
+  }
+
   function seeFixOnPhoto(fix: FixKind): void {
     page = 'preview';
     previewPane?.showPatchStep(fix);
@@ -5091,6 +5099,7 @@
     radioGroupKeydown,
     toggleFix,
     seeFixOnPhoto,
+    showCropGuide,
     setSize,
     openLibrary,
     moveFix,
@@ -5360,6 +5369,7 @@
             !(selectedMedia.kind === 'video' && videoChoice.pinned),
           )}
           {videoEngineBusy}
+          {cropGuide}
           activeTileSize={snapshot.runtime.active_tile_size}
           stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
             ? activeStepPreview

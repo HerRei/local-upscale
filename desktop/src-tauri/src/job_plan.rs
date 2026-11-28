@@ -445,10 +445,14 @@ pub fn resolve_plan(
     let by_id =
         |id: &str| -> Option<&CatalogModel> { catalog.models.iter().find(|m| m.model_id == id) };
     let step_stages = active_step_stages(steps, settings, options.using_temporal_video);
-    for (selection, step, placement) in &step_stages {
-        if *placement == StepPlacement::BeforeFixes {
-            stages.push(step_stage_row(catalog, settings, selection, step));
-        }
+    // In the registry's order, whatever order they were ticked in: Stabilise follows Deinterlace.
+    let mut leading: Vec<_> = step_stages
+        .iter()
+        .filter(|(_, _, placement)| *placement == StepPlacement::BeforeFixes)
+        .collect();
+    leading.sort_by_key(|(_, step, _)| (steps.phase_index(&step.phase), step.order));
+    for (selection, step, _) in leading {
+        stages.push(step_stage_row(catalog, settings, selection, step));
     }
     // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
     let leading_steps = stages.len();
@@ -1400,6 +1404,91 @@ mod tests {
             &PlanOptions::default(),
         );
         assert!(photo.iter().all(|stage| stage.kind != "deinterlace"));
+    }
+
+    #[test]
+    fn stabilise_follows_deinterlace_in_a_frame_by_frame_video_plan() {
+        use crate::types::StepStageSelection;
+
+        let catalog = crate::catalog::bundled_catalog().unwrap();
+        let steps = crate::steps::registry();
+        let stage = |step: &str, params: serde_json::Value| StepStageSelection {
+            step: step.into(),
+            params: params.as_object().cloned(),
+            ..StepStageSelection::default()
+        };
+        let stabilise = stage("stabilise", serde_json::json!({"smoothing": "medium"}));
+        let video = UiSettings {
+            task: "video".into(),
+            video_task: "upscale".into(),
+            selected_video_model_id: "frame_by_frame".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 2,
+            // Stored in the opposite order: the plan runs by the registry's order.
+            step_stages: vec![
+                stabilise.clone(),
+                stage(
+                    "deinterlace",
+                    serde_json::json!({"mode": "frame", "parity": "tff"}),
+                ),
+            ],
+            ..UiSettings::default()
+        };
+        let kinds = |plan: &[PlanStage]| {
+            plan.iter()
+                .map(|stage| stage.kind.clone())
+                .collect::<Vec<_>>()
+        };
+        let plan = resolve_plan(&catalog, steps, &video, &PlanOptions::default());
+        assert_eq!(kinds(&plan), ["deinterlace", "stabilise", "upscale"]);
+        assert_eq!(plan[1].role, "step");
+
+        let alone = UiSettings {
+            video_task: "denoise".into(),
+            selected_model_id: String::new(),
+            output_scale: 1,
+            step_stages: vec![stabilise.clone()],
+            ..video.clone()
+        };
+        assert_eq!(
+            kinds(&resolve_plan(
+                &catalog,
+                steps,
+                &alone,
+                &PlanOptions::default()
+            )),
+            ["stabilise"]
+        );
+
+        let seedvr2 = catalog
+            .video_models
+            .iter()
+            .find(|model| model.model_id == "seedvr2_3b")
+            .unwrap();
+        let temporal = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                selected_video_model_id: "seedvr2_3b".into(),
+                ..video.clone()
+            },
+            &PlanOptions {
+                using_temporal_video: true,
+                selected_video_model: Some(seedvr2),
+                ..PlanOptions::default()
+            },
+        );
+        assert!(temporal.iter().all(|stage| stage.kind != "stabilise"));
+        let photo = resolve_plan(
+            &catalog,
+            steps,
+            &UiSettings {
+                task: "upscale".into(),
+                ..video
+            },
+            &PlanOptions::default(),
+        );
+        assert!(photo.iter().all(|stage| stage.kind != "stabilise"));
     }
 
     #[test]

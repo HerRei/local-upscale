@@ -62,6 +62,7 @@ export function stepName(
   if (step.kind === 'face_restore') return 'Faces';
   if (step.kind === 'remove_background') return 'Background';
   if (step.kind === 'deinterlace') return 'Deinterlace';
+  if (step.kind === 'stabilise') return 'Stabilise';
   return (
     step.label ??
     STEPS.find((entry) => entry.id === step.kind)?.label ??

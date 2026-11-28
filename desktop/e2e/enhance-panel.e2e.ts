@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { cutout, ready, slow, strength, tape, video } from './fixtures';
+import { cutout, ready, shaky, slow, strength, tape, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -410,4 +410,49 @@ test("Slow motion: the option's text is not cut in the select and the head fits"
       els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
     );
   expect(cut).toEqual([]);
+});
+
+const crop = (page: Page) => page.locator('.crop-guide');
+
+test('Stabilise: ticking moves no other row and changes no number in the head', async ({
+  page,
+}) => {
+  await openApp(page, shaky);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  const group = page.getByRole('group', { name: 'Fix' });
+  const names = () => group.locator('.fix-name').allTextContents();
+  const headBefore = await page.locator('.panel-head-value.field-value').textContent();
+  const before = await names();
+  expect(before[0]).toBe('Stabilise');
+  const tops = () =>
+    group
+      .locator('.fix-row')
+      .evaluateAll((rows) => rows.map((row) => row.getBoundingClientRect().top));
+  const topsBefore = await tops();
+  await fix(page, 'Stabilise').check();
+  await expect(value(page, 'Stabilise')).toHaveText('Medium');
+  expect(await names()).toEqual(before);
+  expect(await tops()).toEqual(topsBefore);
+  await expect(page.locator('.panel-head-value.field-value')).toHaveText(headBefore ?? '');
+  await expect(page.locator('.foot-plan')).toHaveText(/^Stabilise/);
+});
+
+test('Stabilise: the band shows while the popover is open and goes when it closes', async ({
+  page,
+}) => {
+  await openApp(page, shaky);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await fix(page, 'Stabilise').check();
+  await expect(crop(page)).toHaveCount(0);
+  await value(page, 'Stabilise').click();
+  await expect(crop(page)).toHaveAttribute('data-crop', '0.05');
+  await page
+    .getByRole('radiogroup', { name: 'Smoothing' })
+    .getByRole('radio', { name: 'Strong' })
+    .click();
+  await expect(crop(page)).toHaveAttribute('data-crop', '0.08');
+  await page.keyboard.press('Escape');
+  await expect(crop(page)).toHaveCount(0);
 });

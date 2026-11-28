@@ -13001,3 +13001,247 @@ describe('Strength', () => {
     expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
   });
 });
+
+describe('Stabilise', () => {
+  function shakySnapshot(listed = true): AppSnapshot {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), fps: 25, width: 1920, height: 1080 },
+    ]);
+    if (listed) snapshot.engine!.features.push('video_stabilise', 'stage_params_and_masks');
+    snapshot.catalog.models.forEach((model) => (model.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const box = () =>
+    screen.queryByRole('checkbox', { name: 'Stabilise' }) as HTMLInputElement | null;
+  const head = () =>
+    document.querySelector('[aria-label="Result"] .panel-head-value')?.textContent ?? '';
+  const guide = () => document.querySelector('.crop-guide');
+  const stage = (smoothing: string) => ({ step: 'stabilise', params: { smoothing } });
+
+  it('is the first checkbox of the group Fix, unticked, with Labs', async () => {
+    await mountWith(shakySnapshot());
+    const boxes = within(fixGroup()).getAllByRole('checkbox');
+    expect(boxes[0]).toBe(box());
+    expect(box()!.checked).toBe(false);
+    const row = box()!.closest('.fix-row') as HTMLElement;
+    expect(within(row).getByText('Labs')).toBeTruthy();
+    expect(row.getAttribute('title')).toBe(
+      'Steadies shaky handheld video. The picture is enlarged a little so its moving edges stay out of view.',
+    );
+  });
+
+  it('is not there for a photo, without the feature, or with SeedVR2', async () => {
+    const photo = shakySnapshot();
+    photo.media = [image('photo', true)];
+    photo.settings.task = 'upscale';
+    await mountWith(photo);
+    expect(box()).toBeNull();
+    cleanup();
+    await mountWith(shakySnapshot(false));
+    expect(box()).toBeNull();
+    cleanup();
+    const temporal = shakySnapshot();
+    temporal.settings.selected_video_model_id = temporal.catalog.video_models[0].model_id;
+    await mountWith(temporal);
+    expect(box()).toBeNull();
+  });
+
+  it('ticking stores Medium, names the plan line and leaves the Result head alone', async () => {
+    const user = await mountWith(shakySnapshot());
+    const before = head();
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [stage('medium')] }),
+      ),
+    );
+    const value = await within(fixGroup()).findByRole('button', { name: /^Medium/ });
+    expect(value.textContent?.trim()).toBe('Medium');
+    expect(await within(foot()).findByText(/^Stabilise/)).toBeTruthy();
+    expect(head()).toBe(before);
+  });
+
+  it('pressing Strong stores it and leaves the popover open; unticking removes the step', async () => {
+    const user = await mountWith(shakySnapshot());
+    await user.click(box()!);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Medium/ }));
+    const group = await screen.findByRole('radiogroup', { name: 'Smoothing' });
+    expect(
+      within(group)
+        .getAllByRole('radio')
+        .map((radio) => radio.textContent),
+    ).toEqual(['Light', 'Medium', 'Strong']);
+    await user.click(within(group).getByRole('radio', { name: 'Strong' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [stage('strong')] }),
+      ),
+    );
+    expect(screen.getByRole('radiogroup', { name: 'Smoothing' })).toBeTruthy();
+    expect(
+      within(fixGroup())
+        .getByRole('button', { name: /^Strong/ })
+        .textContent?.trim(),
+    ).toBe('Strong');
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+  });
+
+  it('keeps a stored deinterlace step, and the plan line reads Deinterlace → Stabilise', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [
+            { step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } },
+            stage('medium'),
+          ],
+        }),
+      ),
+    );
+    expect(await within(foot()).findByText(/^Deinterlace → Stabilise/)).toBeTruthy();
+    await user.click(box()!);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } }],
+        }),
+      ),
+    );
+  });
+
+  it('HDR kept: disabled and unticked with its title; choosing it drops the stored step', async () => {
+    const kept = shakySnapshot();
+    kept.settings.selected_model_id = 'hat_s_x4';
+    kept.settings.video_hdr_mode = 'preserve';
+    kept.settings.step_stages = [stage('medium')];
+    await mountWith(kept);
+    expect(box()!.checked).toBe(false);
+    expect(box()!.disabled).toBe(true);
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'Not available while HDR is preserved.',
+    );
+    cleanup();
+
+    const snapshot = shakySnapshot();
+    snapshot.media = [{ ...video('hdr', true), hdr_format: 'HLG' }];
+    snapshot.settings.selected_model_id = 'hat_s_x4';
+    snapshot.settings.video_hdr_mode = 'tone_map';
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    const output = await openOutputSheet(user);
+    await user.selectOptions(within(output).getByLabelText('Colour output'), 'preserve');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ video_hdr_mode: 'preserve', step_stages: [] }),
+      ),
+    );
+  });
+
+  it('at Same size with nothing else ticked, Start is on and nothing says Nothing to run', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.settings.output_scale = 1;
+    const user = await mountWith(snapshot);
+    await user.click(box()!);
+    await within(foot()).findByText(/^Stabilise/);
+    expect(screen.queryByText(/Nothing to run/)).toBeNull();
+    expect(
+      (screen.getByRole('button', { name: 'Start selected video' }) as HTMLButtonElement).disabled,
+    ).toBe(false);
+  });
+
+  async function bandFollowsThePopover(): Promise<void> {
+    const snapshot = shakySnapshot();
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    await within(fixGroup()).findByRole('button', { name: /^Medium/ });
+    await waitFor(() =>
+      expect(document.querySelector('.canvas-well video, .source-image')).toBeTruthy(),
+    );
+    expect(guide()).toBeNull();
+    await user.click(within(fixGroup()).getByRole('button', { name: /^Medium/ }));
+    await waitFor(() => expect(guide()?.getAttribute('data-crop')).toBe('0.05'));
+    await user.click(await screen.findByRole('radio', { name: 'Strong' }));
+    await waitFor(() => expect(guide()?.getAttribute('data-crop')).toBe('0.08'));
+    await user.keyboard('{Escape}');
+    await waitFor(() => expect(guide()).toBeNull());
+  }
+
+  it('dims the crop over a clip that plays alone while the popover is open', async () => {
+    api.prepareVideoComparison.mockResolvedValue({
+      original_url: 'asset://localhost/original.mp4',
+      enhanced_url: '',
+    });
+    try {
+      await bandFollowsThePopover();
+    } finally {
+      api.prepareVideoComparison.mockResolvedValue({
+        original_url: 'asset://localhost/original.mp4',
+        enhanced_url: 'asset://localhost/enhanced.mp4',
+      });
+    }
+  });
+
+  it('dims the crop over the still picture while the popover is open', async () => {
+    api.prepareVideoComparison.mockRejectedValue(new Error('no player'));
+    try {
+      await bandFollowsThePopover();
+    } finally {
+      api.prepareVideoComparison.mockResolvedValue({
+        original_url: 'asset://localhost/original.mp4',
+        enhanced_url: 'asset://localhost/enhanced.mp4',
+      });
+    }
+  });
+
+  it('draws no band over a finished comparison', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Medium/ }));
+    await screen.findByRole('radiogroup', { name: 'Smoothing' });
+    expect(guide()).toBeNull();
+  });
+
+  it('names the step in the Plan sheet with its crop', async () => {
+    const snapshot = shakySnapshot();
+    snapshot.settings.step_stages = [stage('medium')];
+    const user = await mountWith(snapshot);
+    await user.click(document.querySelector('.foot-plan') as HTMLButtonElement);
+    const sheet = screen.getByRole('group', { name: 'Plan' });
+    expect(within(sheet).getByText('Medium · cuts 5 % off each edge')).toBeTruthy();
+    expect(within(sheet).queryByRole('button', { name: /Stabilise/ })).toBeNull();
+  });
+
+  it('a stored step stays on an engine without the feature, and cannot be opened', async () => {
+    const snapshot = shakySnapshot(false);
+    snapshot.settings.step_stages = [stage('medium')];
+    await mountWith(snapshot);
+    expect(box()!.checked).toBe(true);
+    expect(box()!.closest('.fix-row')!.getAttribute('title')).toBe(
+      'This engine cannot stabilise. Update LocalSR.',
+    );
+    expect(
+      (within(fixGroup()).getByRole('button', { name: /^Medium/ }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+  });
+});

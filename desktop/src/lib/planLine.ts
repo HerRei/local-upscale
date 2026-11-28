@@ -91,6 +91,7 @@ function stageStepName(
   if (stage.kind === 'face_restore') return 'Faces';
   if (stage.kind === 'remove_background') return 'Background';
   if (stage.kind === 'deinterlace') return deinterlaceName(scanChoice(settings), fps);
+  if (stage.kind === 'stabilise') return 'Stabilise';
   return stage.label;
 }
 

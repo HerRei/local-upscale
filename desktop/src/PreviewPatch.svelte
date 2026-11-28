@@ -263,7 +263,8 @@
       <span class="patch-grip" title="Drag to move · arrow keys move it" aria-hidden="true">⠿</span>
       {#if video}<span
           class="patch-label"
-          title="De-flicker, added frames and sound cannot be shown on one frame.">This frame</span
+          title="Stabilise, De-flicker, added frames and sound cannot be shown on one frame."
+          >This frame</span
         >{/if}
       <StepChips chips={stepChips} ariaLabel="Preview steps" onSelect={pick} />
       <span class="patch-state" role="status">

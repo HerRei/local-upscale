@@ -6,16 +6,17 @@ import type { CatalogModel, ModelDownloadStatus, UiSettings } from './types';
 
 export interface RowChoice {
   /** The parameter it writes and the radiogroup's accessible name. */
-  param: 'strength';
-  name: 'Strength';
-  options: readonly { value: number; label: string; title: string }[];
+  param: 'strength' | 'smoothing';
+  name: 'Strength' | 'Smoothing';
+  options: readonly { value: number | string; label: string; title: string }[];
   /** The value of an entry that does not name the parameter. */
-  fallback: number;
+  fallback: number | string;
 }
 
 export interface FixRow {
   id: string;
-  source: 'fix_stage' | 'setting';
+  /** `step_stage`: an entry of `settings.step_stages`. */
+  source: 'fix_stage' | 'setting' | 'step_stage';
   label: string;
   title: string;
   tag: '' | 'Labs';
@@ -71,13 +72,57 @@ export function choiceShown(
   return Boolean(row.choice) && (features.includes(STRENGTH_FEATURE) || strengthOf(entry) < 1);
 }
 
+/** Steps whose Fix row is ticked by an entry in `settings.step_stages`. */
+export const STEP_ROWS = new Set<string>(['stabilise']);
+
+export const STABILISE_STEP = 'stabilise';
+export type Smoothing = 'light' | 'medium' | 'strong';
+
+/** The crop is the engine's (`SMOOTHING` levels in stabilise.py): a fraction of each edge. */
+export const SMOOTHING_STOPS = [
+  {
+    value: 'light',
+    label: 'Light',
+    title: "Evens out the camera's path over half a second · cuts 3 % off each edge",
+    crop: 0.03,
+  },
+  {
+    value: 'medium',
+    label: 'Medium',
+    title: "Evens out the camera's path over one second · cuts 5 % off each edge",
+    crop: 0.05,
+  },
+  {
+    value: 'strong',
+    label: 'Strong',
+    title: "Evens out the camera's path over two seconds · cuts 8 % off each edge",
+    crop: 0.08,
+  },
+] as const;
+
+/** The entry's smoothing; an entry that names none (or an unknown one) reads as Medium. */
+export function smoothingOf(entry: { params?: Record<string, unknown> } | undefined): Smoothing {
+  const value = entry?.params?.smoothing;
+  return value === 'light' || value === 'strong' ? value : 'medium';
+}
+
+export function smoothingStop(smoothing: Smoothing): (typeof SMOOTHING_STOPS)[number] {
+  return SMOOTHING_STOPS.find((stop) => stop.value === smoothing) ?? SMOOTHING_STOPS[1];
+}
+
+/** `Medium · cuts 5 % off each edge`: the Plan sheet's note for the step. */
+export function smoothingNote(smoothing: Smoothing): string {
+  const stop = smoothingStop(smoothing);
+  return `${stop.label} · ${stop.title.split(' · ')[1]}`;
+}
+
 export const SETTING_ROWS: Record<string, keyof UiSettings> = {
   deflicker: 'deflicker',
 };
 
-export const LABS_ROWS = new Set<string>(['deflicker']);
+export const LABS_ROWS = new Set<string>(['deflicker', 'stabilise']);
 
-const COMMON_ROWS = new Set<string>(['blur', 'jpeg', 'noise', 'deflicker']);
+const COMMON_ROWS = new Set<string>(['blur', 'jpeg', 'noise', 'deflicker', 'stabilise']);
 
 interface RowCopy {
   label: string;
@@ -111,6 +156,12 @@ function copyForRow(step: StepDefinition, media: 'image' | 'video'): RowCopy {
         label: 'Colour',
         title: `Adds colour to black-and-white ${media === 'video' ? 'videos' : 'photos'}`,
       };
+    case 'stabilise':
+      return {
+        label: 'Stabilise',
+        title:
+          'Steadies shaky handheld video. The picture is enlarged a little so its moving edges stay out of view.',
+      };
     case 'deflicker':
       return {
         label: 'De-flicker',
@@ -123,7 +174,7 @@ function copyForRow(step: StepDefinition, media: 'image' | 'video'): RowCopy {
 }
 
 function isFixListStep(step: StepDefinition): boolean {
-  return step.is_fix_stage || Object.hasOwn(SETTING_ROWS, step.id);
+  return step.is_fix_stage || Object.hasOwn(SETTING_ROWS, step.id) || STEP_ROWS.has(step.id);
 }
 
 /** Order of Fix rows in the panel, by registry phase and order. */
@@ -146,12 +197,16 @@ export function fixRowOrder(
     .map((step) => step.id);
 }
 
-/** Fix rows offered for this media kind and engine feature set, in `fixRowOrder`. */
+/**
+ * Fix rows offered for this media kind and engine feature set, in `fixRowOrder`. A step stored in
+ * `stored` keeps its row whatever the engine lists, so it can still be unticked.
+ */
 export function fixRows(
   media: 'image' | 'video',
   features: readonly string[],
   steps: readonly StepDefinition[] = STEPS,
   phases: readonly string[] = PHASES,
+  stored: readonly string[] = [],
 ): FixRow[] {
   const order = fixRowOrder(steps, phases);
   const rank = new Map(order.map((id, index) => [id, index]));
@@ -160,7 +215,9 @@ export function fixRows(
       (step) =>
         isFixListStep(step) &&
         step.media.includes(media) &&
-        (!step.required_feature || features.includes(step.required_feature)),
+        (!step.required_feature ||
+          features.includes(step.required_feature) ||
+          (STEP_ROWS.has(step.id) && stored.includes(step.id))),
     )
     .sort(
       (left, right) =>
@@ -171,11 +228,25 @@ export function fixRows(
       const copy = copyForRow(step, media);
       return {
         id: step.id,
-        source: Object.hasOwn(SETTING_ROWS, step.id) ? 'setting' : 'fix_stage',
+        source: STEP_ROWS.has(step.id)
+          ? 'step_stage'
+          : Object.hasOwn(SETTING_ROWS, step.id)
+            ? 'setting'
+            : 'fix_stage',
         label: copy.label,
         title: copy.title,
         tag: LABS_ROWS.has(step.id) ? 'Labs' : '',
         common: COMMON_ROWS.has(step.id),
+        ...(step.id === STABILISE_STEP
+          ? {
+              choice: {
+                param: 'smoothing' as const,
+                name: 'Smoothing' as const,
+                options: SMOOTHING_STOPS,
+                fallback: 'medium',
+              },
+            }
+          : {}),
         ...(takesStrength(step.id, steps)
           ? {
               choice: {

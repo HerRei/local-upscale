@@ -262,18 +262,26 @@ fn the_patch_plan_leaves_video_only_steps_out() {
     let mut video = input();
     video.task = "video".into();
     video.video_model_id = "frame_by_frame".into();
-    video.step_stages = vec![StepStageSelection {
-        step: "deinterlace".into(),
-        params: serde_json::from_str(r#"{"mode": "field", "parity": "auto"}"#).ok(),
-        mask_path: None,
-        model_id: None,
-    }];
+    video.step_stages = vec![
+        StepStageSelection {
+            step: "deinterlace".into(),
+            params: serde_json::from_str(r#"{"mode": "field", "parity": "auto"}"#).ok(),
+            mask_path: None,
+            model_id: None,
+        },
+        StepStageSelection {
+            step: "stabilise".into(),
+            params: serde_json::from_str(r#"{"smoothing": "medium"}"#).ok(),
+            mask_path: None,
+            model_id: None,
+        },
+    ];
     request_checked(&harness.state, video_ask(&harness, video)).unwrap();
     let sent = harness.messages();
     let stages = sent[0]["data"]["stages"].as_array().unwrap();
     assert!(stages
         .iter()
-        .all(|stage| stage["kind"].as_str() != Some("deinterlace")));
+        .all(|stage| !matches!(stage["kind"].as_str(), Some("deinterlace" | "stabilise"))));
 }
 
 #[test]

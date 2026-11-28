@@ -261,4 +261,8 @@ describe('jobSteps', () => {
   it('names the deinterlace step Deinterlace', () => {
     expect(stepName(step({ kind: 'deinterlace' }), settings)).toBe('Deinterlace');
   });
+
+  it('names the stabilise step Stabilise', () => {
+    expect(stepName(step({ kind: 'stabilise' }), settings)).toBe('Stabilise');
+  });
 });
