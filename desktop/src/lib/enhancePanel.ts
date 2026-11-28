@@ -110,15 +110,43 @@ export function outputSummary(
     return [container, codecName, hdr, crf, audio, folder].filter(Boolean).join(' · ');
   }
   // A step that sets the alpha saves in a format that keeps it, as the start input does.
-  const saved = outputFormatKeepingAlpha(
-    activeStepStages(settings, false, options.steps).map(({ selection }) => selection),
-    settings.output_format,
-    options.steps,
-  );
+  const saved = savedPhotoFormat(settings, options.steps);
   const format = PHOTO_FORMAT_NAMES[saved] ?? saved.toUpperCase();
   const formatPart = imageQualityName(saved) ? `${format} ${settings.jpeg_quality}` : format;
-  const note = saved === settings.output_format ? '' : ALPHA_FORMAT_NOTE;
-  return [formatPart, folder, note].filter(Boolean).join(' · ');
+  const transparent = setsAlpha(settings, options.steps) ? 'transparent' : '';
+  return [formatPart, transparent, folder].filter(Boolean).join(' · ');
+}
+
+/** Whether a stored step sets the alpha channel of the photo it runs on. */
+export function setsAlpha(
+  settings: Pick<UiSettings, 'task' | 'step_stages'>,
+  steps?: readonly StepDefinition[],
+): boolean {
+  return activeStepStages(settings, false, steps).some(({ step }) => step.output_alpha === true);
+}
+
+/** The format a photo job saves in: the chosen one, or PNG when a step needs transparency. */
+export function savedPhotoFormat(
+  settings: Pick<UiSettings, 'task' | 'step_stages' | 'output_format'>,
+  steps?: readonly StepDefinition[],
+): UiSettings['output_format'] {
+  return outputFormatKeepingAlpha(
+    activeStepStages(settings, false, steps).map(({ selection }) => selection),
+    settings.output_format,
+    steps,
+  );
+}
+
+/** The Output line, plus why the format differs when a transparent result replaced it. */
+export function outputTitle(
+  settings: UiSettings,
+  options: Parameters<typeof outputSummary>[1] = {},
+): string {
+  const summary = outputSummary(settings, options);
+  if (settings.task === 'video') return summary;
+  return savedPhotoFormat(settings, options.steps) === settings.output_format
+    ? summary
+    : `${summary} · ${ALPHA_FORMAT_NOTE}`;
 }
 
 export interface EnhancePanelView {

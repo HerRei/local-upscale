@@ -74,9 +74,9 @@ them are complete without them.
 | `Medium ▾`, `Natural ▾`, `Crop to fit ▾` | No parameters on any fix. | The model name is the value. |
 | `Auto` switch, hints (`· looks compressed`, `2 found`) | No detector. "Nothing ticks itself" (size-decides.md:46) holds. | Absent. The Fix head has room on the right. |
 | `More ▾` in Content (Scan, Tape, Film, Anime) | `content` is `photo` or `illustration` (`types.ts:60`, `:382`). | Two segments. |
-| `Scan` row | Flagged frames are deinterlaced silently; 50 fps from fields is engine work. | Absent; its place is between Content and the Fix head. |
+| `Scan` row | Flagged frames are deinterlaced silently; 50 fps from fields is engine work. | Absent; its place is between Content and the Fix head. Specified in `docs/design/scan-and-background.md`. |
 | `Detail: Faithful ▾` | No creative upscaler in the catalog. | Absent; Quality's row keeps the space. |
-| `Backgr.` row | No background removal (#189). | Absent; its place is the last row of Result. |
+| `Backgr.` row | No background removal (#189). | Built as `Keep` / `Remove`, see `docs/design/scan-and-background.md`. |
 | `…` in Size, `long edge 4000 px` | `output_scale` is a whole number from 1 to 4; only SeedVR2 and FlashVSR take a pixel target (`App.svelte:5345-5372`). | Four segments. |
 | `ISO 3200`, `PAL DV` in the head | `MediaItem` carries size, frames, rate, duration and HDR (`types.ts:166-185`); no EXIF, no codec. | Size and file type for photos; size, rate and duration for videos. |
 | Panel (e): `14 of 30`, `3 different plans`, `2 files set by hand` | One start carries one set of settings for all its files (`StartBatchInput`, `types.ts:722-730`), and there is no multi-selection: the choice is "this one" or "all" (`scopeChoice`, `App.svelte:1013-1018`). | A batch uses the panel as it is. `Only this one` and `Upscale all 30` stay in the status bar. |
@@ -1040,7 +1040,7 @@ Where the tool waves put their parts. None of this is built now.
 | `Scan` | a deinterlace step exists and the file is flagged interlaced or Content is Tape | a row with a native select under Content. |
 | `More ▾` in Content | `content` has more than two values for the media | third segment; a chosen domain takes its place. |
 | `Detail` | the catalog has a creative upscaler | a select right of the Quality segments, 120 px. |
-| `Backgr.` | a background step exists | last row of Result, `Keep` / `Remove` / `Colour ▾`. |
+| `Backgr.` | a background step exists | last row of Result, `Keep` / `Remove` (`Colour ▾` waits; see `docs/design/scan-and-background.md`). |
 | `…` in Size | the host takes a long-edge target for photos | fifth segment; the label `Same` is already short for it. |
 | Mixed batch | the host takes per-file plans | the checkbox's `indeterminate` state with `14 of 30` as the value, a click on it opens `For all 30: On / Off`; the plan line reads `3 different plans`. |
 

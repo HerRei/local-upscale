@@ -118,7 +118,6 @@ describe('step registry', () => {
     expect(grain.required_feature).toBe('image_grain');
     expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual([
       'deinterlace',
-      'remove_background',
       'grain',
     ]);
     expect(STEP_LIMITS.max_step_stages).toBe(3);

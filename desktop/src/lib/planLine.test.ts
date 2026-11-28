@@ -122,4 +122,14 @@ describe('planLine', () => {
       ).toEqual([expected]);
     }
   });
+
+  it('names the background step Background', () => {
+    expect(
+      planLine(
+        [stage({ kind: 'remove_background', role: 'step', label: 'Remove background' })],
+        baseSettings,
+        photo,
+      ),
+    ).toEqual(['Background']);
+  });
 });

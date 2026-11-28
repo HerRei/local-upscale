@@ -610,10 +610,11 @@ function buildCorpus(): ParityCase[] {
   // 10. Step stages added by id: photos run them, video, temporal models and Edit leave them out
   const grain = { step: 'grain', params: { strength: 40, seed: 7 } };
   const maskedGrain = { ...grain, mask_path: '/in/mask.png' };
+  const background = { step: 'remove_background', model_id: 'birefnet_general' };
   const stepCases: [
     string,
     Partial<UiSettings>,
-    Omit<Parameters<typeof makeCase>[1], 'settingsPatch'>?,
+    (Omit<Parameters<typeof makeCase>[1], 'settingsPatch'> & { installedExtra?: string[] })?,
   ][] = [
     ['upscale', { task: 'upscale', step_stages: [grain] }],
     [
@@ -651,12 +652,38 @@ function buildCorpus(): ParityCase[] {
       { usingTemporalVideo: true, selectedVideoModelId: 'seedvr2_3b' },
     ],
     ['edit', { task: 'edit', step_stages: [grain] }, { editModelId: null }],
+    ['background-missing', { task: 'upscale', output_format: 'jpg', step_stages: [background] }],
+    [
+      'background-installed-tif',
+      { task: 'upscale', output_format: 'tif', step_stages: [background, grain] },
+      { installedExtra: ['birefnet_general'] },
+    ],
+    [
+      'background-restore-alone',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [background],
+      },
+      { installedExtra: ['birefnet_general'] },
+    ],
+    [
+      'background-and-deinterlace-on-a-photo',
+      { task: 'upscale', step_stages: [{ step: 'deinterlace', params: {} }, background] },
+    ],
+    [
+      'background-video',
+      { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [background] },
+    ],
   ];
-  for (const [tag, patch, spec] of stepCases) {
+  for (const [tag, patch, { installedExtra = [], ...spec } = {}] of stepCases) {
     push(`step-stages-${tag}`, {
       ...spec,
       settingsPatch: { selected_model_id: 'span_photo_x4', output_scale: 4, ...patch },
-      installedIds: ['span_photo_x4', 'denoise_realplksr_1x'],
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x', ...installedExtra],
     });
   }
 
@@ -809,6 +836,7 @@ describe('job_plan parity corpus', () => {
         'interpolate',
         'audio_denoise',
         'grain',
+        'remove_background',
         'test_cutout',
         'test_tone',
         'test_key',

@@ -148,7 +148,9 @@ export interface PlanStage {
     | 'deflicker'
     | 'interpolate'
     | 'audio_denoise'
-    | 'grain';
+    | 'grain'
+    | 'remove_background'
+    | 'deinterlace';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
    * Frame interpolation and audio cleanup are set directly and have no Change.

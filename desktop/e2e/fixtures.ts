@@ -15,6 +15,13 @@ export const upscale: Scenario = {
 /** The upscale plan with a ready worker, so Try others… is available. */
 export const ready: Scenario = { ...upscale, worker: 'ready' };
 
+/** A ready engine that can remove backgrounds; BiRefNet is not downloaded. */
+export const cutout: Scenario = {
+  ...ready,
+  features: [...FEATURES, 'image_background_removal', 'stage_params_and_masks'],
+  settings: { ...ready.settings, output_directory: '/Users/test/Desktop' },
+};
+
 /** Two photos; the first has three finished outputs, the second one. */
 export const withOutputs: Scenario = {
   ...upscale,

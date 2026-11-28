@@ -1,7 +1,7 @@
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { ready, video } from './fixtures';
+import { cutout, ready, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -245,4 +245,69 @@ test('the cost line has no time when the host has no estimate', async ({ page })
     .toBeGreaterThan(0);
   await expect(page.locator('.panel-foot')).not.toContainText('about');
   await expect(page.locator('.foot-cost')).toHaveCount(0);
+});
+
+const background = (page: Page) => page.getByRole('radiogroup', { name: 'Background' });
+
+test('Backgr.: Remove fills the plan, the Output line and the cost', async ({ page }) => {
+  await openApp(page, cutout);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  // Clicking a row below the fold scrolls the body, so rows are measured inside its content.
+  const top = (locator: Locator) =>
+    locator.evaluate(
+      (el) =>
+        el.getBoundingClientRect().y -
+        el.closest('.inspector-scroll')!.getBoundingClientRect().y +
+        el.closest('.inspector-scroll')!.scrollTop,
+    );
+  const size = page.getByRole('radiogroup', { name: 'Size' });
+  const quality = page.getByRole('group', { name: 'Quality' });
+  const sizeTop = await top(size);
+  const qualityTop = await top(quality);
+  await background(page).getByRole('radio', { name: 'Remove' }).click();
+  await expect(page.locator('.foot-plan')).toHaveText(/^Background/);
+  await expect(page.locator('.foot-output-value')).toHaveText('PNG · transparent · Desktop');
+  await expect(page.locator('.panel-foot')).toContainText('444 MB to download');
+  expect(Math.abs((await top(size)) - sizeTop)).toBeLessThanOrEqual(0.5);
+  expect(Math.abs((await top(quality)) - qualityTop)).toBeLessThanOrEqual(0.5);
+});
+
+test('Backgr.: arrow keys move between Keep and Remove, and both show a focus ring', async ({
+  page,
+}) => {
+  await openApp(page, cutout);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  const keep = background(page).getByRole('radio', { name: 'Keep' });
+  const remove = background(page).getByRole('radio', { name: 'Remove' });
+  await keep.focus();
+  await page.keyboard.press('ArrowRight');
+  await expect(remove).toBeFocused();
+  await expect(remove).toHaveAttribute('aria-checked', 'true');
+  const ring = (locator: Locator) =>
+    locator.evaluate((el) => {
+      const style = getComputedStyle(el);
+      const outline = style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) > 0;
+      return el.matches(':focus-visible') && (outline || style.boxShadow !== 'none');
+    });
+  expect(await ring(remove)).toBe(true);
+  await page.keyboard.press('ArrowLeft');
+  await expect(keep).toBeFocused();
+  await expect(keep).toHaveAttribute('aria-checked', 'true');
+  expect(await ring(keep)).toBe(true);
+});
+
+test('Backgr.: nothing is cut at 1024 × 700', async ({ page }) => {
+  await openApp(page, cutout);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await background(page).getByRole('radio', { name: 'Remove' }).click();
+  const row = background(page).locator('xpath=ancestor::div[contains(@class, "panel-row")][1]');
+  const cut = await row
+    .locator('.panel-key, .panel-label, .seg-inline button')
+    .evaluateAll((els) =>
+      els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
+    );
+  expect(cut).toEqual([]);
 });

@@ -1238,6 +1238,72 @@ mod tests {
     }
 
     #[test]
+    fn remove_background_is_the_first_row_of_a_photo_plan() {
+        use crate::types::StepStageSelection;
+
+        let steps = crate::steps::registry();
+        let mut catalog = crate::catalog::bundled_catalog().unwrap();
+        for model in &mut catalog.models {
+            if model.model_id == "span_photo_x4" || model.model_id == "denoise_realplksr_1x" {
+                model.installed = true;
+            }
+            if model.model_id == "birefnet_general" {
+                model.installed = false;
+            }
+        }
+        let request = StartRequest {
+            media_ids: vec!["m".into()],
+            task: "upscale",
+            batch_mode: false,
+            recipe_name: "",
+        };
+        let background = StepStageSelection {
+            step: "remove_background".into(),
+            model_id: Some("birefnet_general".into()),
+            ..StepStageSelection::default()
+        };
+        let settings = |format: &str| UiSettings {
+            task: "upscale".into(),
+            selected_model_id: "span_photo_x4".into(),
+            output_scale: 4,
+            output_format: format.into(),
+            fix_stages: vec![crate::types::FixStageSelection {
+                fix: "noise".into(),
+                model_id: "denoise_realplksr_1x".into(),
+                ..Default::default()
+            }],
+            step_stages: vec![background.clone()],
+            ..UiSettings::default()
+        };
+        let plan = |settings: &UiSettings| {
+            plan_job(
+                &catalog,
+                steps,
+                &CapabilityInfo::default(),
+                settings,
+                &PlanOptions::default(),
+                &request,
+            )
+        };
+
+        let jpg = plan(&settings("jpg"));
+        assert_eq!(
+            jpg.stages
+                .iter()
+                .map(|stage| stage.kind.as_str())
+                .collect::<Vec<_>>(),
+            vec!["remove_background", "restore", "upscale"]
+        );
+        let row = &jpg.stages[0];
+        assert_eq!(row.role, "step");
+        assert_eq!(row.model_id.as_deref(), Some("birefnet_general"));
+        assert_eq!(row.size_bytes, 444_473_596);
+        assert!(!row.installed && row.can_download);
+        assert_eq!(jpg.start_input.output_format, "png");
+        assert_eq!(plan(&settings("tif")).start_input.output_format, "tif");
+    }
+
+    #[test]
     fn step_stages_join_the_plan_and_start_input_where_their_media_runs() {
         use crate::types::StepStageSelection;
 

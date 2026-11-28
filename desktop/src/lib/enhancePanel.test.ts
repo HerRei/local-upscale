@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { mediaFacts, outputSummary } from './enhancePanel';
+import { mediaFacts, outputSummary, outputTitle } from './enhancePanel';
 import type { MediaItem } from './types';
 
 function makeMedia(overrides: Partial<MediaItem> = {}): MediaItem {
@@ -70,6 +70,23 @@ describe('mediaFacts', () => {
 });
 
 describe('outputSummary', () => {
+  it('adds transparent and explains a replaced format in the title', () => {
+    const { settings } = demoSnapshot();
+    settings.task = 'upscale';
+    settings.output_directory = '/tmp/Desktop';
+    settings.step_stages = [{ step: 'remove_background', model_id: 'birefnet_general' }];
+    settings.output_format = 'jpg';
+    expect(outputSummary(settings)).toBe('PNG · transparent · Desktop');
+    expect(outputTitle(settings)).toBe(
+      'PNG · transparent · Desktop · Saved as PNG to keep the transparent background.',
+    );
+    settings.output_format = 'tif';
+    expect(outputSummary(settings)).toBe('TIFF · transparent · Desktop');
+    expect(outputTitle(settings)).toBe('TIFF · transparent · Desktop');
+    settings.output_format = 'webp';
+    expect(outputSummary(settings)).toBe(`WebP ${settings.jpeg_quality} · transparent · Desktop`);
+  });
+
   it('omits the folder when includeFolder is false', () => {
     const { settings } = demoSnapshot();
     settings.task = 'upscale';

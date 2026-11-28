@@ -55,6 +55,7 @@ function stageStepName(
   }
   if (stage.kind === 'audio_denoise') return 'Clean audio';
   if (stage.kind === 'face_restore') return 'Faces';
+  if (stage.kind === 'remove_background') return 'Background';
   return stage.label;
 }
 

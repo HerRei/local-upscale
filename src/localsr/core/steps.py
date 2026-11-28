@@ -368,7 +368,6 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Remove background",
         stage_label="Removing background",
         required_feature="image_background_removal",
-        dev_only=True,
         model_task="background",
         output_alpha=True,
     ),

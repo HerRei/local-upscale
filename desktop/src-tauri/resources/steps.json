@@ -637,7 +637,7 @@
       "supports_mask": false
     },
     {
-      "dev_only": true,
+      "dev_only": false,
       "fix_chip_order": null,
       "fix_kind": null,
       "id": "remove_background",

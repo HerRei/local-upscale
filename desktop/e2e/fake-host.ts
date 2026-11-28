@@ -219,6 +219,11 @@ function hostScript(scenario: Scenario): void {
   };
   const patchSteps = (input: Json, replace: Json | null, slot: string, limit: number | null) => {
     const steps: Json[] = [];
+    // The cut-out runs before the fixes, as the plan orders it.
+    for (const stage of input.step_stages ?? []) {
+      if (stage.step === 'remove_background')
+        steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
+    }
     for (const stage of input.fix_stages ?? []) {
       const swapped = replace && slot === replace.slot && replace.fix === stage.fix;
       steps.push({
@@ -228,6 +233,7 @@ function hostScript(scenario: Scenario): void {
       });
     }
     for (const stage of input.step_stages ?? []) {
+      if (stage.step === 'remove_background') continue;
       steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
     }
     if (input.output_scale > 1) {
@@ -1318,6 +1324,15 @@ function hostScript(scenario: Scenario): void {
             emit('state-changed', null);
           });
           clock += delay;
+          if (step.kind === 'remove_background') {
+            // The engine skips a step that changes transparency (patch_preview.py ALPHA_NOTE).
+            later(clock, () => {
+              step.state = 'skipped';
+              step.note = 'This step changes transparency, which the preview patch cannot show.';
+              emit('state-changed', null);
+            });
+            continue;
+          }
           later(clock, () => {
             const upscaled = step.kind === 'upscale' ? scale : 1;
             step.state = 'done';
