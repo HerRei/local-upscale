@@ -778,7 +778,7 @@ the whole text as `title`.
 | `Colour` | `Add natural colour to this black-and-white photo. Keep the faces, the lighting and every detail unchanged.` |
 | `Remove something` | `Remove [the person on the left] and fill the gap with what is behind. Keep everyone and everything else unchanged.` |
 | `New background` | `Replace the background with [a plain light grey wall]. Keep the person, their clothing and the light on them unchanged.` |
-| `Film look` | `Give the photo the look of colour film: slightly warm highlights, soft contrast and fine grain. Keep the subject and the framing unchanged.` |
+| `Film look` | `Give the photo a subtle colour-film look: a little warmer, a little softer contrast and fine grain. Keep the colours natural, and the subject and the framing unchanged.` |
 
 One sentence for the change, one for what to keep, as the field's placeholder is written.
 
@@ -803,6 +803,15 @@ One sentence for the change, one for what to keep, as the field's placeholder is
   on three photos each. A prompt passes when the change happens, the kept things stay by eye,
   and no face changes. A prompt that fails on a family is reworded or leaves that family.
   Mage-Flow-Edit-Turbo and the user's own edit model get no examples.
+
+E0 (2026-11-28), FLUX.2 klein 4B Q4 at 768 px, seed 42, two rounds on three photos per prompt:
+Colour passed on all three. Film look in its first wording turned the photos strongly orange
+with more contrast; the wording above passed. Scratches and dust, Remove something and New
+background redrew small faces on an old colour slide in both rounds (expressions, hair), even
+with "keep every face exactly as it is"; Scratches and dust also cropped the slide's frame
+away, and Remove something left a person in a crowded scene in place. These three carry
+`families: []` until a family passes them. Qwen Image Edit 2511 is not tested: it does not fit
+next to other work on a 16 GB Mac.
 
 ## Files
 

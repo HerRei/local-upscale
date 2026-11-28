@@ -12,6 +12,7 @@ export const PROMPT_EXAMPLES: PromptExample[] = [
     title: 'Scratches and dust',
     prompt:
       'Remove the scratches, dust specks and stains. Keep the faces, the grain and everything else unchanged.',
+    families: [],
   },
   {
     title: 'Colour',
@@ -23,24 +24,28 @@ export const PROMPT_EXAMPLES: PromptExample[] = [
     title: 'Remove something',
     prompt:
       'Remove [the person on the left] and fill the gap with what is behind. Keep everyone and everything else unchanged.',
+    families: [],
   },
   {
     title: 'New background',
     prompt:
       'Replace the background with [a plain light grey wall]. Keep the person, their clothing and the light on them unchanged.',
+    families: [],
   },
   {
     title: 'Film look',
     prompt:
-      'Give the photo the look of colour film: slightly warm highlights, soft contrast and fine grain. Keep the subject and the framing unchanged.',
+      'Give the photo a subtle colour-film look: a little warmer, a little softer contrast and fine grain. Keep the colours natural, and the subject and the framing unchanged.',
   },
 ];
 
 /**
- * Edit model families the examples were tested on (task E0). Empty until then, so the link
- * stays hidden. Mage-Flow-Edit-Turbo and the user's own edit model get no examples.
+ * Edit model families the examples passed on (task E0, 2026-11-28: FLUX.2 klein 4B Q4 at 768 px,
+ * three photos per prompt). Qwen Image Edit 2511 is not tested yet. The prompts with
+ * `families: []` redrew small faces on FLUX.2 klein, so they wait for a family they pass on.
+ * Mage-Flow-Edit-Turbo and the user's own edit model get no examples.
  */
-export const PROMPT_EXAMPLE_FAMILIES: string[] = [];
+export const PROMPT_EXAMPLE_FAMILIES: string[] = ['flux2-klein-4b'];
 
 export function examplesFor(family: string | undefined): PromptExample[] {
   if (!family) return [];

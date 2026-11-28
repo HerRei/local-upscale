@@ -11,7 +11,7 @@ import { demoSnapshot } from './lib/demo';
 import { progressBytes } from './lib/downloadProgress';
 import { formatBytes } from './lib/format';
 import { modelDisplayName } from './lib/modelNames';
-import { PROMPT_EXAMPLE_FAMILIES } from './lib/promptExamples';
+import { PROMPT_EXAMPLES, PROMPT_EXAMPLE_FAMILIES, examplesFor } from './lib/promptExamples';
 import { applyWorkerEnvelope } from './lib/workerEvents';
 import type {
   AppSnapshot,
@@ -1053,10 +1053,21 @@ afterEach(() => {
 
 describe('Prompt examples', () => {
   const QWEN = 'qwen-image-edit-2511';
-  const listFamily = () => {
-    PROMPT_EXAMPLE_FAMILIES.push(QWEN);
+  /** Sets the shared family list for one test and puts the shipped list back afterwards. */
+  const withFamilies = (families: string[]) => {
+    const shipped = [...PROMPT_EXAMPLE_FAMILIES];
+    PROMPT_EXAMPLE_FAMILIES.splice(0, PROMPT_EXAMPLE_FAMILIES.length, ...families);
     onTestFinished(() => {
-      PROMPT_EXAMPLE_FAMILIES.length = 0;
+      PROMPT_EXAMPLE_FAMILIES.splice(0, PROMPT_EXAMPLE_FAMILIES.length, ...shipped);
+    });
+  };
+  /** Lets one entry with its own families show for the test family. */
+  const unlock = (title: string) => {
+    const entry = PROMPT_EXAMPLES.find((example) => example.title === title)!;
+    const own = entry.families;
+    entry.families = [...(own ?? []), QWEN];
+    onTestFinished(() => {
+      entry.families = own;
     });
   };
   const open = async (user: ReturnType<typeof userEvent.setup>) => {
@@ -1065,34 +1076,46 @@ describe('Prompt examples', () => {
     return screen.getByRole('group', { name: 'Prompt examples' });
   };
 
-  it('shows the link with five entries when the family is listed', async () => {
-    listFamily();
+  it('ships FLUX.2 klein with Colour and Film look only', () => {
+    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b']);
+    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual([
+      'Colour',
+      'Film look',
+    ]);
+    expect(examplesFor(QWEN)).toEqual([]);
+  });
+
+  it('shows the link with the entries that passed on the listed family', async () => {
+    withFamilies([QWEN]);
     const user = await mountWith(editSnapshot(36));
     const list = await open(user);
-    expect(within(list).getAllByRole('button')).toHaveLength(5);
+    expect(
+      within(list)
+        .getAllByRole('button')
+        .map((button) => button.textContent),
+    ).toEqual([expect.stringMatching(/^Colour/), expect.stringMatching(/^Film look/)]);
     expect(
       within(list).getByText('Repaints the photo. To only add colour, use Fix \u203a Colour.'),
     );
   });
 
   it('shows no link when the list is empty', async () => {
+    withFamilies([]);
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
     expect(screen.queryByRole('button', { name: 'Examples' })).toBeNull();
   });
 
   it('shows no link for a family that is not listed', async () => {
-    PROMPT_EXAMPLE_FAMILIES.push('flux2-klein-4b');
-    onTestFinished(() => {
-      PROMPT_EXAMPLE_FAMILIES.length = 0;
-    });
+    withFamilies(['flux2-klein-4b']);
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
     expect(screen.queryByRole('button', { name: 'Examples' })).toBeNull();
   });
 
   it('inserts Remove something without brackets and selects the slot', async () => {
-    listFamily();
+    withFamilies([QWEN]);
+    unlock('Remove something');
     const user = await mountWith(editSnapshot(36));
     const list = await open(user);
     await user.click(within(list).getByRole('button', { name: /^Remove something/ }));
@@ -1107,7 +1130,7 @@ describe('Prompt examples', () => {
   });
 
   it('warns about own text and undo gives it back', async () => {
-    listFamily();
+    withFamilies([QWEN]);
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
     const field = screen.getByLabelText('What to change') as HTMLTextAreaElement;
@@ -1115,7 +1138,7 @@ describe('Prompt examples', () => {
     await user.click(screen.getByRole('button', { name: 'Examples' }));
     expect(screen.getByText(/^Replaces your text\./)).toBeTruthy();
     await user.click(screen.getByRole('button', { name: /^Film look/ }));
-    expect(field.value).toMatch(/^Give the photo the look of colour film/);
+    expect(field.value).toMatch(/^Give the photo a subtle colour-film look/);
     await user.keyboard('{Control>}z{/Control}');
     expect(field.value).toBe('My own words');
   });
