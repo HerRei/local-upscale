@@ -42,6 +42,11 @@ PATCH_CACHE_BYTES = 128 * 1024 * 1024
 # time to reduce.
 COLOUR_REDUCED_SIDE = 512
 _COLOUR_PLANES_KEPT = 16
+# DDColor costs about 0.9 GB while idle. It stays loaded between patches only where the device
+# has room for it next to the models a job loads: a 16 GB Mac (11.8 GiB for the GPU) does, an
+# 8 GB one (about 5 GiB) does not.
+COLOUR_RESIDENT_MIN_TOTAL = 10 * 1024**3
+COLOUR_RESIDENT_MIN_FREE = 2 * 1024**3
 _GEOMETRIES_KEPT = 256
 
 FACE_NOTE = "Face restoration is not shown in the preview patch."
@@ -59,6 +64,28 @@ def _file_identity(path: str) -> tuple:
         stat.st_mtime_ns,
         stat.st_ctime_ns,
     )
+
+
+def colour_may_stay_loaded(device: str) -> bool:
+    """Whether this device has memory to keep the Colour model loaded between patches."""
+    try:
+        from localsr.core.hardware import get_memory_snapshot
+
+        snapshot = get_memory_snapshot(device)
+    except Exception:  # noqa: BLE001 - no reading means no reason to hold 0.9 GB
+        return False
+    return (
+        snapshot["device_total_memory"] >= COLOUR_RESIDENT_MIN_TOTAL
+        and snapshot["device_free_memory"] >= COLOUR_RESIDENT_MIN_FREE
+    )
+
+
+def release_resident_colour(engine: Any, cache: PatchCache | None) -> None:
+    """Let go of the Colour model the patches kept: the patch was switched off."""
+    if cache is None or cache.colour_model is None:
+        return
+    path, cache.colour_model = cache.colour_model, None
+    engine.release_model(path)
 
 
 def _model_identity(path: str) -> tuple:
@@ -110,6 +137,10 @@ class PatchCache:
         self.geometries: OrderedDict[tuple, _Geometry] = OrderedDict()
         # (colour planes, picture width, picture height) per file and colour model.
         self.planes: OrderedDict[tuple, tuple[np.ndarray, int, int]] = OrderedDict()
+        # The Colour model a patch left loaded in the engine, so the next photo does not load
+        # it again. The engine owns the weights; jobs, the idle release and memory pressure
+        # release them there, and this only says which model the patches keep.
+        self.colour_model: str | None = None
 
     def clear(self) -> None:
         self.steps.clear()
@@ -321,9 +352,10 @@ class PatchRunner:
             self.model_adapter.status_callback = None
             self.model_adapter.cancel_event = self.cancel_event
             self.runner._take_engine_notes()
-            self.engine.release_models_except(
-                {chip.model_path for chip in chips if chip is not None and chip.model_path}
-            )
+            keep = {chip.model_path for chip in chips if chip is not None and chip.model_path}
+            if self.cache.colour_model is not None:
+                keep.add(self.cache.colour_model)
+            self.engine.release_models_except(keep)
             geometry = self.cache.geometries.get(geometry_key)
             if len(finished) < stage_count and (not finished or geometry is None):
                 source = self._load(path, frame)
@@ -638,6 +670,13 @@ class PatchRunner:
                 self.engine.active_model, picture, device=device, cancel_event=self.cancel_event
             )
         finally:
-            self.engine.release_model(chip.model_path)
+            # The model stays loaded for the next photo while the patch is on and the device
+            # has room: loading it costs more than the prediction. Anything that needs the
+            # memory releases it through the engine like every other warm model.
+            if colour_may_stay_loaded(str(job["device"])):
+                self.cache.colour_model = chip.model_path
+            else:
+                self.cache.colour_model = None
+                self.engine.release_model(chip.model_path)
             self.model_adapter.release()
         return ab[0].numpy(), source.width, source.height

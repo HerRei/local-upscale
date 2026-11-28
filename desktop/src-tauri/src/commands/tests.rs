@@ -2977,6 +2977,50 @@ fn a_result_that_became_a_link_is_not_added() {
 }
 
 #[test]
+fn switching_the_preview_patch_off_tells_the_engine_to_release_the_colour_model() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(directory.path());
+    fs::create_dir_all(&paths.next_root).unwrap();
+    fs::create_dir_all(&paths.model_root).unwrap();
+    let state = AppState::from_paths(paths).unwrap();
+    let (sender, receiver) = std::sync::mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    let release = |expected: bool| {
+        let sent: Vec<Value> = receiver
+            .try_iter()
+            .map(|line| serde_json::from_str(&line).unwrap())
+            .collect();
+        assert_eq!(
+            sent.iter()
+                .any(|message| message["type"] == "patch_release"),
+            expected
+        );
+    };
+
+    // An engine without the feature never kept a model.
+    apply_preference(&state, "preview_patch_shown", &serde_json::json!(false)).unwrap();
+    release(false);
+
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "1".into(),
+        features: vec!["patch_preview".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    apply_preference(&state, "preview_patch_shown", &serde_json::json!(true)).unwrap();
+    release(false);
+    apply_preference(&state, "preview_patch_shown", &serde_json::json!(false)).unwrap();
+    release(true);
+    apply_preference(&state, "preview_patch_shown", &serde_json::json!(true)).unwrap();
+    release(false);
+    apply_preference(&state, "preview_patch", &serde_json::json!("off")).unwrap();
+    release(true);
+}
+
+#[test]
 fn low_priority_switch_saves_while_a_job_runs_and_notifies_the_engine() {
     let directory = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(directory.path());

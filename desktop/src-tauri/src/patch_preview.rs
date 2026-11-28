@@ -205,6 +205,19 @@ pub(crate) fn job_dispatched(state: &AppState) {
     }
 }
 
+/// The preview patch was switched off: the engine lets go of the Colour model it kept loaded
+/// for the next photo. An engine without the feature never kept one.
+pub(crate) fn switched_off(state: &AppState) {
+    let has_feature = lock(&state.engine).ok().is_some_and(|engine| {
+        engine
+            .as_ref()
+            .is_some_and(|engine| engine.features.iter().any(|f| f == "patch_preview"))
+    });
+    if has_feature {
+        let _ = send(state, &json!({"type": "patch_release", "data": {}}));
+    }
+}
+
 /// A new engine process knows no patch: runs that were under way are over.
 pub(crate) fn engine_started(state: &AppState) {
     let Ok(mut runtime) = lock(&state.runtime) else {

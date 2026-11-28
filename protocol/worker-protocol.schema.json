@@ -111,7 +111,9 @@
         { "$ref": "#/$defs/envelope" },
         {
           "properties": {
-            "type": { "enum": ["capabilities_request", "shutdown_request", "region_clear"] },
+            "type": {
+              "enum": ["capabilities_request", "shutdown_request", "region_clear", "patch_release"]
+            },
             "data": { "type": "object", "maxProperties": 0 }
           }
         }
