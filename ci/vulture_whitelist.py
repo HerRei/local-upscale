@@ -158,6 +158,7 @@ total_tiles
 # Step pictures (engine feature stage_results): the request field the Rust host sets and
 # stage_result's skipped flag it reads (protocol/messages.py).
 stage_picture_max_dimension
+stage_results_directory
 skipped
 
 # Vendored mlx_flashvsr symbols kept unmodified for parity with the upstream port.
