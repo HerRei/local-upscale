@@ -6,13 +6,13 @@
       "name": "Old scan",
       "media": "image",
       "for": "For scanned prints, slides and negatives.",
-      "note": "Enlarges and sharpens. Does not remove scratches or dust, and does not change colours.",
+      "note": "Enlarges and sharpens, and smooths film grain. Does not remove scratches or dust, and does not change colours.",
       "detail_extra": "Black and white? Tick Colour afterwards. The colours are the model's guess.",
       "content": "photo",
-      "quality": "best",
+      "quality": "quick",
       "fixes": [],
       "output_scale": 2,
-      "example": "photo-best"
+      "example": "photo-quick"
     },
     {
       "id": "workflow.low-light",
@@ -31,7 +31,7 @@
       "name": "Drawing or anime",
       "media": "image",
       "for": "For drawings, anime frames, comics and flat artwork.",
-      "note": "Keeps lines clean and colours flat. Not for photos: it smooths skin and foliage.",
+      "note": "Keeps lines clean and colours flat. Flattens hatching and print texture: for old comics and prints, choose Best. Not for photos.",
       "content": "illustration",
       "quality": "quick",
       "fixes": [],

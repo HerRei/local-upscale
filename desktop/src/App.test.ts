@@ -11968,8 +11968,8 @@ describe('Workflows in the library', () => {
         expect.objectContaining({
           name: 'Old scan',
           task: 'upscale',
-          model_id: 'realplksr_nomoswebphoto_x4',
-          quality: 'best',
+          model_id: 'localsr_quick_x4_v1',
+          quality: 'quick',
           output_scale: 2,
         }),
       ),
@@ -12015,8 +12015,8 @@ describe('Workflows in the library', () => {
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
           content: 'photo',
-          quality: 'best',
-          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          quality: 'quick',
+          selected_model_id: 'localsr_quick_x4_v1',
           recipe_recent: ['workflow.old-scan', 'workflow.drawing'],
         }),
       ),
@@ -12046,8 +12046,8 @@ describe('Empty screen', () => {
     await waitFor(() =>
       expect(api.saveSettings).toHaveBeenLastCalledWith(
         expect.objectContaining({
-          quality: 'best',
-          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          quality: 'quick',
+          selected_model_id: 'localsr_quick_x4_v1',
         }),
       ),
     );

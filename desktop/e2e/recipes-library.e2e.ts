@@ -308,7 +308,7 @@ test.describe('Workflows', () => {
     await showPane(page, 'enhance');
     await expect(page.getByRole('radio', { name: '2×' })).toBeChecked();
     await expect(
-      page.getByRole('group', { name: 'Quality' }).getByRole('button', { name: 'Best' }),
+      page.getByRole('group', { name: 'Quality' }).getByRole('button', { name: 'Quick' }),
     ).toHaveAttribute('aria-pressed', 'true');
     expect((await hostCalls(page, 'start_job')).length).toBe(0);
   });

@@ -668,13 +668,22 @@ Models and sizes are what the bundled catalog resolves to with nothing remembere
 | Content | Photo | Photo | Illustration | Photo |
 | Fix | none | Noise | none | JPEG artifacts |
 | Size | 2× | Same | 4× | 2× |
-| Quality | Best | Quick | Quick | Quick |
+| Quality | Quick | Quick | Quick | Quick |
 | Plan line | `Upscale 2×` | `Noise` | `Upscale 4×` | `JPEG → Upscale 2×` |
-| Models | RealPLKSR ×4 NomosWebPhoto (`realplksr_nomoswebphoto_x4`, Labs) | RealPLKSR Denoise (`denoise_realplksr_1x`) | Real-ESRGAN ×4 Anime (`realesrgan_x4plus_anime_6b`) | FBCNN Color (`fbcnn_color`), then LocalSR Photo S (`localsr_quick_x4_v1`) |
-| Download | 30 MB (29,683,482 bytes) | 30 MB (29,559,554) | 18 MB (17,938,799) | 290 MB (287,755,111 + 2,479,984) |
+| Models | LocalSR Photo S (`localsr_quick_x4_v1`) | RealPLKSR Denoise (`denoise_realplksr_1x`) | Real-ESRGAN ×4 Anime (`realesrgan_x4plus_anime_6b`) | FBCNN Color (`fbcnn_color`), then LocalSR Photo S (`localsr_quick_x4_v1`) |
+| Download | 2 MB (2,479,984 bytes) | 30 MB (29,559,554) | 18 MB (17,938,799) | 290 MB (287,755,111 + 2,479,984) |
 | `for` | `For scanned prints, slides and negatives.` | `For phone photos taken indoors or at night that look grainy.` | `For drawings, anime frames, comics and flat artwork.` | `For small, blocky pictures saved from websites or chats.` |
-| `note` | `Enlarges and sharpens. Does not remove scratches or dust, and does not change colours.` | `Removes grain at the original size. Very fine texture, such as hair or fabric, can get smoother.` | `Keeps lines clean and colours flat. Not for photos: it smooths skin and foliage.` | `Removes compression blocks, then enlarges 2×. Detail the compression destroyed does not come back.` |
-| Example | `photo-best` | `noise` | `art-quick` | `jpeg` |
+| `note` | `Enlarges and sharpens, and smooths film grain. Does not remove scratches or dust, and does not change colours.` | `Removes grain at the original size. Very fine texture, such as hair or fabric, can get smoother.` | `Keeps lines clean and colours flat. Flattens hatching and print texture: for old comics and prints, choose Best. Not for photos.` | `Removes compression blocks, then enlarges 2×. Detail the compression destroyed does not come back.` |
+| Example | `photo-quick` | `noise` | `art-quick` | `jpeg` |
+
+W0 (2026-11-28): each workflow ran on three CC0 or public-domain pictures against the other
+Quality. Old scan changed from Best to Quick: NomosWebPhoto turned plaster and brick into
+worm-like texture and film grain into hard speckle, while Photo S stayed true to the scan at
+half the time. Drawing stays Quick: on clean flat art Real-ESRGAN ×4 Anime draws crisper lines
+than HFA2k (27.9 against 26.9 dB on a drawing reduced to a quarter), but on old printed comics
+and a woodblock print it flattened hatching and paper texture, which the note now says.
+Low-light stays Quick: NAFNet SIDD smoothed faces to wax. Web image stays Quick: Best is only a
+little crisper and looks more painted.
 
 Colourising is not part of Old scan. Its detail ends with one more grey line:
 `Black and white? Tick Colour afterwards. The colours are the model's guess.`

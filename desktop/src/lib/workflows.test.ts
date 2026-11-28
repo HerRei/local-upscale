@@ -17,13 +17,13 @@ const TABLE = [
     id: 'workflow.old-scan',
     task: 'upscale',
     content: 'photo',
-    quality: 'best',
+    quality: 'quick',
     scale: 2,
     line: ['Upscale 2×'],
-    models: ['realplksr_nomoswebphoto_x4'],
-    names: ['RealPLKSR ×4 NomosWebPhoto'],
-    bytes: 29683482,
-    text: '30 MB',
+    models: ['localsr_quick_x4_v1'],
+    names: ['LocalSR Photo S'],
+    bytes: 2479984,
+    text: '2 MB',
   },
   {
     id: 'workflow.low-light',
@@ -78,7 +78,7 @@ describe('workflows', () => {
       'Web image (JPEG)',
     ]);
     expect(WORKFLOWS.map((workflow) => workflow.example)).toEqual([
-      'photo-best',
+      'photo-quick',
       'noise',
       'art-quick',
       'jpeg',
