@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import math
+import statistics
 import time
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from localsr.core.eta import RemainingTime
@@ -12,6 +14,7 @@ from localsr.core.hardware import get_memory_snapshot
 from localsr.core.live_preview import LatestPreviewEncoder
 from localsr.core.model_catalog import CATALOG_BY_ID
 from localsr.core.pipeline import ImagePipeline, PipelineStage
+from localsr.core.speed_table import SpeedTable
 from localsr.protocol.messages import (
     ProgressUpdate,
     StageCompleted,
@@ -20,6 +23,22 @@ from localsr.protocol.messages import (
     TileUpdate,
     WorkerMessage,
 )
+
+# What the steps already finished in this job took against what the table expected moves the
+# estimate for the rest of the job, within these bounds.
+MIN_CALIBRATION = 0.2
+MAX_CALIBRATION = 5.0
+# A stage with at least this many tiles leaves its first tile out of the measured speed: the
+# first tile carries warm-up (compiling, caches) that does not grow with the image.
+WARMUP_TILE_MIN_TILES = 3
+
+
+def _subject(stage: PipelineStage) -> str:
+    """What a stage is called in the speed table: its model, or its step if it has none."""
+    if stage.model_id:
+        return stage.model_id
+    name = Path(stage.model_path).name
+    return f"{stage.step_id}:{name}" if name else stage.step_id
 
 
 class ImageJobProgress:
@@ -33,6 +52,9 @@ class ImageJobProgress:
         *,
         clock: Callable[[], float] = time.monotonic,
         rate: RemainingTime | None = None,
+        request: str = "",
+        backend: Callable[[PipelineStage], tuple[str, str] | None] | None = None,
+        speed_table: SpeedTable | None = None,
     ) -> None:
         self.job_id = job_id
         self.pipeline = pipeline
@@ -59,20 +81,81 @@ class ImageJobProgress:
         self.weights = [1.0] * len(pipeline.stages)
         self.weighted_speed: float | None = None
         self.last_percentage = 0.0
+        # What the job asked for (device, precision, settings): the speed table finds a
+        # step's last measurement by it, before the step has resolved to a backend.
+        self.request = f"{device}|{request}"
+        self.backend = backend
+        self.speed_table = speed_table
+        # The work of each stage: megapixels, or runs for a stage of fixed size.
+        self.work_units = [1.0] * len(pipeline.stages)
+        # Whether the weights are expected seconds (some step is in the speed table) or
+        # only relative.
+        self.weights_in_seconds = False
+        self.measured_seconds = 0.0
+        self.expected_seconds = 0.0
+        self._reset_measurement()
+
+    def _reset_measurement(self) -> None:
+        self.first_started_at: float | None = None
+        self.first_done_at = 0.0
+        self.first_done_pixels = 0
+        self.last_done_at = 0.0
+        self.done_tiles = 0
+        self.done_pixels = 0
+        self.measurable = True
+        self.resolved = ("", "")
 
     def configure_work(self, width: int, height: int, upscale: int) -> None:
-        pixels = width * height
-        current = pixels
-        weights = []
-        for stage in self.pipeline.stages:
+        stages = self.pipeline.stages
+        current = width * height
+        fallback: list[float] = []
+        units: list[float] = []
+        for stage in stages:
             model = CATALOG_BY_ID.get(stage.model_id)
             if stage.kind == "upscale":
                 current *= upscale * upscale
-            work = 512 * 512 if model and model.architecture == "DDColor" else current
+            fixed = bool(model and model.architecture == "DDColor")
+            work = 512 * 512 if fixed else current
+            units.append(1.0 if fixed else current / 1e6)
             # The catalog time factor is already used for video stage timing; benchmark
             # references measure hardware, not relative speeds of individual models.
-            weights.append(work * (model.time_factor if model else 1.0))
-        self.weights = weights
+            fallback.append(work * (model.time_factor if model else 1.0))
+        self.work_units = units
+        self.weights = fallback
+        self.weights_in_seconds = False
+        if self.rate is not None:
+            return
+        if self.speed_table is None:
+            self.speed_table = SpeedTable()
+        known: dict[int, float] = {}
+        face_index = None
+        if self.pipeline.face is not None and self.pipeline.primary_index is not None:
+            face_index = self.pipeline.primary_index + 1
+        for index in range(len(stages)):
+            if index == face_index:
+                continue
+            seconds_per_unit = self.speed_table.lookup(self._subject_at(index), self.request)
+            if seconds_per_unit is not None:
+                known[index] = seconds_per_unit * units[index]
+        if not known:
+            return
+        ratios = [seconds / fallback[index] for index, seconds in known.items() if fallback[index]]
+        scale = statistics.median(ratios) if ratios else 1.0
+        expected = [known.get(index, weight * scale) for index, weight in enumerate(fallback)]
+        # A face stage runs inside its primary's measurement, which already covers it.
+        if face_index is not None and self.pipeline.primary_index in known:
+            expected[face_index] = 0.0
+        self.weights = expected
+        self.weights_in_seconds = True
+
+    def _subject_at(self, index: int) -> str:
+        """The speed table's name for the stage at ``index``; a primary with a face stage
+        is measured as the two together."""
+        stage = self.pipeline.stages[index]
+        face = self.pipeline.face
+        if face is not None and index == self.pipeline.primary_index:
+            return f"{_subject(stage)}+{_subject(face)}"
+        return _subject(stage)
 
     def start(self, index: int, stage: PipelineStage, *, span: int = 1) -> None:
         self.active_index = index
@@ -81,6 +164,7 @@ class ImageJobProgress:
         self.stage_pixels_done = 0
         self.stage_pixels_total = 0
         self.remaining_time = None
+        self._reset_measurement()
         self.emit_start(index, stage)
 
     def emit_start(self, index: int, stage: PipelineStage) -> None:
@@ -97,6 +181,8 @@ class ImageJobProgress:
         )
 
     def complete(self, index: int, stage: PipelineStage) -> None:
+        if index == self.active_index:
+            self._learn_speed(index)
         self.emit(
             StageCompleted(
                 job_id=self.job_id,
@@ -106,6 +192,58 @@ class ImageJobProgress:
                 step=stage.step_id,
                 fix=stage.fix or "",
             )
+        )
+
+    def _learn_speed(self, index: int) -> None:
+        """Put the finished stage's measured speed in the speed table, and compare it with
+        what was expected of it. A stage that was cut short, restarted at a smaller tile
+        size or did no tiled work leaves nothing."""
+        measurable, self.measurable = self.measurable, False
+        if (
+            not measurable
+            or self.rate is not None
+            or self.speed_table is None
+            or self.first_started_at is None
+            or self.done_tiles == 0
+        ):
+            return
+        if self.done_tiles >= WARMUP_TILE_MIN_TILES:
+            seconds = self.last_done_at - self.first_done_at
+            pixels = self.done_pixels - self.first_done_pixels
+        else:
+            seconds = self.last_done_at - self.first_started_at
+            pixels = self.done_pixels
+        stage = self.pipeline.stages[index]
+        model = CATALOG_BY_ID.get(stage.model_id)
+        fixed = bool(model and model.architecture == "DDColor")
+        units = 1.0 if fixed else pixels / 1e6
+        if self.active_span > 1:
+            # Its tile events mix the primary's and the faces', so the planned work stands,
+            # less the share of it the measured stretch left out.
+            units = self.work_units[index] * pixels / self.done_pixels
+        if seconds <= 0 or units <= 0:
+            return
+        seconds_per_unit = seconds / units
+        backend, precision = self.resolved
+        self.speed_table.record(
+            self._subject_at(index),
+            backend or self.device.split(":", 1)[0],
+            precision,
+            self.request,
+            seconds_per_unit,
+        )
+        if self.weights_in_seconds:
+            end = index + self.active_span
+            self.expected_seconds += sum(self.weights[index:end])
+            self.measured_seconds += seconds_per_unit * self.work_units[index]
+
+    def _calibration(self) -> float:
+        """How much slower (above 1) or faster the finished stages of this job ran than the
+        table expected, so load and heat carry over to the stages after them."""
+        if self.expected_seconds <= 0 or self.measured_seconds <= 0:
+            return 1.0
+        return max(
+            MIN_CALIBRATION, min(MAX_CALIBRATION, self.measured_seconds / self.expected_seconds)
         )
 
     def update(self, completed: int, total: int, active_tile_size: int) -> None:
@@ -191,11 +329,36 @@ class ImageJobProgress:
         if speed is not None and active_weight > 0:
             self.weighted_speed = speed * work / active_weight
         future = sum(self.weights[self.active_index + self.active_span :])
+        if self.weights_in_seconds:
+            calibration = self._calibration()
+            if seconds is None:
+                if self.weighted_speed is None and self.expected_seconds <= 0:
+                    return 0.0
+                share = max(0, work - done) / max(work, 1)
+                seconds = share * active_weight * calibration
+            return seconds + future * calibration
         if seconds is None and self.weighted_speed is not None:
             seconds = max(0, work - done) / max(work, 1) * active_weight * self.weighted_speed
         if seconds is None:
             return 0.0
         return seconds + future * (self.weighted_speed or 0.0)
+
+    def _resolve_backend(self) -> tuple[str, str]:
+        """The backend and precision the engine settled on for the running stage (it has
+        loaded its model by the first tile), or an empty answer when it cannot say."""
+        if self.backend is None:
+            return ("", "")
+        try:
+            found = self.backend(self.active_stage)
+        except Exception:  # noqa: BLE001 - a missing label must not stop a job
+            return ("", "")
+        if (
+            isinstance(found, tuple)
+            and len(found) == 2
+            and all(isinstance(part, str) for part in found)
+        ):
+            return (found[0].split(":", 1)[0], found[1])
+        return ("", "")
 
     def tile(
         self,
@@ -211,15 +374,25 @@ class ImageJobProgress:
         if phase == "started" and self.inference_started_at is None:
             # Model loading must not count as time spent on the first tile.
             self.inference_started_at = self.clock()
+        if phase == "started" and self.first_started_at is None:
+            self.first_started_at = self.clock()
+            self.resolved = self._resolve_backend()
         if output_width > 0 and output_height > 0:
             self.stage_pixels_total = int(output_width) * int(output_height)
         if phase == "reset":
             # Tiles start over at a smaller size; the speed in pixels per second still holds.
             self.stage_pixels_done = 0
+            self.measurable = False
             if self.remaining_time is not None:
                 self.remaining_time.restart(self.clock(), self.stage_pixels_total)
         elif phase == "completed" and tile is not None:
-            self.stage_pixels_done += int(tile.out_w) * int(tile.out_h)
+            pixels = int(tile.out_w) * int(tile.out_h)
+            self.stage_pixels_done += pixels
+            if self.done_tiles == 0:
+                self.first_done_at, self.first_done_pixels = self.clock(), pixels
+            self.last_done_at = self.clock()
+            self.done_tiles += 1
+            self.done_pixels += pixels
         if phase == "completed" and tile_data is not None:
             self.preview.submit(
                 job_id=self.job_id,

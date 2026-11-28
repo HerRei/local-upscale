@@ -594,7 +594,15 @@ class ImageJobRunner:
                     max_dimension=int(data.get("preview_max_dimension", 320)),
                 )
                 resources.callback(preview.close)
-                progress = ImageJobProgress(job_id, pipeline, data["device"], self.emit, preview)
+                progress = ImageJobProgress(
+                    job_id,
+                    pipeline,
+                    data["device"],
+                    self.emit,
+                    preview,
+                    request=f"{data.get('precision')}|{self.engine.neural_engine_enabled}",
+                    backend=lambda stage: self.engine.backend_of(stage.model_path),
+                )
                 self._check_cancelled()
                 self._log("Loading image...")
                 manager = ImageManager()
