@@ -2466,6 +2466,7 @@ input[type='search'],
   font-size: calc(12px * var(--ui-scale));
 }
 .recipes-browse,
+.recipes-update,
 .recipes-save {
   display: inline-flex;
   align-items: center;
