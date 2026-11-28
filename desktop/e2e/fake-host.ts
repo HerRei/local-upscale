@@ -135,6 +135,8 @@ export interface Scenario {
    * is the index of the step whose model is not downloaded.
    */
   patch?: { delayMs?: number; fail?: string; missing?: number };
+  /** Start answers by running a job on the first photo, which marks both patch slots busy. */
+  startRuns?: boolean;
   /** Override system_accent response on macOS. */
   systemAccent?: { light: string; dark: string };
   /** Pre-set edit.runtime_path so Edit plans can start without picking the runtime interactively. */
@@ -1331,6 +1333,35 @@ function hostScript(scenario: Scenario): void {
           }
           emit('state-changed', null);
         });
+        return null;
+      }
+      case 'start_jobs': {
+        if (!scenario.startRuns) return null;
+        // The host cancels running patches and marks both slots busy when it dispatches a job.
+        for (const slot of ['a', 'b']) {
+          stopPatch(slot);
+          if (snapshot.runtime.patches) {
+            snapshot.runtime.patches[slot] = { ...idlePatch(), state: 'busy' };
+          }
+        }
+        snapshot.runtime.active_job_id = 'job-photo-1';
+        snapshot.runtime.status_title = 'Processing';
+        snapshot.runtime.progress = 10;
+        snapshot.jobs = [
+          {
+            id: 'job-photo-1',
+            media_id: 'photo-1',
+            media_name: 'Alpine lake 1.jpg',
+            media_kind: 'image',
+            status: 'running',
+            progress: 10,
+            elapsed_seconds: 0,
+            output_path: '',
+            error: '',
+            created_at: 1794160000,
+          },
+        ];
+        emit('state-changed', null);
         return null;
       }
       case 'cancel_patch_preview': {
