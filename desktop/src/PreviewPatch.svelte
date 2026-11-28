@@ -29,6 +29,13 @@
   /** Where the patch is, in source pixels. */
   export let region: PatchRegion;
   export let patch: PatchState | null = null;
+  /** Two models: variant B's state and the names of both sides; null without a comparison. */
+  export let patchB: PatchState | null = null;
+  export let compare: { aName: string; bName: string } | null = null;
+  /** The side the frame shows. */
+  export let side: 'a' | 'b' = 'a';
+  export let onUseB: () => void = () => {};
+  export let onDone: () => void = () => {};
   /** The plan line's names, one per step. */
   export let plan: PatchPlanEntry[] = [];
   /** A chip the user pressed (`original` or a step key); null follows the newest step. */
@@ -43,7 +50,7 @@
   export let onDownload: () => void = () => {};
   export let onRetry: () => void = () => {};
 
-  const TAB_HEIGHT = 28;
+  const ROW_HEIGHT = 28;
   const MOVE_DELAY = 250;
 
   let tab: HTMLDivElement | undefined;
@@ -55,24 +62,28 @@
   let runningKey = '';
   let clock: ReturnType<typeof setInterval> | undefined;
 
+  // Both sides draw the same plan; B differs in one model. The side shown owns the chips, the
+  // picture and the state text.
+  $: current = compare && side === 'b' ? patchB : patch;
+  $: tabHeight = compare ? 2 * ROW_HEIGHT - 1 : ROW_HEIGHT;
   $: image = { width: Math.max(1, media.width), height: Math.max(1, media.height) };
   $: shown = moving ?? region;
   // A picture belongs to the position it was made for: while the patch moves, or the host has
   // not answered for the new position yet, the frame shows the original.
   $: pictureHere = Boolean(
-    patch?.region &&
-    patch.region.x === shown.x &&
-    patch.region.y === shown.y &&
-    patch.region.width === shown.width,
+    current?.region &&
+    current.region.x === shown.x &&
+    current.region.y === shown.y &&
+    current.region.width === shown.width,
   );
-  $: failed = patch?.state === 'failed';
-  $: steps = patch?.steps ?? [];
-  $: chips = failed ? patchChips(null, []) : patchChips(patch, plan);
+  $: failed = current?.state === 'failed';
+  $: steps = current?.steps ?? [];
+  $: chips = failed ? patchChips(null, []) : patchChips(current, plan);
   $: pickedOriginal = picked === 'original';
   $: shownIndex = pickedOriginal ? -1 : shownStep(steps, picked);
   $: showOriginal = holdingOriginal || moving !== null || !pictureHere || shownIndex < 0;
   $: picture = showOriginal ? null : (steps[shownIndex] ?? null);
-  $: dashed = patch?.state === 'stale' || patch?.state === 'running';
+  $: dashed = current?.state === 'stale' || current?.state === 'running';
   $: runningIndex = steps.findIndex((step) => step.state === 'running');
   $: nextIndex =
     runningIndex >= 0 ? runningIndex : steps.findIndex((step) => step.state === 'waiting');
@@ -96,7 +107,7 @@
   // Whole seconds of the running step, counted here because the host reports a time only at
   // the step's end.
   $: {
-    const key = patch?.state === 'running' && runningIndex >= 0 ? `${runningIndex}` : '';
+    const key = current?.state === 'running' && runningIndex >= 0 ? `${runningIndex}` : '';
     if (key !== runningKey) {
       runningKey = key;
       runningSince = Date.now();
@@ -114,20 +125,22 @@
     Math.floor((now - runningSince) / 1000),
   );
   $: runningText =
-    patch?.state === 'running' && nextIndex >= 0 && plan[nextIndex]
+    current?.state === 'running' && nextIndex >= 0 && plan[nextIndex]
       ? `${plan[nextIndex].name} · ${elapsed} s`
       : '';
-  $: staleSeconds = patch?.estimate_seconds ? Math.max(1, Math.round(patch.estimate_seconds)) : 0;
+  $: staleSeconds = current?.estimate_seconds
+    ? Math.max(1, Math.round(current.estimate_seconds))
+    : 0;
 
   // The tab sits above the frame, below it when the frame touches the canvas's top.
   $: scale = (stage.width * zoom) / image.width;
   $: frameLeft = canvas.width / 2 + pan.x + (shown.x / image.width - 0.5) * stage.width * zoom;
   $: frameTop = canvas.height / 2 + pan.y + (shown.y / image.height - 0.5) * stage.height * zoom;
   $: frameSide = shown.width * scale;
-  $: tabAbove = frameTop - TAB_HEIGHT >= 0;
+  $: tabAbove = frameTop - tabHeight >= 0;
   $: tabTop = Math.min(
-    Math.max(0, canvas.height - TAB_HEIGHT),
-    tabAbove ? frameTop - TAB_HEIGHT : frameTop + frameSide,
+    Math.max(0, canvas.height - tabHeight),
+    tabAbove ? frameTop - tabHeight : frameTop + frameSide,
   );
   // The tab's own width is not known here; the percentage in the shift is, so a tab near the
   // right edge slides left by exactly its overhang.
@@ -196,6 +209,15 @@
     settle(movePatch(moving ?? region, event.key as PatchArrow, event.shiftKey, image));
   }
 
+  function flipKey(event: KeyboardEvent): void {
+    if (!compare || event.key.toLowerCase() !== 'x' || event.repeat) return;
+    if (event.metaKey || event.ctrlKey || event.altKey) return;
+    const target = event.target instanceof Element ? event.target : null;
+    if (target?.closest('input, textarea, select, [contenteditable], [aria-modal="true"]')) return;
+    event.preventDefault();
+    side = side === 'a' ? 'b' : 'a';
+  }
+
   function pick(id: string): void {
     picked = id;
   }
@@ -205,6 +227,8 @@
     clearInterval(clock);
   });
 </script>
+
+<svelte:window on:keydown={flipKey} />
 
 <div class="patch-layer">
   <div class="patch-stage" style={stageStyle}>
@@ -233,29 +257,59 @@
     on:keydown={keyDown}
     on:wheel|stopPropagation
   >
-    <span class="patch-grip" title="Drag to move · arrow keys move it" aria-hidden="true">⠿</span>
-    <StepChips chips={stepChips} ariaLabel="Preview steps" onSelect={pick} />
-    <span class="patch-state" role="status">
-      {#if failed}
-        <span title={patch?.error || undefined}>Preview failed.</span>
-        <button type="button" class="patch-link" on:click={onRetry}>Try again</button>
-      {:else if missingIndex >= 0 && patch?.state !== 'running'}
-        {#if missingEntry?.needsPanel}
-          {missingEntry.name} needs a step in the panel first.
-        {:else}
-          <button type="button" class="patch-action" on:click={onDownload}
-            >{downloadSize
-              ? `Download ${downloadSize} and preview`
-              : 'Download and preview'}</button
+    <div class="patch-row">
+      <span class="patch-grip" title="Drag to move · arrow keys move it" aria-hidden="true">⠿</span>
+      <StepChips chips={stepChips} ariaLabel="Preview steps" onSelect={pick} />
+      <span class="patch-state" role="status">
+        {#if failed}
+          <span title={current?.error || undefined}>Preview failed.</span>
+          <button type="button" class="patch-link" on:click={onRetry}>Try again</button>
+        {:else if missingIndex >= 0 && current?.state !== 'running'}
+          {#if missingEntry?.needsPanel}
+            {missingEntry.name} needs a step in the panel first.
+          {:else}
+            <button type="button" class="patch-action" on:click={onDownload}
+              >{downloadSize
+                ? `Download ${downloadSize} and preview`
+                : 'Download and preview'}</button
+            >
+          {/if}
+        {:else if current?.state === 'stale'}
+          <button type="button" class="patch-action" on:click={onUpdate}
+            >Update preview{staleSeconds ? ` · about ${staleSeconds} s` : ''}</button
           >
+        {:else if runningText}
+          {runningText}
         {/if}
-      {:else if patch?.state === 'stale'}
-        <button type="button" class="patch-action" on:click={onUpdate}
-          >Update preview{staleSeconds ? ` · about ${staleSeconds} s` : ''}</button
-        >
-      {:else if runningText}
-        {runningText}
-      {/if}
-    </span>
+      </span>
+    </div>
+    {#if compare}
+      <div class="patch-row patch-compare">
+        <div class="patch-switch" role="group" aria-label="Compare models" title="Press X to flip">
+          <button
+            type="button"
+            class="step-chip"
+            class:pressed={side === 'a'}
+            aria-pressed={side === 'a'}
+            on:click={() => (side = 'a')}
+          >
+            {#if side === 'a'}<span class="activity-dot" aria-hidden="true"></span>{/if}A {compare.aName}
+          </button>
+          <button
+            type="button"
+            class="step-chip"
+            class:pressed={side === 'b'}
+            aria-pressed={side === 'b'}
+            on:click={() => (side = 'b')}
+          >
+            {#if side === 'b'}<span class="activity-dot" aria-hidden="true"></span>{/if}B {compare.bName}
+          </button>
+        </div>
+        <span class="patch-state">
+          <button type="button" class="patch-action" on:click={onUseB}>Use B</button>
+          <button type="button" class="patch-action" on:click={onDone}>Done</button>
+        </span>
+      </div>
+    {/if}
   </div>
 </div>

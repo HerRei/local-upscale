@@ -11987,3 +11987,112 @@ describe('Patch', () => {
     expect(document.querySelector('.patch-frame')).toBeNull();
   });
 });
+
+describe('Patch, two models', () => {
+  function pairSnapshot(settings: Partial<UiSettings> = {}): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features.push('patch_preview');
+    snapshot.settings = {
+      ...snapshot.settings,
+      preview_patch_shown: true,
+      task: 'upscale',
+      output_scale: 4,
+      ...settings,
+    };
+    return snapshot;
+  }
+
+  const sent = () => api.requestPatchPreview.mock.calls.map(([request]) => request);
+
+  async function tryCandidate(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+    await openPlanSheet(user);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^HAT-S ×4/ }));
+    await user.click(within(library).getByRole('button', { name: 'Try on this photo' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+    return await screen.findByRole('group', { name: 'Preview patch' });
+  }
+
+  it('Try on this photo closes the library, asks for slot b with replace, shows both names', async () => {
+    const user = await mountWith(pairSnapshot());
+    await waitFor(() => expect(sent().some((request) => request.slot === 'a')).toBe(true));
+    const tab = await tryCandidate(user);
+    await waitFor(() => expect(sent().some((request) => request.slot === 'b')).toBe(true));
+    const request = sent().find((entry) => entry.slot === 'b')!;
+    expect(request.replace).toEqual({ slot: 'b', fix: 'upscale', model_id: 'hat_s_x4' });
+    expect(request).toMatchObject({ mediaId: 'photo', force: false });
+    const compare = within(tab).getByRole('group', { name: 'Compare models' });
+    const [a, b] = within(compare).getAllByRole('button');
+    expect(a.textContent).toMatch(/^\s*A .+/);
+    expect(b.textContent).toMatch(/B HAT-S ×4/);
+    expect(b.getAttribute('aria-pressed')).toBe('true');
+    expect(compare.getAttribute('title')).toBe('Press X to flip');
+  });
+
+  it('the button is hidden when the setting is Off and disabled without a photo or download', async () => {
+    const off = await mountWith(pairSnapshot({ preview_patch: 'off' }));
+    await openPlanSheet(off);
+    await off.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await off.click(within(library).getByRole('button', { name: /^HAT-S ×4/ }));
+    expect(within(library).queryByRole('button', { name: 'Try on this photo' })).toBeNull();
+    cleanup();
+
+    const snapshot = pairSnapshot();
+    snapshot.catalog.models.find((model) => model.model_id === 'hat_s_x4')!.installed = false;
+    const user = await mountWith(snapshot);
+    await openPlanSheet(user);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^HAT-S ×4/ }));
+    const button = within(library).getByRole('button', {
+      name: 'Try on this photo',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe('Download the model first.');
+  });
+
+  it('X flips the pressed side, but not while typing in a field', async () => {
+    const user = await mountWith(pairSnapshot());
+    const tab = await tryCandidate(user);
+    const compare = within(tab).getByRole('group', { name: 'Compare models' });
+    const pressed = () =>
+      within(compare)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-pressed'));
+    expect(pressed()).toEqual(['false', 'true']);
+    await user.keyboard('x');
+    expect(pressed()).toEqual(['true', 'false']);
+    await user.keyboard('x');
+    expect(pressed()).toEqual(['false', 'true']);
+    const field = document.createElement('input');
+    document.body.append(field);
+    field.focus();
+    await user.keyboard('x');
+    field.remove();
+    expect(pressed()).toEqual(['false', 'true']);
+  });
+
+  it('Use B applies the candidate like Use for this job and the second row goes', async () => {
+    const user = await mountWith(pairSnapshot());
+    const tab = await tryCandidate(user);
+    await user.click(within(tab).getByRole('button', { name: 'Use B' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'hat_s_x4' }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Compare models' })).toBeNull());
+    expect(api.cancelPatchPreview).toHaveBeenCalledWith('b');
+  });
+
+  it('Done drops B and cancels its request', async () => {
+    const user = await mountWith(pairSnapshot());
+    const tab = await tryCandidate(user);
+    await user.click(within(tab).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Compare models' })).toBeNull());
+    expect(api.cancelPatchPreview).toHaveBeenCalledWith('b');
+    expect(sent().filter((request) => request.slot === 'b')).toHaveLength(1);
+  });
+});

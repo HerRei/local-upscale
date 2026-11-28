@@ -107,6 +107,12 @@
   /** A job runs or waits: the button is disabled and the patch hides. */
   export let patchJobBusy = false;
   export let patch: PatchState | null = null;
+  /** Two models: variant B's state, the two names, and which side the frame shows. */
+  export let patchB: PatchState | null = null;
+  export let patchCompare: { aName: string; bName: string } | null = null;
+  export let patchSide: 'a' | 'b' = 'a';
+  export let useCandidate: () => void = () => {};
+  export let endCandidate: () => void = () => {};
   /** The plan line's names, one per step; empty when nothing would run. */
   export let patchPlan: PatchPlanEntry[] = [];
   export let patchDownloadSize = '';
@@ -411,6 +417,7 @@
       : 'Show what the ticked fixes do on a part of this photo';
   $: patchRegion = selectedMedia ? (patchPositions[selectedMedia.id] ?? null) : null;
   $: patchState = patch && selectedMedia && patch.media_id === selectedMedia.id ? patch : null;
+  $: patchStateB = patchB && selectedMedia && patchB.media_id === selectedMedia.id ? patchB : null;
   $: patchVisible = Boolean(
     patchOffered &&
     patchShown &&
@@ -1586,6 +1593,11 @@
             pan={{ x: panX, y: panY }}
             region={patchRegion}
             patch={patchState}
+            patchB={patchStateB}
+            compare={patchCompare}
+            bind:side={patchSide}
+            onUseB={useCandidate}
+            onDone={endCandidate}
             plan={patchPlan}
             bind:picked={patchPicked}
             {holdingOriginal}

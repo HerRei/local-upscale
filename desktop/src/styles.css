@@ -5584,10 +5584,8 @@ label.setting-label {
 .patch-tab {
   position: absolute;
   display: flex;
-  align-items: center;
-  gap: 8px;
+  flex-direction: column;
   box-sizing: border-box;
-  height: 28px;
   max-width: calc(100% - 8px);
   padding: 0 6px;
   border: 1px solid var(--surface-border);
@@ -5599,6 +5597,21 @@ label.setting-label {
   pointer-events: auto;
   cursor: grab;
   touch-action: none;
+}
+.patch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+}
+.patch-compare {
+  justify-content: space-between;
+  border-top: 1px solid var(--hairline);
+}
+.patch-switch {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 18px;
 }
 .patch-tab:active {
   cursor: grabbing;

@@ -84,6 +84,7 @@
   import {
     activeStepStages,
     choosePresetModel,
+    displayName,
     effectiveVideoTask,
     fixesOf,
     isRestoreTask,
@@ -92,6 +93,7 @@
     stepStagesReady,
     withKeptBytes,
     presetSlot,
+    type PlanStage,
   } from './lib/plan';
   import { createPlanClient, fetchPlan } from './lib/jobPlanClient';
   import {
@@ -146,6 +148,7 @@
     MediaResults,
     ModelDownloadStatus,
     PatchRegion,
+    PatchReplace,
     ModelMoveProgress,
     PairChoice,
     Quality,
@@ -1887,7 +1890,7 @@
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
       if (skippedStepTimer) clearTimeout(skippedStepTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
-      if (patchTimer) clearTimeout(patchTimer);
+      for (const timer of Object.values(patchTimers)) if (timer) clearTimeout(timer);
       if (etaTimer) clearInterval(etaTimer);
       for (const unlisten of unlisteners) unlisten();
     };
@@ -3791,18 +3794,30 @@
   // The preview patch (spec section 3). The pane owns where the frame is and reports moves;
   // here the plan and the settings turn into requests for the host, which decides whether to run.
   let patchRegions: Record<string, PatchRegion> = {};
-  let patchKey = '';
-  let patchPlace = '';
-  let patchTimer: ReturnType<typeof setTimeout> | undefined;
-  let patchLatest: PatchWanted | null = null;
+  // Per slot: the last request's key and place, its pending timer, and the request itself.
+  const patchKeys: Record<PatchSlot, string> = { a: '', b: '' };
+  const patchPlaces: Record<PatchSlot, string> = { a: '', b: '' };
+  const patchTimers: Record<PatchSlot, ReturnType<typeof setTimeout> | undefined> = {
+    a: undefined,
+    b: undefined,
+  };
+  const patchLatest: Record<PatchSlot, PatchWanted | null> = { a: null, b: null };
   // Set by Download and preview: the request that follows the install must run, not wait.
   let patchForceNext = false;
+  type PatchSlot = 'a' | 'b';
   type PatchWanted = {
     mediaId: string;
-    slot: 'a';
+    slot: PatchSlot;
     region: PatchRegion;
     input: StartBatchInput;
+    replace?: PatchReplace;
   };
+  // Two models: the library's candidate for one slot of the plan, shown as variant B. `fix` is
+  // the fix it replaces, or `upscale` for the size step. It outlives a running job, which only
+  // hides the patch, and ends with Done, Use B, or when the plan no longer has that slot.
+  let patchBPick: PatchReplace | null = null;
+  let patchSide: PatchSlot = 'a';
+  const patchSeen = { pick: '', shown: false };
   $: patchSetting = snapshot.settings.preview_patch ?? 'auto';
   $: patchShown = snapshot.settings.preview_patch_shown ?? false;
   $: patchAvailable =
@@ -3840,61 +3855,145 @@
   // While the plan is worked out again nothing changes: the picture on screen stays and no
   // request goes out for a plan that is about to be replaced.
   $: if ($planState.status !== 'loading') {
+    const installed = plan.map((stage) => (stage.installed ? '1' : '0')).join('');
+    const pickKey = patchBPick ? `${patchBPick.fix}|${patchBPick.model_id}` : '';
+    const renewed = Boolean(pickKey) && pickKey !== patchSeen.pick;
+    patchSeen.pick = pickKey;
     syncPatch(
+      'a',
       patchInput && selectedImage && patchRegion
         ? { mediaId: selectedImage.id, slot: 'a', region: patchRegion, input: patchInput }
         : null,
-      plan.map((stage) => (stage.installed ? '1' : '0')).join(''),
+      installed,
+    );
+    syncPatch(
+      'b',
+      patchInput && selectedImage && patchRegion && patchBPick
+        ? {
+            mediaId: selectedImage.id,
+            slot: 'b',
+            region: patchRegion,
+            input: patchInput,
+            replace: patchBPick,
+          }
+        : null,
+      installed,
+      renewed,
     );
   }
+  function patchSlotStage(fix: string): PlanStage | undefined {
+    return plan.find((stage) =>
+      fix === 'upscale' ? stage.kind === 'upscale' && stage.role === 'primary' : stage.fix === fix,
+    );
+  }
+  $: patchBModel = patchBPick
+    ? snapshot.catalog.models.find((model) => model.model_id === patchBPick?.model_id)
+    : undefined;
+  // The candidate ends with the plan slot it replaces, its download, or the patch being off.
+  $: if (
+    patchBPick &&
+    (!patchAvailable ||
+      !snapshot.catalog.models.some(
+        (model) => model.model_id === patchBPick?.model_id && model.installed,
+      ) ||
+      ($planState.status !== 'loading' && !patchSlotStage(patchBPick.fix)))
+  ) {
+    patchBPick = null;
+  }
+  $: if (patchShown !== patchSeen.shown) {
+    // Turning the patch off ends a comparison; a candidate chosen while it was off waits for it.
+    if (!patchShown && patchSeen.shown) patchBPick = null;
+    patchSeen.shown = patchShown;
+  }
+  $: if (!patchBPick) patchSide = 'a';
+  $: patchCompare =
+    patchBPick && patchBModel
+      ? {
+          aName: patchSlotStage(patchBPick.fix)?.model
+            ? displayName(patchSlotStage(patchBPick.fix)!.model!)
+            : 'Current',
+          bName: displayName(patchBModel),
+        }
+      : null;
+
+  /** The library's `Try on this photo`: the candidate for the slot the library was opened for. */
+  async function tryOnPhoto(model: CatalogModel, fix: string): Promise<void> {
+    if (!selectedImage || !patchAvailable) return;
+    patchBPick = { slot: 'b', fix, model_id: model.model_id };
+    patchSide = 'b';
+    libraryOpen = false;
+    page = 'preview';
+    await tick();
+    previewPane?.showPatch();
+  }
+
+  function useCandidate(): void {
+    const pick = patchBPick;
+    const model = patchBModel;
+    patchBPick = null;
+    if (!pick || !model) return;
+    if (pick.fix === 'upscale') useModelForJob(model);
+    else rememberFixModel(model, pick.fix as Exclude<FixKind, 'faces'>);
+  }
+
   let patchLinkOffer: 'photo' | 'example' | '';
   $: patchLinkOffer = patchAvailable ? (selectedImage ? 'photo' : 'example') : '';
 
   function sendPatch(request: PatchWanted, force: boolean): void {
-    if (patchTimer) clearTimeout(patchTimer);
-    patchTimer = undefined;
+    const { slot } = request;
+    if (patchTimers[slot]) clearTimeout(patchTimers[slot]);
+    patchTimers[slot] = undefined;
     if (!api.isTauri()) return;
     const forced = force || patchForceNext;
     patchForceNext = false;
     api
       .requestPatchPreview({
         mediaId: request.mediaId,
-        slot: request.slot,
+        slot,
         region: request.region,
         input: request.input,
+        replace: request.replace ?? null,
         force: forced,
       })
       .catch((error) => console.error('Could not ask for the preview patch', error));
   }
 
-  function syncPatch(request: PatchWanted | null, installed: string): void {
-    patchLatest = request;
+  function syncPatch(
+    slot: PatchSlot,
+    request: PatchWanted | null,
+    installed: string,
+    renewed = false,
+  ): void {
+    patchLatest[slot] = request;
     if (!request) {
-      if (patchTimer) clearTimeout(patchTimer);
-      patchTimer = undefined;
-      if (patchKey && api.isTauri()) {
-        void api.cancelPatchPreview('a').catch(() => undefined);
+      if (patchTimers[slot]) clearTimeout(patchTimers[slot]);
+      patchTimers[slot] = undefined;
+      if (patchKeys[slot] && api.isTauri()) {
+        void api.cancelPatchPreview(slot).catch(() => undefined);
       }
-      patchKey = '';
-      patchPlace = '';
+      patchKeys[slot] = '';
+      patchPlaces[slot] = '';
       return;
     }
     const key = `${patchRequestKey(request)}|${installed}`;
-    if (key === patchKey) return;
-    patchKey = key;
+    if (key === patchKeys[slot]) return;
+    patchKeys[slot] = key;
     const place = `${request.mediaId}|${request.region.x}|${request.region.y}`;
-    if (patchTimer) clearTimeout(patchTimer);
-    if (place !== patchPlace) {
-      // A new file or position was already waited for by the pane.
-      patchPlace = place;
+    if (patchTimers[slot]) clearTimeout(patchTimers[slot]);
+    if (place !== patchPlaces[slot] || renewed) {
+      // A new file or position was already waited for by the pane; a new candidate is a click.
+      patchPlaces[slot] = place;
       sendPatch(request, false);
     } else {
-      patchTimer = setTimeout(() => sendPatch(request, false), 400);
+      patchTimers[slot] = setTimeout(() => sendPatch(request, false), 400);
     }
   }
 
   function updatePatch(): void {
-    if (patchLatest) sendPatch(patchLatest, true);
+    for (const slot of ['a', 'b'] as const) {
+      const request = patchLatest[slot];
+      if (request) sendPatch(request, true);
+    }
   }
 
   async function downloadPatchModel(): Promise<void> {
@@ -5206,6 +5305,11 @@
           setPatchShown={(shown) => void setPreference('preview_patch_shown', shown)}
           {patchJobBusy}
           patch={snapshot.runtime.patches?.a ?? null}
+          patchB={patchCompare ? (snapshot.runtime.patches?.b ?? null) : null}
+          {patchCompare}
+          bind:patchSide
+          {useCandidate}
+          endCandidate={() => (patchBPick = null)}
           {patchPlan}
           {patchDownloadSize}
           patchMoved={(mediaId, region) => (patchRegions = { ...patchRegions, [mediaId]: region })}
@@ -5486,6 +5590,12 @@
     trialBusy={startingJob || preparing}
     {runTrials}
     useForJob={useModelForJob}
+    tryOnPhoto={patchAvailable &&
+    (libraryContext.slot === 'primary' || libraryContext.slot === 'fix')
+      ? tryOnPhoto
+      : null}
+    tryOnLabel={selectedMedia?.kind === 'video' ? 'Try on this frame' : 'Try on this photo'}
+    tryOnPhotoOpen={Boolean(selectedImage)}
     useVideoForJob={useVideoModelForJob}
     rememberFix={rememberFixModel}
     forgetFix={forgetFixModel}

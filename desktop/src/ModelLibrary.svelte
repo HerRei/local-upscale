@@ -86,6 +86,10 @@
   $: folderLocked = busy || folderBusy;
   export let close: () => void;
   export let useForJob: (model: CatalogModel) => void;
+  /** The preview patch's two-model comparison; null hides the button (setting Off, no engine). */
+  export let tryOnPhoto: ((model: CatalogModel, fix: string) => void) | null = null;
+  export let tryOnLabel = 'Try on this photo';
+  export let tryOnPhotoOpen = true;
   export let useVideoForJob: (model: CatalogVideoModel) => void = () => {};
   /** Remember a model for one problem (a fix chip, or Same size with a chip on). */
   export let rememberFix: (model: CatalogModel, fix: Exclude<FixKind, 'faces'>) => void;
@@ -444,6 +448,14 @@
     !restoring &&
     canUseForJob(model) &&
     rightsAllowPreset(model);
+
+  // The slot the library was opened for: a fix's model, or the size step's.
+  $: tryOnFix = fixing ?? (context.slot === 'primary' && !restoring ? 'upscale' : '');
+  $: tryOnTitle = !tryOnPhotoOpen
+    ? 'Open a photo first.'
+    : !selected?.installed
+      ? 'Download the model first.'
+      : undefined;
 
   function selectRow(model: { model_id: string }): void {
     selectedId = model.model_id;
@@ -1819,6 +1831,15 @@
                         ? ' · Best'
                         : ''}</button
                   >
+                  {#if tryOnPhoto && tryOnFix}
+                    <button
+                      class="button"
+                      type="button"
+                      disabled={busy || Boolean(tryOnTitle)}
+                      title={tryOnTitle}
+                      on:click={() => tryOnPhoto?.(selected, tryOnFix)}>{tryOnLabel}</button
+                    >
+                  {/if}
                 {/if}
                 {#if rememberedFix}
                   <button
@@ -1837,6 +1858,15 @@
                   disabled={busy}
                   on:click={() => useForJob(selected)}>Use for this job</button
                 >
+                {#if tryOnPhoto && tryOnFix}
+                  <button
+                    class="button"
+                    type="button"
+                    disabled={busy || Boolean(tryOnTitle)}
+                    title={tryOnTitle}
+                    on:click={() => tryOnPhoto?.(selected, tryOnFix)}>{tryOnLabel}</button
+                  >
+                {/if}
                 {#if canPin(selected)}
                   <button
                     class="button"
