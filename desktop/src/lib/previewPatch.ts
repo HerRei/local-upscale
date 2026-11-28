@@ -126,6 +126,8 @@ export interface PatchPlanEntry {
   name: string;
   /** Shown in the `title` of a chip whose model is missing. */
   modelName?: string;
+  /** The model needs a licence tick or an own file, which only the panel can give. */
+  needsPanel?: boolean;
 }
 
 export interface PatchChip {
