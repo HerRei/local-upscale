@@ -157,6 +157,7 @@ export interface PlanStage {
     | 'audio_denoise'
     | 'grain'
     | 'remove_background'
+    | 'repair'
     | 'deinterlace'
     | 'stabilise';
   /**
@@ -194,19 +195,29 @@ function stepStageMedia(task: UiSettings['task'], usingTemporalVideo: boolean): 
 
 /**
  * The step stages that run for these settings, in their order, with where each runs.
- * Steps this version does not know and steps for another media are left out.
+ * Steps this version does not know and steps for another media are left out. With
+ * `maskedSteps`, a step that needs paint stays only when it is listed (the plan of one photo);
+ * without, every step stays (a start, where the host checks each photo).
  */
 export function activeStepStages(
   settings: Pick<UiSettings, 'task' | 'step_stages'>,
   usingTemporalVideo: boolean,
   steps: readonly StepDefinition[] = STEPS,
+  maskedSteps?: readonly string[],
 ): { selection: StepStageSelection; step: StepDefinition; placement: StepPlacement }[] {
   const media = stepStageMedia(settings.task, usingTemporalVideo);
   if (!media) return [];
-  return (settings.step_stages ?? []).flatMap((selection) => {
+  const active = (settings.step_stages ?? []).flatMap((selection) => {
     const found = stepStage(selection.step, steps);
-    return found && found.step.media.includes(media) ? [{ selection, ...found }] : [];
+    if (!found || !found.step.media.includes(media)) return [];
+    if (found.step.requires_mask && maskedSteps && !maskedSteps.includes(found.step.id)) return [];
+    return [{ selection, ...found }];
   });
+  // Run order, not the order they were ticked in: Dust & scratches ahead of the background.
+  return active.sort(
+    (a, b) =>
+      PHASES.indexOf(a.step.phase) - PHASES.indexOf(b.step.phase) || a.step.order - b.step.order,
+  );
 }
 
 /** Whether a catalog model is one of the models a step stage takes (its `model_task`). */
@@ -262,6 +273,8 @@ export function resolvePlan(
     selectedVideoModel?: CatalogVideoModel;
     editModel?: EditModel;
     hasAudio?: boolean;
+    /** Steps that need paint, which the open photo has; a step that needs it runs only then. */
+    maskedSteps?: readonly string[];
     /** The step registry; tests add steps that exist only in them. */
     steps?: readonly StepDefinition[];
   },
@@ -344,15 +357,15 @@ export function resolvePlan(
     };
   };
 
-  const stepStages = activeStepStages(settings, options.usingTemporalVideo, options.steps);
-  // In the registry's order, whatever order they were ticked in: Stabilise follows Deinterlace.
-  const leading = stepStages
-    .filter(({ placement }) => placement === 'before_fixes')
-    .sort(
-      (a, b) =>
-        PHASES.indexOf(a.step.phase) - PHASES.indexOf(b.step.phase) || a.step.order - b.step.order,
-    );
-  for (const { step, selection } of leading) stages.push(stepStageRow(step, selection));
+  const stepStages = activeStepStages(
+    settings,
+    options.usingTemporalVideo,
+    options.steps,
+    options.maskedSteps ?? [],
+  );
+  for (const { step, selection, placement } of stepStages) {
+    if (placement === 'before_fixes') stages.push(stepStageRow(step, selection));
+  }
   // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
   const leadingSteps = stages.length;
   const restoring = isRestoreTask(settings);

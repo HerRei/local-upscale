@@ -340,6 +340,72 @@ def test_a_masked_step_is_skipped_with_its_reason_and_the_picture_goes_on(
     assert _png(_done(messages)[0]).shape == (384, 384, 3)
 
 
+def _smooth(path: Path, speck: tuple[int, int] | None = None) -> tuple[str, np.ndarray]:
+    """A smooth gradient the size of the harness picture, with a black 5 x 5 speck at (x, y)."""
+    width, height = SIZE
+    x = np.linspace(60, 180, width, dtype=np.float32)[None, :, None]
+    y = np.linspace(0, 30, height, dtype=np.float32)[:, None, None]
+    clean = np.broadcast_to(x + y + np.array([0, 8, 16]), (height, width, 3)).astype(np.uint8)
+    marked = clean.copy()
+    if speck:
+        marked[speck[1] : speck[1] + 5, speck[0] : speck[0] + 5] = 0
+    Image.fromarray(marked).save(path)
+    return str(path), clean
+
+
+def _paint(path: Path, x: int, y: int) -> str:
+    """The host's mask: the photo's size, white over the 5 x 5 speck at (x, y) and a little more."""
+    width, height = SIZE
+    mask = np.zeros((height, width), dtype=np.uint8)
+    mask[y - 2 : y + 7, x - 2 : x + 7] = 255
+    Image.fromarray(mask).save(path)
+    return str(path)
+
+
+def _repair(mask: str) -> dict:
+    return {"kind": "repair", "step": "repair", "mask_path": mask}
+
+
+def test_repair_is_cut_to_the_region(harness, tmp_path):
+    # The region is x 40-232, y 30-222; with its padding the crop is x 8-264, y 0-254.
+    harness.image, clean = _smooth(tmp_path / "speck.png", (100, 100))
+    messages = harness.run([_repair(_paint(tmp_path / "inside.png", 100, 100))])
+    assert not [m for m in messages if m["data"].get("state") == "skipped"]
+    patch = _png(_done(messages)[0]).astype(np.int16)
+    region = clean[30:222, 40:232].astype(np.int16)
+    # The speck sits at x 60-65, y 70-75 of the region; it is filled from the gradient around it.
+    assert np.abs(patch[70:75, 60:65] - region[70:75, 60:65]).max() <= 4
+    outside = np.ones(patch.shape[:2], dtype=bool)
+    outside[68:77, 58:67] = False
+    assert np.array_equal(patch[outside], region[outside])
+
+    # Paint outside the padded crop leaves the picture as it was.
+    harness.image, _clean = _smooth(tmp_path / "far.png", (285, 5))
+    with Image.open(harness.image) as opened:
+        source = np.asarray(opened.convert("RGB"))[30:222, 40:232]
+    far = harness.run([_repair(_paint(tmp_path / "far-mask.png", 285, 5))])
+    assert np.array_equal(_png(_done(far)[0]), source)
+
+
+def test_more_paint_runs_the_repair_and_the_steps_after_it_again(harness, tmp_path):
+    harness.image, _clean = _smooth(tmp_path / "speck.png", (100, 100))
+    first = _paint(tmp_path / "media-1.png", 100, 100)
+    noise = _fix(harness.noise)
+    assert [m["data"]["cached"] for m in _done(harness.run([_repair(first), noise]))] == [
+        False,
+        False,
+    ]
+    # The host names a new file for each saved paint: the repair and what follows run again.
+    more = _paint(tmp_path / "media-2.png", 120, 100)
+    again = harness.run([_repair(more), noise])
+    assert [m["data"]["cached"] for m in _done(again)] == [False, False]
+    # The same paint with another step after it keeps the repair from the cache.
+    changed = harness.run([_repair(more), _fix(harness.jpeg, "jpeg")])
+    assert [m["data"]["cached"] for m in _done(changed)] == [True, False]
+    # The cut masks are not left in the work folder.
+    assert not list((tmp_path / "work").glob("patch-mask-*"))
+
+
 def test_a_face_stage_is_a_skipped_chip_after_the_upscaler(harness):
     face = {
         "kind": "face_restore",

@@ -92,6 +92,21 @@ export const shaky: Scenario = {
   },
 };
 
+/** Two photos on an engine that repairs marks; the first has three marks painted on its sky. */
+export const scratched: Scenario = {
+  ...ready,
+  photos: 2,
+  features: [...FEATURES, 'image_repair', 'stage_params_and_masks'],
+  settings: { ...ready.settings, output_directory: '/Users/test/Desktop' },
+  marks: {
+    1: [
+      { mode: 'paint', size: 18, points: [310, 150] },
+      { mode: 'paint', size: 14, points: [520, 230, 560, 236, 600, 250] },
+      { mode: 'paint', size: 22, points: [940, 120] },
+    ],
+  },
+};
+
 /** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */
 export const withEdit: Scenario = {
   ...ready,

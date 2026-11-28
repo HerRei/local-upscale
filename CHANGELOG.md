@@ -2,6 +2,16 @@
 
 ## [0.7.0-beta] - Unreleased
 
+- **Dust & scratches on photos.** A photo gets a Dust & scratches row, first in the Fix
+  list. Its value, `Paint…` or the number of marks, opens a paint bar in the viewer: paint
+  over each speck, scratch or spot (Paint and Erase, a brush size, Undo, Clear, Done), and
+  LocalSR fills the painted places from the picture around them before the other fixes and
+  the upscale (OpenCV inpainting, no model). Each photo keeps its own marks; the host keeps
+  the strokes, draws the mask and gives it only to that photo's job, and a photo without
+  marks is left as it is. With nothing else ticked at Same size, only painted photos are
+  started and the file ends in `_repaired`. The preview patch shows the repair on its
+  region. It works for small marks on even areas; large areas or marks across fine detail
+  come out smeared. Marks are not saved in recipes.
 - **Stabilise shaky video (Labs).** A video on the frame-by-frame engine gets a Stabilise
   row, first in the Fix list. It follows how the camera moves from frame to frame, evens
   that path out over 0.5 s (Light), 1 s (Medium) or 2 s (Strong), and enlarges the picture

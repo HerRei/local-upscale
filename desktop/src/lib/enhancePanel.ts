@@ -1,3 +1,4 @@
+import type { MediaFacts } from './fixRows';
 import { formatDuration } from './format';
 import type { PlanState } from './jobPlanClient';
 import { imageQualityName } from './outputFormats';
@@ -219,6 +220,8 @@ export interface EnhancePanelView {
   patchLink: 'photo' | 'example' | '';
   /** Measured run time of what Start would process; null until there is an honest number. */
   startSeconds: number | null;
+  /** The open photo's marks and the queue's, for the Dust & scratches row. */
+  repairFacts: MediaFacts;
 }
 
 export interface EnhancePanelActions {
@@ -242,6 +245,8 @@ export interface EnhancePanelActions {
   seeFixOnPhoto: (fix: FixKind) => void;
   /** The viewer dims this fraction of each edge while Stabilise's popover is open; null clears it. */
   showCropGuide: (fraction: number | null) => void;
+  /** Opens painting Dust & scratches on the open photo. */
+  paintRepair: () => void;
   setSize: (scale: 1 | 2 | 3 | 4) => void;
   openLibrary: (
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',

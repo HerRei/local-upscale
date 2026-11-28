@@ -16,6 +16,9 @@
     choiceShown,
     fixRows,
     fixRowValue,
+    marksTitle,
+    marksValue,
+    REPAIR_STEP,
     SETTING_ROWS,
     smoothingOf,
     smoothingStop,
@@ -26,6 +29,7 @@
     strengthOf,
     withStrength,
     type FixRow,
+    type MediaFacts,
   } from './lib/fixRows';
   import { withStepStage } from './lib/stepRows';
   import type { PlanStage } from './lib/plan';
@@ -54,19 +58,20 @@
   export let radioGroupKeydown: EnhancePanelActions['radioGroupKeydown'];
   /** The fraction the open Stabilise popover crops off each edge; null when none is open. */
   export let showCropGuide: EnhancePanelActions['showCropGuide'] = () => {};
+  /** Dust & scratches: the open photo's marks and the queue's, and the action that paints. */
+  export let mediaFacts: MediaFacts = { marks: 0, marked: 0, photos: 0, open: false };
+  export let paintRepair: EnhancePanelActions['paintRepair'] = () => {};
   export let moreOpen = false;
 
   const STABILISE_FEATURE = 'video_stabilise';
+  const REPAIR_FEATURE = 'image_repair';
   $: stabiliseEntry = (settings.step_stages ?? []).find(
     (selection) => selection.step === STABILISE_STEP,
   );
-  $: rows = fixRows(
-    mediaKind,
-    features,
-    undefined,
-    undefined,
-    stabiliseEntry ? [STABILISE_STEP] : [],
-  );
+  $: storedSteps = (settings.step_stages ?? [])
+    .map((selection) => selection.step)
+    .filter((step) => step === STABILISE_STEP || step === REPAIR_STEP);
+  $: rows = fixRows(mediaKind, features, undefined, undefined, storedSteps);
   let stabiliseOpen = false;
   $: if (!stabiliseEntry || preservingHdr) stabiliseOpen = false;
   $: showCropGuide(stabiliseOpen ? smoothingStop(smoothingOf(stabiliseEntry)).crop : null);
@@ -78,7 +83,11 @@
       return currentSettings.fix_stages.some((selection) => selection.fix === row.id);
     }
     if (row.source === 'step_stage') {
-      return !hdrPreserved && (currentSettings.step_stages ?? []).some((s) => s.step === row.id);
+      // Kept HDR turns Stabilise off; it says nothing about a photo's Dust & scratches.
+      return (
+        !(hdrPreserved && row.id === STABILISE_STEP) &&
+        (currentSettings.step_stages ?? []).some((s) => s.step === row.id)
+      );
     }
     if (row.id === 'deflicker' && hdrPreserved) return false;
     const field = SETTING_ROWS[row.id];
@@ -96,7 +105,16 @@
     if (row.id === STABILISE_STEP && !features.includes(STABILISE_FEATURE)) {
       return 'This engine cannot stabilise. Update LocalSR.';
     }
+    if (row.id === REPAIR_STEP && !features.includes(REPAIR_FEATURE)) {
+      return 'This engine cannot repair marks. Update LocalSR.';
+    }
     return row.title;
+  }
+
+  function paintTitle(facts: MediaFacts, locked: boolean): string {
+    if (locked) return 'Available when the job finishes.';
+    if (!facts.open) return 'Open a photo first.';
+    return marksTitle(facts);
   }
 
   function toggleRow(row: FixRow, checked: boolean): void {
@@ -109,11 +127,15 @@
         step_stages: withStepStage(
           settings.step_stages,
           row.id,
-          checked && row.choice
-            ? { step: row.id, params: { [row.choice.param]: row.choice.fallback } }
-            : null,
+          !checked
+            ? null
+            : row.choice
+              ? { step: row.id, params: { [row.choice.param]: row.choice.fallback } }
+              : { step: row.id },
         ),
       });
+      // Ticking opens painting on an open photo that has no paint yet.
+      if (row.paints && checked && mediaFacts.open && mediaFacts.marks === 0) paintRepair();
       return;
     }
     const field = SETTING_ROWS[row.id];
@@ -144,12 +166,18 @@
   }
 
   $: strengthListed = features.includes(STRENGTH_FEATURE);
-  $: fixTip = fixTipFor(mediaKind, strengthListed, features.includes(STABILISE_FEATURE));
+  $: fixTip = fixTipFor(
+    mediaKind,
+    strengthListed,
+    features.includes(STABILISE_FEATURE),
+    features.includes(REPAIR_FEATURE),
+  );
 
   function fixTipFor(
     media: 'image' | 'video',
     strengthOffered: boolean,
     stabilise: boolean,
+    repair: boolean,
   ): string {
     const thing = media === 'video' ? 'video' : 'picture';
     const unit = media === 'video' ? 'frame' : 'picture';
@@ -157,7 +185,7 @@
     const middle = strengthOffered
       ? ` A ticked row shows how strongly its fix is applied: click it to choose Light, Medium or Full, or another model. Light and Medium mix the fixed ${unit} with the ${unit} before the fix, so more of its grain and texture stays. LocalSR remembers the model you choose for a problem.`
       : ' A ticked row names its model; click the name to change it, and LocalSR remembers your choice for that problem.';
-    return `${intro}${middle} The plan line at the bottom shows the order and lets you change it.${stabilise && media === 'video' ? ' Stabilise runs first: it follows how the camera moves from frame to frame, evens that path out, and enlarges the picture a little so the edges that move in and out stay hidden. The video keeps its size. Wobble from a rolling shutter and blur that the shake left in single frames stay.' : ''}${media === 'video' ? ' De-flicker runs after the frames are processed.' : ''}`;
+    return `${intro}${middle} The plan line at the bottom shows the order and lets you change it.${stabilise && media === 'video' ? ' Stabilise runs first: it follows how the camera moves from frame to frame, evens that path out, and enlarges the picture a little so the edges that move in and out stay hidden. The video keeps its size. Wobble from a rolling shutter and blur that the shake left in single frames stay.' : ''}${media === 'video' ? ' De-flicker runs after the frames are processed.' : ''}${repair && media === 'image' ? ' Dust & scratches repairs only the places you paint over.' : ''}`;
   }
 </script>
 
@@ -224,6 +252,19 @@
       </label>
       {#if row.tag}
         <span class="fix-tag">{row.tag}</span>
+      {/if}
+      {#if ticked && row.paints}
+        <button
+          type="button"
+          class="fix-value"
+          data-paints
+          disabled={settingsLocked || !features.includes(REPAIR_FEATURE) || !mediaFacts.open}
+          title={paintTitle(mediaFacts, settingsLocked)}
+          on:click={paintRepair}
+          ><span class="fix-value-text"
+            >{mediaFacts.open ? marksValue(mediaFacts.marks) : 'Paint…'}</span
+          ></button
+        >
       {/if}
       {#if ticked && row.source === 'step_stage' && row.choice}
         {@const listed = features.includes(STABILISE_FEATURE)}

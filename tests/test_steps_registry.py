@@ -215,3 +215,15 @@ def test_stabilise_is_a_shipped_video_geometry_step() -> None:
     assert not step.dev_only and not step.needs_model
     assert step.required_feature == "video_stabilise"
     assert "video_stabilise" in REQUIRED_STEP_FEATURES
+
+
+def test_repair_is_a_shipped_photo_cleanup_step() -> None:
+    from localsr.core.steps import REQUIRED_STEP_FEATURES, STEPS_BY_ID
+
+    step = STEPS_BY_ID["repair"]
+    assert step.media == ("image",)
+    assert step.phase == "cleanup" and step.in_image_pipeline
+    assert step.requires_mask and step.supports_mask
+    assert not step.dev_only and not step.needs_model
+    assert step.required_feature == "image_repair"
+    assert "image_repair" in REQUIRED_STEP_FEATURES

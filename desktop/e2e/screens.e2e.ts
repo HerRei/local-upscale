@@ -5,6 +5,7 @@ import {
   cutout,
   firstRun,
   ready,
+  scratched,
   shaky,
   slow,
   strength,
@@ -108,6 +109,29 @@ test.describe('screens @visual', () => {
     await expect(page.locator('.crop-guide')).toHaveCount(1);
     await expect(page.locator('.foot-plan')).toHaveText(/^Stabilise/);
     await shoot(page, 'panel-stabilise');
+  });
+
+  test('plan with Dust & scratches on a photo with three marks', async ({ page }) => {
+    await openApp(page, scratched);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('checkbox', { name: 'Dust & scratches', exact: true }).check();
+    await expect(page.locator('.fix-value[data-paints]')).toHaveText('3 marks');
+    await expect(page.locator('.foot-plan')).toHaveText(/^Dust & scratches → /);
+    await shoot(page, 'panel-dust');
+  });
+
+  test('painting Dust & scratches in the viewer', async ({ page }) => {
+    await openApp(page, scratched);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('checkbox', { name: 'Dust & scratches', exact: true }).check();
+    await page.locator('.fix-value[data-paints]').click();
+    await expect(page.getByRole('toolbar', { name: 'Dust & scratches' })).toBeVisible();
+    await expect(page.locator('.mask-paint path')).toHaveCount(3);
+    await page.mouse.move(0, 0);
+    await expect(page.locator('.brush-ring')).toHaveCount(0);
+    await shoot(page, 'viewer-paint');
   });
 
   test('plan with Noise at Light', async ({ page }) => {

@@ -24,6 +24,7 @@ import numpy as np
 from PIL import Image
 
 import localsr.core.steps as step_registry
+from localsr.core.face_compositing import load_mask
 from localsr.core.image_formats import is_video_input
 from localsr.core.image_io import ImageManager
 from localsr.core.output_writer import default_work_directory
@@ -561,6 +562,8 @@ class PatchRunner:
             chip = stripped
         info = self.model_adapter.inspect(chip.model_path) if chip.model_path else None
         step = step_registry.STEPS_BY_ID.get(chip.step_id)
+        if step is not None and step.requires_mask and chip.mask_path:
+            return self._run_masked(position, chip, job, working, scale, geometry, started_at)
         brings_model = step is not None and is_model_step_stage(step)
         if info is not None and info.architecture == "DDColor" and not brings_model:
             result = self._colour(chip, info, working, geometry, job, identity, frame, path)
@@ -579,6 +582,44 @@ class PatchRunner:
                 )
         return self._finish(result, result_scale, geometry, time.monotonic() - started_at)
 
+    def _run_masked(
+        self,
+        position: tuple[str, int, int],
+        chip: PipelineStage,
+        job: dict[str, Any],
+        working: np.ndarray,
+        scale: int,
+        geometry: _Geometry,
+        started_at: float,
+    ) -> _Done:
+        """Run a step that needs paint with its mask cut to the padded region.
+
+        The host draws the mask at the photo's size; the patch's picture is the padded crop, so
+        the same part of the mask is written next to the patch and the step reads that file.
+        """
+        patch_id, index, _count = position
+        left, top, right, bottom = geometry.box
+        whole = load_mask(chip.mask_path or "", geometry.width, geometry.height)
+        part = np.ascontiguousarray(whole[top:bottom, left:right])
+        work = default_work_directory()
+        work.mkdir(parents=True, exist_ok=True)
+        cut = work / f"patch-mask-{os.getpid()}-{threading.get_ident()}.png"
+        Image.fromarray(np.rint(part * 255.0).astype(np.uint8)).save(cut)
+        try:
+            image = self.runner._run_stage(
+                _to_image(working),
+                replace(chip, mask_path=str(cut)),
+                index,
+                job,
+                _NullProgress(patch_id),
+                [],
+            )
+        finally:
+            cut.unlink(missing_ok=True)
+        return self._finish(
+            _to_uint8(image["tensor"]), scale, geometry, time.monotonic() - started_at
+        )
+
     def _remix(
         self, whole: _Done, working: np.ndarray, strength: float, geometry: _Geometry
     ) -> _Done:
@@ -594,9 +635,10 @@ class PatchRunner:
     def _skip_reason(chip: PipelineStage | None) -> str:
         if chip is None:
             return FACE_NOTE
-        if chip.mask_path:
-            return MASK_NOTE
         step = step_registry.STEPS_BY_ID.get(chip.step_id)
+        # A step that needs paint is cut to the region with its mask; another mask is not shown.
+        if chip.mask_path and not (step is not None and step.requires_mask):
+            return MASK_NOTE
         if step is not None and step.output_alpha:
             return ALPHA_NOTE
         return ""

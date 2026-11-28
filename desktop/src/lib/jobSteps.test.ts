@@ -265,4 +265,19 @@ describe('jobSteps', () => {
   it('names the stabilise step Stabilise', () => {
     expect(stepName(step({ kind: 'stabilise' }), settings)).toBe('Stabilise');
   });
+
+  it('names the repair step Dust & scratches and titles its chip', () => {
+    expect(stepName(step({ kind: 'repair' }), settings)).toBe('Dust & scratches');
+    const lastSteps: LastSteps = {
+      job_id: 'job-8',
+      media_id: 'photo-1',
+      steps: [
+        step({ kind: 'repair', state: 'done', kept: true }),
+        step({ kind: 'upscale', model_id: 'span_photo_x4', state: 'done', kept: false }),
+      ],
+    };
+    const chips = resultStepChips(lastSteps, 'job-8', settings, 2);
+    expect(chips.map((chip) => chip.label)).toEqual(['Dust & scratches', '2×']);
+    expect(chips[0].title).toBe('The picture after the marks were repaired');
+  });
 });

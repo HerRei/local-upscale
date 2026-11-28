@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { cutout, ready, shaky, slow, strength, tape, video } from './fixtures';
+import { cutout, ready, scratched, shaky, slow, strength, tape, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -455,4 +455,228 @@ test('Stabilise: the band shows while the popover is open and goes when it close
   await expect(crop(page)).toHaveAttribute('data-crop', '0.08');
   await page.keyboard.press('Escape');
   await expect(crop(page)).toHaveCount(0);
+});
+
+const bar = (page: Page) => page.getByRole('toolbar', { name: 'Dust & scratches' });
+const well = (page: Page) => page.locator('.canvas-well');
+
+/** Ticks Dust & scratches and opens painting on the open photo from the row's value. */
+async function startPainting(page: Page, keyboard = false): Promise<void> {
+  await openApp(page, scratched);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await fix(page, 'Dust & scratches').check();
+  await expect(value(page, 'Dust & scratches')).toHaveText('3 marks');
+  if (keyboard) {
+    await value(page, 'Dust & scratches').focus();
+    await page.keyboard.press('Enter');
+  } else {
+    await value(page, 'Dust & scratches').click();
+  }
+  await expect(bar(page)).toBeVisible();
+  await expect(page.locator('.mask-paint path')).toHaveCount(3);
+}
+
+/** How many screen pixels one source pixel of the 1600 px wide photo takes now. */
+const screenScale = async (page: Page) =>
+  (await page.locator('.image-stage').boundingBox())!.width / 1600;
+
+test('Dust & scratches: the bar fits the viewer at 1024 × 700 and wraps instead of being cut', async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 700 });
+  await startPainting(page);
+  const inside = async () => {
+    const box = (await well(page).boundingBox())!;
+    const parts = await bar(page)
+      .locator('button, input, .help-tip, .paint-size-text')
+      .evaluateAll((elements) =>
+        elements.map((element) => {
+          const r = element.getBoundingClientRect();
+          return { left: r.left, right: r.right, top: r.top, bottom: r.bottom };
+        }),
+      );
+    for (const part of parts) {
+      expect(part.left).toBeGreaterThanOrEqual(box.x);
+      expect(part.right).toBeLessThanOrEqual(box.x + box.width);
+      expect(part.top).toBeGreaterThanOrEqual(box.y);
+    }
+    const cut = await bar(page)
+      .locator('button, .paint-size-text')
+      .evaluateAll(
+        (elements) =>
+          elements.filter((element) => element.scrollWidth > element.clientWidth).length,
+      );
+    expect(cut).toBe(0);
+  };
+  const barBox = (await bar(page).boundingBox())!;
+  const wellBox = (await well(page).boundingBox())!;
+  expect(barBox.y - wellBox.y).toBeCloseTo(8, 0);
+  expect(Math.abs(barBox.x + barBox.width / 2 - (wellBox.x + wellBox.width / 2))).toBeLessThan(1);
+  await inside();
+  const oneLine = barBox.height;
+  // A viewer narrower than the bar: it takes two lines and every control stays inside.
+  await well(page).evaluate((element) => {
+    (element as HTMLElement).style.width = '360px';
+  });
+  await expect
+    .poll(async () => (await bar(page).boundingBox())!.height)
+    .toBeGreaterThan(oneLine + 10);
+  await inside();
+});
+
+/** The box of the pixels a stroke changed in the viewer, in page pixels. */
+async function changedBox(page: Page, before: Buffer, after: Buffer, clip: Clip) {
+  return page.evaluate(
+    async ({ a, b, clip }) => {
+      const pixels = async (data: string) => {
+        const image = await createImageBitmap(await (await fetch(data)).blob());
+        const canvas = new OffscreenCanvas(image.width, image.height);
+        const context = canvas.getContext('2d')!;
+        context.drawImage(image, 0, 0);
+        return context.getImageData(0, 0, image.width, image.height);
+      };
+      const [one, two] = [await pixels(a), await pixels(b)];
+      let [left, top, right, bottom] = [Infinity, Infinity, -Infinity, -Infinity];
+      for (let y = 0; y < one.height; y += 1) {
+        for (let x = 0; x < one.width; x += 1) {
+          const i = (y * one.width + x) * 4;
+          const change =
+            Math.abs(one.data[i] - two.data[i]) +
+            Math.abs(one.data[i + 1] - two.data[i + 1]) +
+            Math.abs(one.data[i + 2] - two.data[i + 2]);
+          if (change < 60) continue;
+          left = Math.min(left, x);
+          right = Math.max(right, x + 1);
+          top = Math.min(top, y);
+          bottom = Math.max(bottom, y + 1);
+        }
+      }
+      return {
+        left: clip.x + left,
+        top: clip.y + top,
+        right: clip.x + right,
+        bottom: clip.y + bottom,
+      };
+    },
+    {
+      a: `data:image/png;base64,${before.toString('base64')}`,
+      b: `data:image/png;base64,${after.toString('base64')}`,
+      clip,
+    },
+  );
+}
+
+interface Clip {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+async function strokeIsTinted(page: Page): Promise<void> {
+  const wellBox = (await well(page).boundingBox())!;
+  const scale = await screenScale(page);
+  const size = Number(await bar(page).getByRole('slider', { name: 'Brush size' }).inputValue());
+  const width = size * scale;
+  const from = { x: wellBox.x + wellBox.width * 0.4, y: wellBox.y + wellBox.height * 0.62 };
+  const to = { x: from.x + 90, y: from.y + 30 };
+  const clip = {
+    x: Math.round(from.x - width - 20),
+    y: Math.round(from.y - width - 20),
+    width: Math.round(to.x - from.x + 2 * width + 40),
+    height: Math.round(to.y - from.y + 2 * width + 40),
+  };
+  // The pointer leaves the viewer, so the ring is not in either picture.
+  await page.mouse.move(wellBox.x - 40, wellBox.y + 40);
+  const before = await page.screenshot({ clip });
+  await page.mouse.move(from.x, from.y);
+  await page.mouse.down();
+  await page.mouse.move(to.x, to.y, { steps: 8 });
+  await page.mouse.up();
+  await page.mouse.move(wellBox.x - 40, wellBox.y + 40);
+  const box = await changedBox(page, before, await page.screenshot({ clip }), clip);
+  expect(Math.abs(box.left - (from.x - width / 2))).toBeLessThanOrEqual(2);
+  expect(Math.abs(box.right - (to.x + width / 2))).toBeLessThanOrEqual(2);
+  expect(Math.abs(box.top - (from.y - width / 2))).toBeLessThanOrEqual(2);
+  expect(Math.abs(box.bottom - (to.y + width / 2))).toBeLessThanOrEqual(2);
+}
+
+test('Dust & scratches: a stroke is tinted where the pointer went, at 100 % and at 400 %', async ({
+  page,
+}) => {
+  await startPainting(page);
+  const zoom = page.getByRole('group', { name: 'Preview zoom' });
+  for (let step = 0; step < 12; step += 1) await page.keyboard.press(']');
+  await expect(zoom).toContainText('100%');
+  await strokeIsTinted(page);
+  await expect(page.locator('.mask-paint path')).toHaveCount(4);
+  await well(page).hover();
+  for (let step = 0; step < 7; step += 1)
+    await zoom.getByRole('button', { name: 'Zoom in' }).click();
+  await expect(zoom).toContainText(/^[−-]?\s*(4\d\d)%/);
+  await strokeIsTinted(page);
+  await expect(page.locator('.mask-paint path')).toHaveCount(5);
+});
+
+test('Dust & scratches: every control of the bar is reached by Tab and shows a focus ring', async ({
+  page,
+  browserName,
+}) => {
+  await startPainting(page, true);
+  const names: string[] = [];
+  for (let step = 0; step < 7; step += 1) {
+    const focused = await page.evaluate(() => {
+      const element = document.activeElement as HTMLElement | null;
+      if (!element?.closest('.paint-bar')) return null;
+      const style = getComputedStyle(element);
+      return {
+        name: element.getAttribute('aria-label') || element.textContent?.trim() || '',
+        ring:
+          element.matches(':focus-visible') &&
+          ((style.outlineStyle !== 'none' && parseFloat(style.outlineWidth) >= 1) ||
+            style.boxShadow !== 'none'),
+      };
+    });
+    if (!focused) break;
+    expect(focused.ring, focused.name).toBe(true);
+    names.push(focused.name);
+    // Safari moves focus to buttons with Option-Tab, as the Mac does by default.
+    await page.keyboard.press(
+      browserName === 'webkit' && process.platform === 'darwin' ? 'Alt+Tab' : 'Tab',
+    );
+  }
+  // Undo has nothing to take yet, so it is off and out of the order.
+  expect(names).toEqual([
+    'Paint',
+    'Erase',
+    'Brush size',
+    'Clear',
+    'About Dust & scratches',
+    'Done',
+  ]);
+});
+
+test('Dust & scratches: the ring is as wide as the brush at the current zoom', async ({ page }) => {
+  await startPainting(page);
+  const ring = page.locator('.brush-ring');
+  const slider = bar(page).getByRole('slider', { name: 'Brush size' });
+  const wellBox = (await well(page).boundingBox())!;
+  const check = async () => {
+    await page.mouse.move(wellBox.x + wellBox.width / 2, wellBox.y + wellBox.height * 0.6);
+    await expect(ring).toBeVisible();
+    const expected = Number(await slider.inputValue()) * (await screenScale(page));
+    const box = (await ring.boundingBox())!;
+    expect(Math.abs(box.width - expected)).toBeLessThanOrEqual(1);
+    expect(Math.abs(box.height - expected)).toBeLessThanOrEqual(1);
+  };
+  for (let step = 0; step < 8; step += 1) await page.keyboard.press(']');
+  await check();
+  const zoom = page.getByRole('group', { name: 'Preview zoom' });
+  for (let step = 0; step < 3; step += 1)
+    await zoom.getByRole('button', { name: 'Zoom in' }).click();
+  await check();
+  await page.keyboard.press('Escape');
+  await expect(bar(page)).toHaveCount(0);
+  await expect(ring).toHaveCount(0);
 });

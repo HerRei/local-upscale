@@ -99,6 +99,8 @@
     type PlanStage,
   } from './lib/plan';
   import { withStepStage } from './lib/stepRows';
+  import { REPAIR_STEP, type MediaFacts } from './lib/fixRows';
+  import { brushLimits, emptyHistory, type PaintHistory } from './lib/maskPaint';
   import { createPlanClient, fetchPlan } from './lib/jobPlanClient';
   import {
     chooseFixModel,
@@ -977,7 +979,7 @@
     settings.task !== 'video'
       ? false
       : settings.batch_mode
-        ? runnableMedia.length === 0 || runnableMedia.some((media) => media.has_audio !== false)
+        ? taskMedia.length === 0 || taskMedia.some((media) => media.has_audio !== false)
         : selectedMedia?.has_audio !== false;
   $: audioDisabled = settings.task === 'video' && !audioHasSource;
   $: audioModels = snapshot.catalog.audio_models ?? [];
@@ -990,17 +992,32 @@
       ((settings.video_interpolation ?? 'off') !== 'off' && interpolationSupported) ||
       (Boolean(settings.video_clean_audio) && !audioDisabled));
   // Steps a job adds by id are work of their own: Restore with nothing picked runs them alone.
-  $: hasStepWork = activeStepStages(settings, usingTemporalVideo).length > 0;
+  // A step that needs paint (Dust & scratches) is work only for a photo that has it.
+  $: openMaskedSteps = (selectedImage?.repair_marks ?? 0) > 0 ? [REPAIR_STEP] : [];
+  $: hasStepWork =
+    activeStepStages(settings, usingTemporalVideo, undefined, openMaskedSteps).length > 0;
+  // The ticked steps that need paint are all there is to run: a photo without paint is not started.
+  $: paintOnlyWork =
+    noRestoreModel &&
+    !hasVideoOnlyWork &&
+    activeStepStages(settings, usingTemporalVideo, undefined, []).length === 0 &&
+    activeStepStages(settings, usingTemporalVideo).length > 0;
+  const photoRuns = (media: MediaItem, paintOnly: boolean): boolean =>
+    !paintOnly || (media.repair_marks ?? 0) > 0;
   $: hasNothingToRun = noRestoreModel && !hasVideoOnlyWork && !hasStepWork;
+  // A painted photo elsewhere in the queue can still run when the open one has nothing.
+  $: queueHasNothingToRun = hasNothingToRun && !(paintOnlyWork && runnableMedia.length > 0);
   $: nothingToRunReason =
     settings.task === 'video'
       ? 'Nothing to run. Pick what to fix, or turn on De-flicker, Frame rate or Clean up audio.'
-      : 'Nothing to run. Pick what to fix, or choose a larger size.';
+      : paintOnlyWork
+        ? 'Nothing to run. Paint over the marks first, or pick another fix.'
+        : 'Nothing to run. Pick what to fix, or choose a larger size.';
   $: modelReady =
     settings.task === 'edit'
       ? editReady
       : noRestoreModel
-        ? hasVideoOnlyWork || hasStepWork
+        ? hasVideoOnlyWork || hasStepWork || (paintOnlyWork && runnableMedia.length > 0)
         : usingTemporalVideo
           ? !temporalUnavailableReason && Boolean(selectedVideoModel?.installed)
           : settings.selected_model_id === '__custom__'
@@ -1046,9 +1063,10 @@
     ['Processing', 'Enhancing', ''].includes(snapshot.runtime.status_title)
       ? stepLabel(activeJobSteps, settings, activeJobIsVideo)
       : '';
-  $: runnableMedia = settings.task
+  $: taskMedia = settings.task
     ? snapshot.media.filter((media) => (settings.task === 'video') === (media.kind === 'video'))
     : [];
+  $: runnableMedia = taskMedia.filter((media) => photoRuns(media, paintOnlyWork));
   $: queueableMedia = runnableMedia.filter((media) => !inflightMediaIds.has(media.id));
   // While a queue runs only new input can be added: a picture with any job in this run
   // (waiting, running, finished, failed or cancelled) is not offered again.
@@ -1095,6 +1113,7 @@
         : queueableMedia
       : selectedMedia &&
           mediaMatchesTask &&
+          photoRuns(selectedMedia, paintOnlyWork) &&
           !(snapshot.runtime.active_job_id ? runMedia : inflightMediaIds).has(selectedMedia.id)
         ? [selectedMedia]
         : [];
@@ -1121,14 +1140,18 @@
   // The one picture the selection names, and the batch the task could take: the two scopes
   // the status bar offers side by side when there is a choice.
   $: selectedOnly =
-    selectedMedia && mediaMatchesTask && !inflightMediaIds.has(selectedMedia.id)
+    selectedMedia &&
+    mediaMatchesTask &&
+    photoRuns(selectedMedia, paintOnlyWork) &&
+    !inflightMediaIds.has(selectedMedia.id)
       ? [selectedMedia]
       : [];
+  // The choice stays for a queue of photos without paint, so the all-button can say how few run.
   $: scopeChoice =
     !cancelling &&
     snapshot.media.length > 1 &&
     settings.task !== 'edit' &&
-    queueableMedia.length > 1 &&
+    taskMedia.filter((media) => !inflightMediaIds.has(media.id)).length > 1 &&
     !snapshot.runtime.active_job_id;
   $: canStartOne = !snapshot.runtime.active_job_id && queueReady && allReady(selectedOnly);
   $: canStartAll = !snapshot.runtime.active_job_id && queueReady && allReady(queueableMedia);
@@ -1531,6 +1554,7 @@
     planClient.request(snapshot, settings, {
       face_enabled: false,
       has_audio: audioHasSource,
+      masked_steps: openMaskedSteps,
     });
   }
   $: plan = $planState.stages;
@@ -1721,7 +1745,7 @@
       ? `“${media.name}” cannot be processed: ${media.error}`
       : `Preparing preview… Wait for “${media.name}” before starting.`;
   $: incompatibleNote =
-    settings.task && runnableMedia.length < snapshot.media.length
+    settings.task && taskMedia.length < snapshot.media.length
       ? `${queueableMedia.length} ${settings.task === 'video' ? 'video' : 'image'} item${queueableMedia.length === 1 ? '' : 's'} can be queued with this setup; select the other media type to configure it separately.`
       : '';
   // What the choice alone does not say; empty when there is nothing to explain.
@@ -1783,7 +1807,7 @@
         ? 'Wait for the download to finish.'
         : allUnready
           ? preparingNote(allUnready)
-          : hasNothingToRun
+          : queueHasNothingToRun
             ? nothingToRunReason
             : incompatibleNote;
   // What the primary button says it does to all: "Upscale all 52", "Start all 5 videos".
@@ -3847,6 +3871,7 @@
     region: PatchRegion;
     input: StartBatchInput;
     replace?: PatchReplace;
+    repairRev?: number;
   };
   // Two models: the library's candidate for one slot of the plan, shown as variant B. `fix` is
   // the fix it replaces, or `upscale` for the size step. It outlives a running job, which only
@@ -3885,6 +3910,7 @@
     patchMedia?.probe_status === 'ready' &&
     patchPlan.length > 0 &&
     patchRegion !== null &&
+    !paintingRepair &&
     $planState.status === 'ready';
   $: patchInput =
     patchActive && patchMedia
@@ -3905,7 +3931,13 @@
     syncPatch(
       'a',
       patchInput && patchMedia && patchRegion
-        ? { mediaId: patchMedia.id, slot: 'a', region: patchRegion, input: patchInput }
+        ? {
+            mediaId: patchMedia.id,
+            slot: 'a',
+            region: patchRegion,
+            input: patchInput,
+            repairRev: patchMedia.repair_rev ?? 0,
+          }
         : null,
       installed,
     );
@@ -3918,6 +3950,7 @@
             region: patchRegion,
             input: patchInput,
             replace: patchBPick,
+            repairRev: patchMedia.repair_rev ?? 0,
           }
         : null,
       installed,
@@ -4047,6 +4080,110 @@
     if (!findDownloadModel(target.model_id)?.installed) patchForceNext = false;
   }
 
+  // Dust & scratches. Painting is a state of the window, not a setting. Each photo keeps its
+  // strokes and undo history here for the session; the host keeps the strokes, sent 300 ms
+  // after each change and on Done.
+  const PAINT_SAVE_DELAY = 300;
+  const NO_PAINT = emptyHistory();
+  let paintingRepair = false;
+  let paintingId = '';
+  let paintHistories: Record<string, PaintHistory> = {};
+  let paintBrush = 0;
+  const paintSaves = new Map<string, ReturnType<typeof setTimeout>>();
+  $: repairTicked = (settings.step_stages ?? []).some(
+    (selection) => selection.step === REPAIR_STEP,
+  );
+  $: photosInQueue = snapshot.media.filter((media) => media.kind === 'image');
+  let repairFacts: MediaFacts;
+  $: repairFacts = {
+    marks: selectedImage?.repair_marks ?? 0,
+    marked: photosInQueue.filter((media) => (media.repair_marks ?? 0) > 0).length,
+    photos: photosInQueue.length,
+    open: Boolean(selectedImage) && (settings.task === 'upscale' || settings.task === 'denoise'),
+  };
+  $: openPaint = selectedImage ? (paintHistories[selectedImage.id] ?? NO_PAINT) : NO_PAINT;
+  $: if (paintingRepair && (!repairTicked || settingsLocked || !repairFacts.open)) {
+    void endPainting(false);
+  }
+  $: if (paintingRepair) followPaintedPhoto(selectedImage?.id ?? '', snapshot.media);
+
+  /** Opens painting on the open photo, with its strokes from the host. */
+  async function paintRepair(): Promise<void> {
+    const photo = selectedImage;
+    if (!photo || settingsLocked || !repairFacts.open) return;
+    if (!paintBrush) paintBrush = brushLimits(photo).first;
+    paintingId = photo.id;
+    paintingRepair = true;
+    page = 'preview';
+    await loadPaint(photo.id);
+  }
+
+  async function loadPaint(id: string): Promise<void> {
+    if (paintHistories[id]) return;
+    try {
+      const strokes = await api.getRepairStrokes(id);
+      if (!paintHistories[id]) paintHistories = { ...paintHistories, [id]: emptyHistory(strokes) };
+    } catch (error) {
+      void endPainting(false);
+      showModal('Could not open the marks', String(error));
+    }
+  }
+
+  /** Another photo keeps painting on with its own paint; a removed photo or a video ends it. */
+  function followPaintedPhoto(id: string, media: readonly MediaItem[]): void {
+    if (id === paintingId) return;
+    const previous = paintingId;
+    if (!id || !media.some((item) => item.id === previous)) {
+      void endPainting(false);
+      return;
+    }
+    if (paintSaves.has(previous)) void savePaint(previous);
+    paintingId = id;
+    void loadPaint(id);
+  }
+
+  function paintChanged(history: PaintHistory): void {
+    const id = selectedImage?.id;
+    // Until the host's strokes are in, a change would replace them.
+    if (!id || !paintHistories[id]) return;
+    paintHistories = { ...paintHistories, [id]: history };
+    clearTimeout(paintSaves.get(id));
+    paintSaves.set(
+      id,
+      setTimeout(() => void savePaint(id), PAINT_SAVE_DELAY),
+    );
+  }
+
+  async function savePaint(id: string): Promise<void> {
+    clearTimeout(paintSaves.get(id));
+    paintSaves.delete(id);
+    const history = paintHistories[id];
+    // A photo taken out of the queue took its paint with it.
+    if (!history || !snapshot.media.some((media) => media.id === id)) return;
+    try {
+      await api.setRepairStrokes(id, history.strokes);
+      await refresh();
+    } catch (error) {
+      showModal('Could not keep the marks', String(error));
+    }
+  }
+
+  async function savePaints(): Promise<void> {
+    await Promise.all([...paintSaves.keys()].map((id) => savePaint(id)));
+  }
+
+  async function endPainting(focusValue: boolean): Promise<void> {
+    if (!paintingRepair) return;
+    paintingRepair = false;
+    paintingId = '';
+    const saved = savePaints();
+    if (focusValue) {
+      await tick();
+      document.querySelector<HTMLElement>('.fix-value[data-paints]')?.focus();
+    }
+    await saved;
+  }
+
   let cropGuide: number | null = null;
 
   function showCropGuide(fraction: number | null): void {
@@ -4079,6 +4216,8 @@
       mediaIds ? ids.length > 1 : settings.batch_mode,
     );
     rememberedFailureIds = [];
+    // The host takes no paint once a job waits: what was painted is sent first.
+    await savePaints();
     startingJob = true;
     try {
       await api.startJobs(input);
@@ -5100,6 +5239,7 @@
     toggleFix,
     seeFixOnPhoto,
     showCropGuide,
+    paintRepair: () => void paintRepair(),
     setSize,
     openLibrary,
     moveFix,
@@ -5192,6 +5332,7 @@
     interpolationSupported,
     patchLink: patchLinkOffer,
     startSeconds: $startSeconds,
+    repairFacts,
   };
 </script>
 
@@ -5370,6 +5511,12 @@
           )}
           {videoEngineBusy}
           {cropGuide}
+          painting={paintingRepair}
+          paintHistory={openPaint}
+          paintSize={paintBrush}
+          onPaint={paintChanged}
+          onPaintSize={(size) => (paintBrush = size)}
+          onPaintDone={() => void endPainting(true)}
           activeTileSize={snapshot.runtime.active_tile_size}
           stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
             ? activeStepPreview

@@ -246,6 +246,8 @@ def _parse_stage_item(item: object, media: str) -> tuple[PipelineStage, StepDefi
             raise ValueError(f"The {step.id} stage does not support a mask.")
         require_ordinary_source(raw_mask)
         mask_path = raw_mask
+    if step.requires_mask and mask_path is None:
+        raise ValueError(f"The {step.id} stage needs a mask.")
     role = str(item.get("role") or "")
     allowed_roles = IMAGE_PIPELINE_ROLES | ({step.role} if step.role else set())
     if role not in allowed_roles:

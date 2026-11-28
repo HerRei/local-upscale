@@ -61,6 +61,8 @@ class StepDefinition:
     in_image_pipeline: bool = False
     in_recipe_stages: bool = False
     supports_mask: bool = False
+    # The step has nothing to do without a painted mask, so a stage of it must carry one.
+    requires_mask: bool = False
     label: str = ""
     row_label: str = ""
     short_name: str = ""
@@ -385,6 +387,19 @@ STEPS: tuple[StepDefinition, ...] = (
                 choices=("light", "medium", "strong"),
             ),
         ),
+    ),
+    StepDefinition(
+        id="repair",
+        media=("image",),
+        phase="cleanup",
+        order=3,
+        needs_model=False,
+        supports_mask=True,
+        requires_mask=True,
+        in_image_pipeline=True,
+        label="Dust & scratches",
+        stage_label="Repairing marks",
+        required_feature="image_repair",
     ),
     StepDefinition(
         id="remove_background",

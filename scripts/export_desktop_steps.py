@@ -47,6 +47,7 @@ def build_manifest() -> dict[str, Any]:
                 "order": step.order,
                 "needs_model": step.needs_model,
                 "supports_mask": step.supports_mask,
+                "requires_mask": step.requires_mask,
                 "stage_kind": step.stage_kind,
                 "role": step.role,
                 "fix_kind": step.fix_kind,

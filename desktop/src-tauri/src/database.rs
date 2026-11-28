@@ -13,7 +13,7 @@ use crate::{
     types::{JobRecord, MediaItem},
 };
 
-const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning, has_audio, field_order";
+const MEDIA_COLUMNS: &str = "id, path, name, kind, width, height, frame_count, fps, duration_seconds, preview_data_url, probe_status, error, selected, hdr_format, audio_warning, has_audio, field_order, repair_marks, repair_rev";
 
 /// A job that `admit_jobs` inserts. `ui_json` is host-only metadata.
 #[derive(Clone, Debug)]
@@ -151,6 +151,25 @@ impl Database {
             if !present {
                 connection.execute(
                     &format!("ALTER TABLE media ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"),
+                    [],
+                )?;
+            }
+        }
+        // The paint of Dust & scratches: the strokes as JSON, how many of them paint, and a
+        // counter that names the mask file of each state of the paint.
+        for (column, definition) in [
+            ("repair_strokes", "TEXT NOT NULL DEFAULT ''"),
+            ("repair_marks", "INTEGER NOT NULL DEFAULT 0"),
+            ("repair_rev", "INTEGER NOT NULL DEFAULT 0"),
+        ] {
+            let present: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM pragma_table_info('media') WHERE name=?1)",
+                [column],
+                |row| row.get(0),
+            )?;
+            if !present {
+                connection.execute(
+                    &format!("ALTER TABLE media ADD COLUMN {column} {definition}"),
                     [],
                 )?;
             }
@@ -368,6 +387,40 @@ impl Database {
         self.connection
             .execute("UPDATE media SET preview_data_url='' WHERE id=?1", [id])?;
         Ok(())
+    }
+
+    /// The strokes stored for a photo as JSON (empty when it has none); `None` for an unknown id.
+    pub fn repair_strokes(&self, id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row(
+                "SELECT repair_strokes FROM media WHERE id=?1",
+                [id],
+                |row| row.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Stores a photo's strokes, their count of marks, and a new revision of the paint.
+    /// Returns the revision, or `None` for an unknown id.
+    pub fn set_repair_strokes(
+        &self,
+        id: &str,
+        strokes: &str,
+        marks: u32,
+    ) -> AppResult<Option<u32>> {
+        let changed = self.connection.execute(
+            "UPDATE media SET repair_strokes=?2, repair_marks=?3, repair_rev=repair_rev+1 WHERE id=?1",
+            params![id, strokes, marks],
+        )?;
+        if changed == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.connection.query_row(
+            "SELECT repair_rev FROM media WHERE id=?1",
+            [id],
+            |row| row.get(0),
+        )?))
     }
 
     pub fn clear_media(&self) -> AppResult<()> {
@@ -1263,6 +1316,8 @@ fn media_from_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<MediaItem> {
         audio_warning: row.get(14)?,
         has_audio: row.get::<_, i64>(15)? != 0,
         field_order: row.get(16)?,
+        repair_marks: u32::try_from(row.get::<_, i64>(17)?).unwrap_or_default(),
+        repair_rev: u32::try_from(row.get::<_, i64>(18)?).unwrap_or_default(),
     })
 }
 

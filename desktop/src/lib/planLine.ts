@@ -92,6 +92,7 @@ function stageStepName(
   if (stage.kind === 'remove_background') return 'Background';
   if (stage.kind === 'deinterlace') return deinterlaceName(scanChoice(settings), fps);
   if (stage.kind === 'stabilise') return 'Stabilise';
+  if (stage.kind === 'repair') return 'Dust & scratches';
   return stage.label;
 }
 

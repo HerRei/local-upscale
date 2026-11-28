@@ -184,6 +184,10 @@ export interface MediaItem {
   has_audio?: boolean;
   /** What the probe says about interlacing; empty for a photo and for a file probed by an older build. */
   field_order?: '' | 'progressive' | 'tff' | 'bff' | 'unknown';
+  /** Strokes of Dust & scratches painted on this photo that paint; the strokes stay in the host. */
+  repair_marks?: number;
+  /** Counts each save of the paint, so a view can tell when it changed. */
+  repair_rev?: number;
   probe_stage?: string;
   probe_started_at?: number;
   error: string;

@@ -117,7 +117,7 @@ describe('step registry', () => {
     expect(grain.supports_mask).toBe(true);
     expect(grain.required_feature).toBe('image_grain');
     expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual(['grain']);
-    expect(STEP_LIMITS.max_step_stages).toBe(4);
+    expect(STEP_LIMITS.max_step_stages).toBe(5);
     for (const id of ['upscale', 'noise', 'face_restore', 'deflicker', 'edit', 'missing']) {
       expect(stepStage(id)).toBeUndefined();
     }
@@ -169,6 +169,7 @@ describe('step registry', () => {
       order: 10,
       needs_model: false,
       supports_mask: true,
+      requires_mask: false,
       stage_kind: 'test_tint',
       role: null,
       fix_kind: null,

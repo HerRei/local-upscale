@@ -8,7 +8,7 @@
   import type { PlanState } from './lib/jobPlanClient';
   import { FIT_LABELS, displayName, fitFor, frameRateChange, type PlanStage } from './lib/plan';
   import { slowMotionName } from './lib/planLine';
-  import { smoothingNote, smoothingOf } from './lib/fixRows';
+  import { marksValue, smoothingNote, smoothingOf } from './lib/fixRows';
   import { FIX_NAMES } from './lib/steps';
   import { scanChoice, scanOptions, scanRate } from './lib/stepRows';
   import type {
@@ -96,7 +96,9 @@
                   ? (customModels(settings).find(
                       (model) => model.path === settings.custom_model_path,
                     )?.name ?? 'Checkpoint')
-                  : ''}
+                  : stage.kind === 'repair'
+                    ? marksValue(selectedMedia?.repair_marks ?? 0)
+                    : ''}
     <!-- Licenses live in the model library; only exceptions show here. -->
     {@const meta = stage.editModel
       ? `${editVariantName(stage.editModel)}${

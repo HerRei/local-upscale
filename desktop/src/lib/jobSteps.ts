@@ -63,6 +63,7 @@ export function stepName(
   if (step.kind === 'remove_background') return 'Background';
   if (step.kind === 'deinterlace') return 'Deinterlace';
   if (step.kind === 'stabilise') return 'Stabilise';
+  if (step.kind === 'repair') return 'Dust & scratches';
   return (
     step.label ??
     STEPS.find((entry) => entry.id === step.kind)?.label ??
@@ -166,6 +167,8 @@ export function resultStepChips(
       else if (!step.kept) title = "This step's picture could not be kept.";
       else if (step.kind === 'remove_background') {
         title = 'The picture with the background removed';
+      } else if (step.kind === 'repair') {
+        title = 'The picture after the marks were repaired';
       } else title = `The picture after the ${name} fix`;
     }
     return {

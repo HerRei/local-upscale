@@ -2161,3 +2161,96 @@ function within(group: HTMLElement, name: string): HTMLElement {
     node.textContent?.includes(name),
   ) as HTMLElement;
 }
+
+describe('painting Dust & scratches', () => {
+  const photo: MediaItem = {
+    id: 'scan',
+    path: '/scan.png',
+    name: 'scan.png',
+    kind: 'image',
+    width: 2000,
+    height: 1500,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/png;base64,scan',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+
+  it('a drag paints instead of panning, Space or the middle button pans, and the wheel zooms', async () => {
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+    const onPaint = vi.fn();
+    const { container } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      painting: true,
+      onPaint,
+    });
+    await waitFor(() =>
+      expect(container.querySelector<HTMLElement>('.image-stage')?.style.width).not.toBe('1px'),
+    );
+    const canvas = screen.getByRole('application', { name: 'Media comparison canvas' });
+    const zoomText = () => screen.getByRole('group', { name: 'Preview zoom' }).textContent;
+    const transform = () => container.querySelector<HTMLElement>('.image-stage')?.style.transform;
+    const before = zoomText();
+    for (let step = 0; step < 6; step += 1) {
+      await fireEvent.wheel(canvas, { deltaY: -100, clientX: 400, clientY: 300 });
+    }
+    expect(zoomText()).not.toBe(before);
+    const zoomed = transform();
+    expect(screen.getByRole('toolbar', { name: 'Dust & scratches' })).toBeTruthy();
+
+    const drag = async (button: number, from: number, to: number) => {
+      await fireEvent.pointerDown(canvas, { pointerId: 1, button, clientX: from, clientY: 300 });
+      await fireEvent.pointerMove(canvas, { pointerId: 1, clientX: to, clientY: 300 });
+      await fireEvent.pointerUp(canvas, { pointerId: 1, clientX: to, clientY: 300 });
+    };
+    await drag(0, 400, 460);
+    expect(transform()).toBe(zoomed);
+    expect(onPaint).toHaveBeenCalledTimes(1);
+    expect(onPaint.mock.calls[0][0].strokes).toHaveLength(1);
+
+    await fireEvent.keyDown(window, { key: ' ' });
+    expect(canvas.classList.contains('moving')).toBe(true);
+    await drag(0, 400, 460);
+    const panned = transform();
+    expect(panned).not.toBe(zoomed);
+    await fireEvent.keyUp(window, { key: ' ' });
+    expect(canvas.classList.contains('painting')).toBe(true);
+    await drag(1, 460, 400);
+    expect(transform()).not.toBe(panned);
+    expect(onPaint).toHaveBeenCalledTimes(1);
+  });
+
+  it('holding M hides the paint, and the comparison and the patch leave the head', async () => {
+    const { container } = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: 'data:image/png;base64,result',
+      completedVideoOutput: '',
+      patchAvailable: true,
+      patchPlan: [{ name: 'Dust & scratches' }],
+      painting: true,
+    });
+    expect(screen.queryByRole('radiogroup', { name: 'Comparison view' })).toBeNull();
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    const paint = () => container.querySelector('.mask-paint');
+    expect(paint()?.classList.contains('hidden')).toBe(false);
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(paint()?.classList.contains('hidden')).toBe(true);
+    await fireEvent.keyUp(window, { key: 'm' });
+    expect(paint()?.classList.contains('hidden')).toBe(false);
+  });
+});

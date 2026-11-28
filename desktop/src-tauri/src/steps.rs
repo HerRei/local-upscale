@@ -123,13 +123,16 @@ pub struct StepDefinition {
     #[serde(default)]
     pub media: Vec<String>,
     pub phase: String,
-    /// Position within the phase.
+    /// Where the step runs within its phase.
     #[serde(default)]
     pub order: i64,
     #[serde(default = "default_true")]
     pub needs_model: bool,
     #[serde(default)]
     pub supports_mask: bool,
+    /// A stage of this step needs a mask; the host draws it from the photo's paint.
+    #[serde(default)]
+    pub requires_mask: bool,
     pub stage_kind: Option<String>,
     pub role: Option<String>,
     pub fix_kind: Option<String>,
@@ -219,6 +222,9 @@ impl StepRegistry {
             .step_stage(step_id)
             .ok_or_else(|| format!("'{step_id}' is not a step a job can add"))?;
         self.validate_step_params(step, params)?;
+        if mask_path.is_some() && step.requires_mask {
+            return Err(format!("The mask of {} is painted in LocalSR.", step.label));
+        }
         if let Some(mask) = mask_path {
             if mask.trim().is_empty() || mask.contains('\0') {
                 return Err("stage mask path is invalid".into());
@@ -683,7 +689,7 @@ mod tests {
         ] {
             assert!(reg.step_stage(id).is_none(), "{id} is not a step stage");
         }
-        assert_eq!(reg.limits().max_step_stages, 4);
+        assert_eq!(reg.limits().max_step_stages, 5);
         assert!(reg
             .steps
             .iter()

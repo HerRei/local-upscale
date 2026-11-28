@@ -1632,6 +1632,8 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         audio_warning: String::new(),
         has_audio: true,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     };
@@ -1795,6 +1797,8 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         audio_warning: String::new(),
         has_audio: true,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     };
@@ -2098,6 +2102,8 @@ fn video_media() -> crate::types::MediaItem {
         audio_warning: String::new(),
         has_audio: true,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     }
@@ -2956,6 +2962,8 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         audio_warning: String::new(),
         has_audio: true,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     };
@@ -3321,6 +3329,8 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
         hdr_format: String::new(),
         has_audio: true,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         audio_warning: String::new(),
         error: String::new(),
         selected: true,
@@ -5389,6 +5399,8 @@ fn photo_media() -> crate::types::MediaItem {
         audio_warning: String::new(),
         has_audio: false,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     }
@@ -5776,6 +5788,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         audio_warning: String::new(),
         has_audio: false,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     };
@@ -6358,6 +6372,8 @@ fn precision_auto_validates_and_falls_back_to_fp32_without_engine_feature() {
         audio_warning: String::new(),
         has_audio: false,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: true,
     };
@@ -6950,4 +6966,355 @@ fn slow_motion_settings_default_to_off_and_a_recipe_without_it_loads_false() {
     }))
     .unwrap();
     assert!(!recipe.video_slow_motion);
+}
+
+mod repair {
+    use super::*;
+    use crate::repair_mask::{RepairStroke, StrokeMode};
+
+    fn paint(x: f64, y: f64) -> RepairStroke {
+        RepairStroke {
+            mode: StrokeMode::Paint,
+            size: 12.0,
+            points: vec![x, y, x + 30.0, y + 4.0],
+        }
+    }
+
+    fn erase(x: f64, y: f64) -> RepairStroke {
+        RepairStroke {
+            mode: StrokeMode::Erase,
+            size: 6.0,
+            points: vec![x, y],
+        }
+    }
+
+    fn repairing_state() -> (tempfile::TempDir, Arc<AppState>) {
+        let (directory, state) = estimate_state();
+        let video = directory.path().join("clip.mp4");
+        fs::write(&video, "source").unwrap();
+        state.grants.grant_media_file(&video);
+        {
+            let database = lock(&state.database).unwrap();
+            database
+                .insert_media("clip", video.to_str().unwrap(), "clip.mp4", "video")
+                .unwrap();
+            database
+                .update_media_probe(
+                    video.to_str().unwrap(),
+                    "video",
+                    640,
+                    480,
+                    100,
+                    25.0,
+                    4.0,
+                    "preview",
+                    "",
+                    "",
+                    true,
+                    "",
+                )
+                .unwrap();
+        }
+        *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+            protocol_version: 1,
+            minimum_protocol_version: 1,
+            engine_id: "test".into(),
+            engine_version: "0".into(),
+            features: vec![
+                "image_multi_fix".into(),
+                "stage_params_and_masks".into(),
+                "image_repair".into(),
+            ],
+            model_formats: vec![],
+            video_engines: vec![],
+        });
+        (directory, state)
+    }
+
+    fn marks(state: &AppState, id: &str) -> (u32, u32) {
+        let media = lock(&state.database)
+            .unwrap()
+            .get_media(id)
+            .unwrap()
+            .unwrap();
+        (media.repair_marks, media.repair_rev)
+    }
+
+    fn repair_step() -> StepStageSelection {
+        StepStageSelection {
+            step: "repair".into(),
+            ..StepStageSelection::default()
+        }
+    }
+
+    /// The restore-alone input of Dust & scratches over `ids`.
+    fn repair_alone(ids: &[&str]) -> StartBatchInput {
+        StartBatchInput {
+            media_ids: ids.iter().map(|id| (*id).to_owned()).collect(),
+            batch_mode: true,
+            model_id: String::new(),
+            output_scale: 1,
+            step_stages: vec![repair_step()],
+            ..input("denoise")
+        }
+    }
+
+    fn queued_requests(state: &AppState) -> Vec<serde_json::Value> {
+        let mut requests = Vec::new();
+        loop {
+            let database = lock(&state.database).unwrap();
+            let Some(job) = database.next_queued_job().unwrap() else {
+                break;
+            };
+            database
+                .finish_job(&job.id, "completed", "out.png", "")
+                .unwrap();
+            requests.push(serde_json::from_str(&job.request_json).unwrap());
+        }
+        requests
+    }
+
+    fn mask_files(state: &AppState) -> Vec<String> {
+        let root = crate::repair_mask::masks_root(&state.paths.next_root);
+        let mut names: Vec<String> = fs::read_dir(root)
+            .map(|entries| {
+                entries
+                    .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+                    .collect()
+            })
+            .unwrap_or_default();
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn paint_is_kept_per_photo() {
+        let (_directory, state) = repairing_state();
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0), paint(50.0, 50.0)]).unwrap();
+        assert_eq!(marks(&state, "a"), (2, 1));
+        // An erase stroke alone is no mark.
+        set_repair_strokes_checked(&state, "b", &[erase(5.0, 5.0)]).unwrap();
+        assert_eq!(marks(&state, "b"), (0, 1));
+        assert_eq!(marks(&state, "c"), (0, 0));
+        assert_eq!(get_repair_strokes_checked(&state, "a").unwrap().len(), 2);
+        assert_eq!(get_repair_strokes_checked(&state, "b").unwrap().len(), 1);
+        assert!(get_repair_strokes_checked(&state, "c").unwrap().is_empty());
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        assert_eq!(marks(&state, "a"), (1, 2));
+        set_repair_strokes_checked(&state, "a", &[]).unwrap();
+        assert_eq!(marks(&state, "a"), (0, 3));
+        assert!(get_repair_strokes_checked(&state, "a").unwrap().is_empty());
+        assert!(get_repair_strokes_checked(&state, "missing").is_err());
+    }
+
+    #[test]
+    fn paint_is_refused_while_a_job_waits() {
+        let (_directory, state) = repairing_state();
+        set_repair_strokes_checked(&state, "a", &[paint(1.0, 1.0)]).unwrap();
+        start_jobs_checked(
+            &state,
+            StartBatchInput {
+                media_ids: vec!["c".into()],
+                ..estimate_input(4)
+            },
+        )
+        .unwrap();
+        let error = set_repair_strokes_checked(&state, "a", &[paint(1.0, 1.0), paint(9.0, 9.0)])
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Marks can be changed when the queue is done."),
+            "{error}"
+        );
+        assert_eq!(get_repair_strokes_checked(&state, "a").unwrap().len(), 1);
+        assert_eq!(marks(&state, "a"), (1, 1));
+    }
+
+    #[test]
+    fn too_much_paint_is_refused() {
+        let (_directory, state) = repairing_state();
+        let many = vec![paint(1.0, 1.0); crate::repair_mask::MAX_STROKES + 1];
+        let wide = RepairStroke {
+            mode: StrokeMode::Paint,
+            size: 5.0,
+            points: vec![1.0; crate::repair_mask::MAX_NUMBERS + 2],
+        };
+        let huge_brush = RepairStroke {
+            size: 1025.0,
+            ..paint(1.0, 1.0)
+        };
+        let not_finite = RepairStroke {
+            points: vec![1.0, f64::NAN],
+            ..paint(1.0, 1.0)
+        };
+        for bad in [many, vec![wide], vec![huge_brush], vec![not_finite]] {
+            assert!(set_repair_strokes_checked(&state, "a", &bad).is_err());
+        }
+        assert_eq!(marks(&state, "a"), (0, 0));
+        assert!(get_repair_strokes_checked(&state, "a").unwrap().is_empty());
+    }
+
+    #[test]
+    fn paint_on_a_video_is_refused() {
+        let (_directory, state) = repairing_state();
+        assert!(set_repair_strokes_checked(&state, "clip", &[paint(1.0, 1.0)]).is_err());
+        assert!(set_repair_strokes_checked(&state, "missing", &[paint(1.0, 1.0)]).is_err());
+        assert_eq!(marks(&state, "clip"), (0, 0));
+    }
+
+    #[test]
+    fn removing_a_photo_removes_its_mask_file() {
+        let (_directory, state) = repairing_state();
+        for id in ["a", "b"] {
+            set_repair_strokes_checked(&state, id, &[paint(10.0, 10.0)]).unwrap();
+            let path = repair_mask_path(&state, id).unwrap().unwrap();
+            assert!(path.is_file(), "{path:?}");
+        }
+        assert_eq!(mask_files(&state), ["a-1.png", "b-1.png"]);
+        // A newer state of the paint replaces the older file on its first use.
+        set_repair_strokes_checked(&state, "a", &[paint(20.0, 20.0)]).unwrap();
+        repair_mask_path(&state, "a").unwrap().unwrap();
+        assert_eq!(mask_files(&state), ["a-2.png", "b-1.png"]);
+        assert!(repair_mask_path(&state, "c").unwrap().is_none());
+        remove_media_checked(&state, "a").unwrap();
+        assert_eq!(mask_files(&state), ["b-1.png"]);
+        clear_media_checked(&state).unwrap();
+        assert!(mask_files(&state).is_empty());
+    }
+
+    #[test]
+    fn a_painted_photo_gets_the_stage_and_an_unpainted_one_does_not() {
+        let (_directory, state) = repairing_state();
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        let mut both = estimate_input(4);
+        both.media_ids = vec!["a".into(), "b".into()];
+        both.batch_mode = true;
+        both.step_stages = vec![repair_step()];
+        start_jobs_checked(&state, both).unwrap();
+        let requests = queued_requests(&state);
+        assert_eq!(requests.len(), 2);
+        let steps = |request: &serde_json::Value| -> Vec<String> {
+            request["data"]["stages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|stage| {
+                    stage["step"]
+                        .as_str()
+                        .or_else(|| stage["fix"].as_str())
+                        .or_else(|| stage["kind"].as_str())
+                        .unwrap()
+                        .to_owned()
+                })
+                .collect()
+        };
+        let painted = &requests[0];
+        assert!(painted["data"]["image_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("a.png"));
+        // First of all, ahead of the fixes, with the host's own mask.
+        assert_eq!(steps(painted)[0], "repair");
+        let mask = painted["data"]["stages"][0]["mask_path"].as_str().unwrap();
+        assert!(mask.ends_with("masks/a-1.png") || mask.ends_with("masks\\a-1.png"));
+        assert!(Path::new(mask).is_file());
+        let plain = &requests[1];
+        assert!(!steps(plain).contains(&"repair".to_owned()));
+        assert_eq!(steps(plain).len(), steps(painted).len() - 1);
+    }
+
+    #[test]
+    fn a_start_of_repair_alone_queues_only_painted_photos() {
+        let (_directory, state) = repairing_state();
+        let refused = start_jobs_checked(&state, repair_alone(&["a", "b", "c"]))
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("Paint over the marks on a photo first."),
+            "{refused}"
+        );
+        assert!(queued_requests(&state).is_empty());
+        set_repair_strokes_checked(&state, "b", &[paint(10.0, 10.0)]).unwrap();
+        start_jobs_checked(&state, repair_alone(&["a", "b", "c"])).unwrap();
+        let requests = queued_requests(&state);
+        assert_eq!(requests.len(), 1);
+        assert!(requests[0]["data"]["image_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("b.png"));
+        assert!(requests[0]["data"]["output_path"]
+            .as_str()
+            .unwrap()
+            .ends_with("b_repaired.png"));
+        assert_eq!(requests[0]["data"]["stages"][0]["step"], "repair");
+    }
+
+    #[test]
+    fn a_mask_path_from_the_window_is_refused() {
+        let (_directory, state) = repairing_state();
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        let mut sent = repair_alone(&["a"]);
+        sent.step_stages[0].mask_path = Some("/somewhere/mask.png".into());
+        let error = start_jobs_checked(&state, sent).unwrap_err().to_string();
+        assert!(
+            error.contains("The mask of Dust & scratches is painted in LocalSR."),
+            "{error}"
+        );
+        assert!(validate_step_stages(&[repair_step()], Some("image")).is_ok());
+        assert!(validate_step_stages(&[repair_step()], Some("video")).is_err());
+        assert!(queued_requests(&state).is_empty());
+    }
+
+    #[test]
+    fn an_engine_without_the_feature_cannot_start_it() {
+        let (_directory, state) = repairing_state();
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        lock(&state.engine).unwrap().as_mut().unwrap().features =
+            vec!["image_multi_fix".into(), "stage_params_and_masks".into()];
+        assert!(start_jobs_checked(&state, repair_alone(&["a"])).is_err());
+        // A listed feature without the mask feature is not enough either.
+        lock(&state.engine).unwrap().as_mut().unwrap().features = vec!["image_repair".into()];
+        assert!(start_jobs_checked(&state, repair_alone(&["a"])).is_err());
+    }
+
+    #[test]
+    fn the_repair_alone_is_named_repaired() {
+        let alone = repair_alone(&["a"]);
+        assert_eq!(output_ending(&alone), ("_repaired".to_owned(), "png"));
+        let mut with_fix = alone.clone();
+        with_fix.fix_stages = vec![crate::types::FixStageSelection {
+            fix: "noise".into(),
+            model_id: "denoise_realplksr_1x".into(),
+            ..Default::default()
+        }];
+        assert_eq!(output_ending(&with_fix).0, "_denoised");
+        let mut upscaled = alone;
+        upscaled.task = "upscale".into();
+        upscaled.model_id = "span_photo_x4".into();
+        upscaled.output_scale = 2;
+        assert_eq!(output_ending(&upscaled).0, "_upscaled_2x");
+    }
+
+    #[test]
+    fn repair_comes_before_the_background_whatever_order_it_was_ticked_in() {
+        let mut ticked = input("upscale");
+        ticked.step_stages = vec![
+            StepStageSelection {
+                step: "remove_background".into(),
+                model_id: Some("birefnet_general".into()),
+                ..StepStageSelection::default()
+            },
+            StepStageSelection {
+                step: "repair".into(),
+                mask_path: Some("/masks/a-1.png".into()),
+                ..StepStageSelection::default()
+            },
+        ];
+        let stages = image_pipeline_stages(&[], &[], "span", "/m/span", None, "", false, &ticked);
+        let sent: Vec<_> = stages
+            .iter()
+            .map(|stage| stage.step.clone().or_else(|| stage.kind.clone()).unwrap())
+            .collect();
+        assert_eq!(sent, ["repair", "remove_background", "upscale"]);
+    }
 }
