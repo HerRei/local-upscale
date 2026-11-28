@@ -66,6 +66,8 @@ from localsr.protocol.messages import (
     MediaInfo,
     MediaProbeFailed,
     MediaProbeProgress,
+    PatchCancelled,
+    PatchFailed,
     ProtocolError,
     TileUpdate,
     VideoFrameCompleted,
@@ -80,6 +82,7 @@ from localsr.worker.request_validation import (
     InvalidRequest,
     usable_job_id,
     validate_image_job,
+    validate_patch_request,
     validate_probe,
     validate_video_job,
 )
@@ -227,6 +230,7 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
             features.append(feature)
     features.append("compare_regions")
     features.append("preview_regions")
+    features.append("patch_preview")
     engines = _video_engines() if video_engines is None else video_engines
     if "seedvr2" in engines:
         features.append("video_seedvr2")
@@ -369,6 +373,8 @@ class WorkerServer:
         from localsr.worker.compare_regions import RegionService
 
         self.compare_regions = RegionService(send_message)
+        # Built with the first preview patch: a worker that never previews keeps nothing.
+        self.patch_cache: Any = None
         # Set when a job lost its GPU device: only a new process gets a working one.
         self.restart_after_job = False
         # The last device report, so a refresh during a job needs no new look at the drivers.
@@ -602,6 +608,8 @@ class WorkerServer:
         if request_type == "preview_request":
             self.result_previews.submit(data)
             return
+        if request_type == "patch_request":
+            self._drop_queued_patches(data)
         if request_type == "capabilities_request" and self._answer_capabilities_during_job():
             return
         if request_type == "set_low_priority":
@@ -623,6 +631,69 @@ class WorkerServer:
                 requested_job_id if isinstance(requested_job_id, str) else "",
                 keep_partial=keep_partial if isinstance(keep_partial, bool) else False,
             )
+
+    def _drop_queued_patches(self, data: object) -> None:
+        """A newer patch for a slot replaces one still waiting for the worker."""
+        slot = data.get("slot") if isinstance(data, dict) else None
+        if not isinstance(slot, str):
+            return
+        dropped: list[str] = []
+        with self.message_queue.mutex:
+            kept = []
+            for queued in self.message_queue.queue:
+                queued_data = queued.get("data") if isinstance(queued, dict) else None
+                if (
+                    isinstance(queued, dict)
+                    and queued.get("type") == "patch_request"
+                    and isinstance(queued_data, dict)
+                    and queued_data.get("slot") == slot
+                ):
+                    if isinstance(queued_data.get("patch_id"), str):
+                        dropped.append(queued_data["patch_id"])
+                else:
+                    kept.append(queued)
+            if len(kept) != len(self.message_queue.queue):
+                self.message_queue.queue.clear()
+                self.message_queue.queue.extend(kept)
+        for patch_id in dropped:
+            send_message(PatchCancelled(patch_id=patch_id))
+
+    def _run_patch(self, data: dict) -> None:
+        """One preview patch, run like a job: after the one before it, stopped by its own id."""
+        patch_id = data.get("patch_id")
+        patch_id = patch_id if isinstance(patch_id, str) and patch_id else ""
+        try:
+            validate_patch_request(data)
+        except InvalidRequest as error:
+            if patch_id:
+                send_message(PatchFailed(patch_id=patch_id, error_message=str(error)))
+            else:
+                send_message(LogMessage(level="error", message=f"Protocol error: {error}"))
+            return
+        if self.active_job_id is not None:
+            send_message(PatchFailed(patch_id=patch_id, error_message="A job is already running."))
+            return
+        from localsr.worker.patch_preview import PatchCache, PatchRunner
+
+        if self.patch_cache is None:
+            self.patch_cache = PatchCache()
+        self._activate_job(patch_id)
+        try:
+            PatchRunner(
+                engine=self.engine,
+                model_adapter=self.model_adapter,
+                cancel_event=self.cancel_event,
+                emit=send_message,
+                cache=self.patch_cache,
+            ).run(patch_id, data)
+        except InterruptedError:
+            send_message(PatchCancelled(patch_id=patch_id))
+        except Exception as error:  # noqa: BLE001 - a patch never ends the worker
+            traceback.print_exc(file=sys.stderr)
+            send_message(PatchFailed(patch_id=patch_id, error_message=str(error)))
+        finally:
+            self._deactivate_job(patch_id)
+            self.model_adapter.release()
 
     def _restart_if_required(self) -> None:
         """After a lost device, exit as soon as the failure is reported. Freeing the sessions
@@ -725,6 +796,9 @@ class WorkerServer:
 
                 elif req_type == "preview_request":
                     self.result_previews.submit(data)
+
+                elif req_type == "patch_request":
+                    self._run_patch(data)
 
                 elif req_type == "media_probe_request":
                     media_path = data.get("media_path")
@@ -2512,6 +2586,7 @@ DEFERRED_IMPORTS = (
     "localsr.worker.compare_regions",
     "localsr.worker.image_batch",
     "localsr.worker.image_job",
+    "localsr.worker.patch_preview",
     "torch",
 )
 

@@ -18,6 +18,13 @@ Compatibility rules:
 - A job the disk cannot hold ends with `job_failed` carrying `disk_full: true` (an optional
   field, absent from older engines) and a sentence naming the folder and the sizes; the host
   then stops the rest of the queue.
+- An engine that lists the feature `patch_preview` answers `patch_request` (a square of one
+  photo, run through the plan the request carries) with `patch_started`, then one
+  `patch_stage` per step (`running`, then `done` with a lossless PNG, or `skipped` with a
+  `note`), then `patch_completed`; `patch_failed` and `patch_cancelled` end it otherwise. It
+  is taken by the worker's main loop like a job, so it never overlaps one, and
+  `cancel_request` with the `patch_id` stops it. A `patch_request` still waiting when a
+  newer one for the same `slot` arrives is dropped and answered with `patch_cancelled`.
 - Arbitrary worker stdout is never interpreted as a shell command.
 - Model paths and media bytes stay on the local machine.
 - Catalog-pinned checkpoints are verified by size and SHA-256. A custom

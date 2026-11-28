@@ -270,6 +270,40 @@ def test_compare_region_protocol_has_identity_and_bounds():
         assert _message(result)["data"]["request_id"] == 3
 
 
+def test_patch_messages_carry_the_fields_the_host_reads():
+    from localsr.protocol.messages import (
+        PatchCancelled,
+        PatchCompleted,
+        PatchFailed,
+        PatchRequest,
+        PatchStage,
+        PatchStarted,
+    )
+
+    request = PatchRequest(
+        "p", "a", "image.png", {"x": 0, "y": 0, "width": 8, "height": 8}, [{"kind": "restore"}],
+        "cpu", "fp32", 256, 16, True,
+    )  # fmt: skip
+    schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
+    required = schema["$defs"]["patchRequest"]["allOf"][1]["properties"]["data"]["required"]
+    assert set(required) <= set(_message(request)["data"])
+    assert _message(request)["type"] == "patch_request"
+    assert set(_message(PatchStage("p", 1, 3, "done"))["data"]) == {
+        "patch_id", "stage_index", "stage_count", "state", "png_base64", "width", "height",
+        "elapsed_seconds", "cached", "note",
+    }  # fmt: skip
+    assert [
+        _message(message)["type"]
+        for message in (
+            PatchStarted("p"),
+            PatchCompleted("p", 1.5),
+            PatchFailed("p", "x"),
+            PatchCancelled("p"),
+        )
+    ] == ["patch_started", "patch_completed", "patch_failed", "patch_cancelled"]
+    assert _message(PatchFailed("p", "x"))["data"] == {"patch_id": "p", "error_message": "x"}
+
+
 def test_job_schemas_carry_heic_images_and_mov_prores_videos():
     schema = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
     text = json.dumps(schema)
@@ -343,6 +377,7 @@ REQUEST_SCHEMAS = {
     "VideoJobRequest": "videoJobRequest",
     "BenchmarkRequest": "benchmarkRequest",
     "RegionRequest": "regionRequest",
+    "PatchRequest": "patchRequest",
     # preview_request and media_probe_request share one property bag, so the
     # dataclass may use a subset of it (see test below).
     "MediaProbeRequest": "pathRequest",
@@ -403,6 +438,15 @@ def test_every_python_response_type_is_in_the_schema_response_enum_and_back():
 # reducer (workerEvents.ts) acts on. `log` carries the worker's own diagnostics, such as
 # a malformed request or a lost GPU; the host drops them today.
 RESPONSES_NOBODY_HANDLES = {"log"}
+# The preview patch's messages, which the engine sends before the host side (host task P2)
+# reads them; the check holds the same once the host handles them.
+PATCH_MESSAGES = {
+    "patch_started",
+    "patch_stage",
+    "patch_completed",
+    "patch_failed",
+    "patch_cancelled",
+}
 
 
 def test_every_response_type_has_a_host_or_ui_handler_except_the_listed_ones():
@@ -413,7 +457,7 @@ def test_every_response_type_has_a_host_or_ui_handler_except_the_listed_ones():
     unhandled = {
         name for name in response if f'"{name}"' not in host and f"'{name}'" not in reducer
     }
-    assert unhandled == RESPONSES_NOBODY_HANDLES
+    assert unhandled - PATCH_MESSAGES == RESPONSES_NOBODY_HANDLES
 
 
 def _rust_struct_fields(source: str) -> dict[str, set[str]]:

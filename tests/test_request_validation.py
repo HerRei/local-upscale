@@ -453,3 +453,55 @@ def test_edit_expert_fields_validated_against_schema():
     for bad_flag in ("yes", 1, None):
         with pytest.raises(InvalidRequest, match="edit_allow_any_size"):
             validate_edit_job({**base, "edit_allow_any_size": bad_flag})
+
+
+def patch_request(**overrides):
+    data = {
+        "patch_id": "patch-1",
+        "slot": "a",
+        "image_path": "/in/a.png",
+        "frame_index": -1,
+        "region": {"x": 64, "y": 32, "width": 384, "height": 384},
+        "padding": 32,
+        "stages": [{"kind": "restore", "role": "fix", "fix": "noise", "model_id": "m"}],
+        "output_scale": 1,
+        "device": "cpu",
+        "precision": "fp32",
+        "tile_size": 256,
+        "halo": 16,
+        "neural_engine": False,
+        "safe_memory": True,
+    }
+    data.update(overrides)
+    return data
+
+
+def test_a_patch_request_inside_the_schema_is_accepted():
+    from localsr.worker.request_validation import validate_patch_request
+
+    validate_patch_request(patch_request())
+    validate_patch_request(patch_request(frame_index=0, output_scale=None, slot="b"))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "named"),
+    [
+        ({"slot": "c"}, "slot"),
+        ({"patch_id": ""}, "patch_id"),
+        ({"padding": 129}, "padding"),
+        ({"frame_index": -2}, "frame_index"),
+        ({"stages": []}, "stages"),
+        ({"precision": "fp8"}, "precision"),
+        ({"region": {"x": -1, "y": 0, "width": 8, "height": 8}}, "x"),
+        ({"region": {"x": 0, "y": 0, "width": 2000, "height": 8}}, "width"),
+        ({"region": {"x": 0, "y": 0, "width": 8}}, "height"),
+        ({"region": {"x": 0, "y": 0, "width": 8, "height": 8, "depth": 1}}, "depth"),
+        ({"region": "all"}, "region"),
+        ({"job_id": "x"}, "job_id"),
+    ],
+)
+def test_a_patch_request_outside_the_schema_is_refused_with_its_field_named(overrides, named):
+    from localsr.worker.request_validation import validate_patch_request
+
+    with pytest.raises(InvalidRequest, match=named):
+        validate_patch_request(patch_request(**overrides))

@@ -766,3 +766,79 @@ class RegionFailed:
 
     def to_json(self) -> str:
         return json.dumps({"type": "region_failed", "data": asdict(self)})
+
+
+@dataclass
+class PatchRequest:
+    """A square of one photo run through a plan (engine feature patch_preview)."""
+
+    patch_id: str
+    slot: str
+    image_path: str
+    region: dict[str, int]
+    stages: list[dict[str, object]]
+    device: str
+    precision: str
+    tile_size: int
+    halo: int
+    safe_memory: bool
+    # -1 for a photo; a video's frame number otherwise.
+    frame_index: int = -1
+    padding: int = 32
+    output_scale: int | None = None
+    neural_engine: bool = True
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "patch_request", "data": asdict(self)})
+
+
+@dataclass
+class PatchStarted:
+    patch_id: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "patch_started", "data": asdict(self)})
+
+
+@dataclass
+class PatchStage:
+    patch_id: str
+    stage_index: int
+    stage_count: int
+    # "running", "done" or "skipped"
+    state: str
+    png_base64: str = ""
+    width: int = 0
+    height: int = 0
+    elapsed_seconds: float = 0.0
+    cached: bool = False
+    note: str = ""
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "patch_stage", "data": asdict(self)})
+
+
+@dataclass
+class PatchCompleted:
+    patch_id: str
+    elapsed_seconds: float
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "patch_completed", "data": asdict(self)})
+
+
+@dataclass
+class PatchFailed:
+    patch_id: str
+    error_message: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "patch_failed", "data": asdict(self)})
+
+
+@dataclass
+class PatchCancelled:
+    patch_id: str
+
+    def to_json(self) -> str:
+        return json.dumps({"type": "patch_cancelled", "data": asdict(self)})

@@ -254,6 +254,47 @@ def lab_to_rgb(lab_float: np.ndarray) -> np.ndarray:
     return np.clip(rgb, 0.0, 1.0)
 
 
+def predict_ab(
+    model: DDColor | DDColorDescriptor,
+    rgb_float: np.ndarray,
+    *,
+    input_size: tuple[int, int] | None = None,
+    device: torch.device | None = None,
+    cancel_event: threading.Event | None = None,
+) -> torch.Tensor:
+    """The model's colour planes for a float32 [0, 1] RGB picture: a (1, 2, h, w) CPU tensor
+    at the model's input size, whatever the picture's own size."""
+    cv2 = _import_cv2()
+    raw_model = model.model if isinstance(model, DDColorDescriptor) else model
+    target_size = input_size or (
+        model.input_size if isinstance(model, DDColorDescriptor) else DDCOLOR_INPUT_SIZE
+    )
+    target_h, target_w = int(target_size[0]), int(target_size[1])
+    if device is None:
+        try:
+            device = next(raw_model.parameters()).device
+        except StopIteration:
+            device = torch.device("cpu")
+
+    resized_rgb = cv2.resize(rgb_float, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
+    l_resized = rgb_to_lab(resized_rgb)[:, :, :1]
+    gray_lab = np.concatenate(
+        (l_resized, np.zeros_like(l_resized), np.zeros_like(l_resized)), axis=-1
+    )
+    gray_rgb = lab_to_rgb(gray_lab)
+
+    tensor_in = torch.from_numpy(gray_rgb.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
+    if cancel_event is not None and cancel_event.is_set():
+        raise InterruptedError("Cancelled")
+
+    raw_model.eval()
+    with torch.no_grad():
+        output_ab = raw_model(tensor_in)
+    if not torch.isfinite(output_ab).all():
+        raise ValueError("DDColor produced NaN or Infinity values.")
+    return output_ab.detach().to(torch.float32).cpu()
+
+
 def colorize_rgb_array(
     model: DDColor | DDColorDescriptor,
     rgb: np.ndarray,
@@ -267,18 +308,6 @@ def colorize_rgb_array(
         raise ValueError("DDColor expects an HxWx3 RGB image.")
     if cancel_event is not None and cancel_event.is_set():
         raise InterruptedError("Cancelled")
-
-    cv2 = _import_cv2()
-    raw_model = model.model if isinstance(model, DDColorDescriptor) else model
-    target_size = input_size or (
-        model.input_size if isinstance(model, DDColorDescriptor) else DDCOLOR_INPUT_SIZE
-    )
-    target_h, target_w = int(target_size[0]), int(target_size[1])
-    if device is None:
-        try:
-            device = next(raw_model.parameters()).device
-        except StopIteration:
-            device = torch.device("cpu")
 
     orig_dtype = rgb.dtype
     if orig_dtype == np.uint8:
@@ -297,25 +326,10 @@ def colorize_rgb_array(
     already_colorful = input_chroma > COLORFUL_INPUT_CHROMA_THRESHOLD
     note = ALREADY_COLORFUL_NOTE if already_colorful else None
 
-    resized_rgb = cv2.resize(rgb_float, (target_w, target_h), interpolation=cv2.INTER_LINEAR)
-    l_resized = rgb_to_lab(resized_rgb)[:, :, :1]
-    gray_lab = np.concatenate(
-        (l_resized, np.zeros_like(l_resized), np.zeros_like(l_resized)), axis=-1
+    output_ab_cpu = predict_ab(
+        model, rgb_float, input_size=input_size, device=device, cancel_event=cancel_event
     )
-    gray_rgb = lab_to_rgb(gray_lab)
-
-    tensor_in = torch.from_numpy(gray_rgb.transpose(2, 0, 1)).float().unsqueeze(0).to(device)
-    if cancel_event is not None and cancel_event.is_set():
-        raise InterruptedError("Cancelled")
-
-    raw_model.eval()
-    with torch.no_grad():
-        output_ab = raw_model(tensor_in)
-    if not torch.isfinite(output_ab).all():
-        raise ValueError("DDColor produced NaN or Infinity values.")
-
-    output_ab_cpu = output_ab.detach().to(torch.float32).cpu()
-    if (target_h, target_w) != (height, width):
+    if tuple(output_ab_cpu.shape[-2:]) != (height, width):
         ab_resized = F.interpolate(output_ab_cpu, size=(height, width), mode="nearest")
     else:
         ab_resized = output_ab_cpu
