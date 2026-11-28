@@ -486,7 +486,7 @@ test.describe('preview patch', () => {
     await expect(label).toBeVisible();
     await expect(label).toHaveAttribute(
       'title',
-      'De-flicker, added frames and sound cannot be shown on one frame.',
+      'Stabilise, De-flicker, added frames and sound cannot be shown on one frame.',
     );
     await expect.poll(async () => (await requests(page)).length).toBe(1);
     expect((await requests(page))[0]).toMatchObject({ slot: 'a' });
