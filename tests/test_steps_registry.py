@@ -187,13 +187,13 @@ def test_generic_step_params_validator_with_test_only_modelless_step() -> None:
             raise AssertionError(f"expected ValueError for {bad!r}")
 
 
-def test_deinterlace_is_a_dev_only_video_geometry_step() -> None:
+def test_deinterlace_is_a_video_geometry_step() -> None:
     from localsr.core.steps import STEPS_BY_ID, parameter_for
 
     step = STEPS_BY_ID["deinterlace"]
     assert step.media == ("video",)
     assert step.phase == "geometry" and step.in_image_pipeline
-    assert step.dev_only and not step.needs_model
+    assert not step.dev_only and not step.needs_model
     assert step.required_feature == "video_deinterlace"
     assert (
         parameter_for("deinterlace", "mode").default,

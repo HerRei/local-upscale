@@ -804,14 +804,17 @@ One sentence for the change, one for what to keep, as the field's placeholder is
   and no face changes. A prompt that fails on a family is reworded or leaves that family.
   Mage-Flow-Edit-Turbo and the user's own edit model get no examples.
 
-E0 (2026-11-28), FLUX.2 klein 4B Q4 at 768 px, seed 42, two rounds on three photos per prompt:
-Colour passed on all three. Film look in its first wording turned the photos strongly orange
-with more contrast; the wording above passed. Scratches and dust, Remove something and New
-background redrew small faces on an old colour slide in both rounds (expressions, hair), even
-with "keep every face exactly as it is"; Scratches and dust also cropped the slide's frame
-away, and Remove something left a person in a crowded scene in place. These three carry
-`families: []` until a family passes them. Qwen Image Edit 2511 is not tested: it does not fit
-next to other work on a 16 GB Mac.
+E0 (2026-11-28), seed 42, three photos per prompt, at 512 px: the size `plan_edit` gives Macs
+under 36 GB (`edit_memory.py:381-382`) and a 16 GB GPU with Qwen Q4_K_M. FLUX.2 klein 4B Q4_0 ran on
+the Mac, Qwen Image Edit 2511 Q4_K_M on a 16 GB RX 9060 XT with LocalSR's own sd-cli (3f8527a,
+Vulkan) driven by `run_edit_job`. Colour passed on all photos on both. Film look failed on both
+in two wordings: klein turned the photos strongly orange instead of a little warmer, and Qwen
+redrew small text (a date stamp "2025.07.26" became "2028 07 26", camera labels and signs became
+pseudo-glyphs). Scratches and dust, Remove something and New background redrew small faces on an
+old colour slide on both families in both rounds (expressions, hair), even with "keep every face
+exactly as it is"; Scratches and dust also cropped the slide's frame away, and Remove something
+left people in place in a crowded scene. These four carry `families: []` until a family passes
+them. Qwen's Q3_K_S (the 24-32 GB Mac bundle) is not tested.
 
 ## Files
 

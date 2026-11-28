@@ -149,6 +149,10 @@ pub struct MediaItem {
     pub audio_warning: String,
     #[serde(default = "default_true")]
     pub has_audio: bool,
+    /// What the probe says about interlacing: `progressive`, `tff`, `bff`, `unknown`, or empty for
+    /// a photo and for a file probed by an older build.
+    #[serde(default)]
+    pub field_order: String,
     pub error: String,
     pub selected: bool,
 }

@@ -860,6 +860,7 @@ fn trial_state(
             "",
             "",
             true,
+            "",
         )
         .unwrap();
     }
@@ -1202,6 +1203,7 @@ fn a_pair_decodes_each_result_once_and_never_the_original() {
         "",
         "",
         true,
+        "",
     )
     .unwrap();
     let media = db.get_media("photo").unwrap().unwrap();
@@ -1629,6 +1631,7 @@ fn image_jobs_request_a_bounded_nonblocking_progressive_preview() {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: true,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     };
@@ -1791,6 +1794,7 @@ fn image_recipe_serializes_restore_upscale_and_fused_face_in_order() {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: true,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     };
@@ -2093,9 +2097,53 @@ fn video_media() -> crate::types::MediaItem {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: true,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     }
+}
+
+#[test]
+fn double_rate_reaches_the_worker_as_a_deinterlace_stage_with_no_upscale() {
+    let mut options = input("video");
+    options.video_task = "denoise".into();
+    options.model_id = String::new();
+    options.output_scale = 1;
+    options.step_stages = vec![crate::types::StepStageSelection {
+        step: "deinterlace".into(),
+        params: json!({"mode": "field", "parity": "auto"})
+            .as_object()
+            .cloned(),
+        mask_path: None,
+        model_id: None,
+    }];
+    let selection = ModelSelection::Image {
+        model_id: String::new(),
+        path: String::new(),
+        approved_checkpoint_sha256: None,
+        preprocess: Vec::new(),
+        step_models: Vec::new(),
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 1,
+        skip_upscale: true,
+        interpolation: None,
+        audio_denoise: None,
+    };
+    let message = build_job_message(
+        "job",
+        &video_media(),
+        Path::new("/output/clip.mp4"),
+        Path::new("/app-owned/work"),
+        &options,
+        &selection,
+    )
+    .unwrap();
+    let stages = message["data"]["stages"].as_array().unwrap();
+    assert_eq!(stages.len(), 1, "{message}");
+    assert_eq!(stages[0]["kind"], "deinterlace");
+    assert_eq!(stages[0]["params"]["mode"], "field");
+    assert_eq!(stages[0]["params"]["parity"], "auto");
 }
 
 #[test]
@@ -2862,6 +2910,7 @@ fn a_start_that_cannot_be_written_is_refused_before_anything_is_queued() {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: true,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     };
@@ -3226,6 +3275,7 @@ fn video_restore_and_fix_first_build_stages_names_and_reject_temporal() {
         probe_status: "ready".into(),
         hdr_format: String::new(),
         has_audio: true,
+        field_order: String::new(),
         audio_warning: String::new(),
         error: String::new(),
         selected: true,
@@ -4187,6 +4237,7 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
             "",
             "",
             false,
+            "",
         )
         .unwrap();
     }
@@ -4271,6 +4322,7 @@ fn edit_placement_overrides_are_gated_by_engine_feature() {
             "",
             "",
             false,
+            "",
         )
         .unwrap();
     }
@@ -4390,6 +4442,7 @@ fn edit_expert_settings_validate_and_flow_from_settings_to_request() {
             "",
             "",
             false,
+            "",
         )
         .unwrap();
     }
@@ -4765,7 +4818,7 @@ fn retry_job_on_cpu_queues_only_the_failed_job_on_cpu_without_changing_device_id
         db.insert_media(&media_id, photo_str, "photo.png", "image")
             .unwrap();
         db.update_media_probe(
-            photo_str, "image", 64, 64, 1, 0.0, 0.0, "preview", "", "", false,
+            photo_str, "image", 64, 64, 1, 0.0, 0.0, "preview", "", "", false, "",
         )
         .unwrap();
         db.insert_job(&failed_job_id, &media_id, &request_json)
@@ -5290,6 +5343,7 @@ fn photo_media() -> crate::types::MediaItem {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: false,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     }
@@ -5676,6 +5730,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: false,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     };
@@ -6257,6 +6312,7 @@ fn precision_auto_validates_and_falls_back_to_fp32_without_engine_feature() {
         hdr_format: String::new(),
         audio_warning: String::new(),
         has_audio: false,
+        field_order: String::new(),
         error: String::new(),
         selected: true,
     };
@@ -6365,6 +6421,7 @@ fn preview_regions_refuses_ungranted_originals_and_non_owned_outputs() {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
         db.insert_media("s", stranger.to_str().unwrap(), "stranger.png", "image")
@@ -6381,6 +6438,7 @@ fn preview_regions_refuses_ungranted_originals_and_non_owned_outputs() {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
         db.insert_job("job-m", "m", "{}").unwrap();
@@ -6542,6 +6600,7 @@ fn preview_regions_go_only_to_an_engine_that_has_them() {
             "",
             "",
             true,
+            "",
         )
         .unwrap();
     }
@@ -6625,6 +6684,7 @@ fn estimate_state() -> (tempfile::TempDir, Arc<AppState>) {
                 "",
                 "",
                 true,
+                "",
             )
             .unwrap();
     }

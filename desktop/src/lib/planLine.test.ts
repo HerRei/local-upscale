@@ -156,4 +156,55 @@ describe('planLine', () => {
       ),
     ).toEqual(['Background']);
   });
+
+  it('names the deinterlace step from the Scan choice and the rate', () => {
+    const scan = (choice: [string, string], fps: number) =>
+      planLine(
+        [stage({ kind: 'deinterlace', role: 'step', label: 'Deinterlace' })],
+        {
+          ...baseSettings,
+          task: 'video',
+          step_stages: [{ step: 'deinterlace', params: { mode: choice[0], parity: choice[1] } }],
+        },
+        { kind: 'video', fps },
+      );
+    expect(scan(['field', 'auto'], 25)).toEqual(['Deinterlace to 50 fps']);
+    expect(scan(['field', 'auto'], 29.97)).toEqual(['Deinterlace to 59.94 fps']);
+    expect(scan(['field', 'auto'], 0)).toEqual(['Deinterlace 2×']);
+    expect(scan(['frame', 'tff'], 25)).toEqual(['Deinterlace']);
+  });
+});
+
+describe('planLine, strength', () => {
+  const entry = (fix: 'noise' | 'jpeg', strength?: number) => ({
+    fix,
+    model_id: 'm',
+    ...(strength === undefined ? {} : { params: { strength } }),
+  });
+
+  it('adds the strength in lower case, and nothing at Full', () => {
+    const stages: PlanStage[] = [
+      stage({ kind: 'restore', role: 'fix', fix: 'noise', label: 'Fix noise' }),
+      stage({ kind: 'upscale', role: 'primary', label: 'Upscale ×4' }),
+    ];
+    const line = (fixStages: ReturnType<typeof entry>[]) =>
+      planLine(stages, { ...baseSettings, fix_stages: fixStages }, photo);
+    expect(line([entry('noise', 0.4)])).toEqual(['Noise (light)', 'Upscale 4×']);
+    expect(line([entry('noise', 0.55)])).toEqual(['Noise (55%)', 'Upscale 4×']);
+    expect(line([entry('noise')])).toEqual(['Noise', 'Upscale 4×']);
+    expect(line([entry('noise', 1)])).toEqual(['Noise', 'Upscale 4×']);
+  });
+
+  it('names Compression (medium) on video and drops amounts on request', () => {
+    const stages: PlanStage[] = [
+      stage({ kind: 'deblock', role: 'fix', fix: 'jpeg', label: 'Fix JPEG' }),
+    ];
+    const settings = {
+      ...baseSettings,
+      task: 'video' as const,
+      fix_stages: [entry('jpeg', 0.7)],
+    };
+    expect(planLine(stages, settings, video)).toEqual(['Compression (medium)']);
+    expect(planLine(stages, settings, video, { amounts: false })).toEqual(['Compression']);
+  });
 });

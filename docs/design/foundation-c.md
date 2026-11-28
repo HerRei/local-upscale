@@ -272,14 +272,15 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
   the primary, so the matte is computed at source size and scales with the image. The
   Backgr. row (`Keep` / `Remove`, spec in `docs/design/scan-and-background.md`) ships it;
   a fill colour and a second model are still to come.
-- **Deinterlacing**: the dev-only video geometry step supports frame and field modes, field
-  order selection, and progressive-source passthrough. It still needs a UI row.
+- **Deinterlacing**: the video geometry step supports frame and field modes, field order
+  selection, and progressive-source passthrough. The Scan row (`Automatic`, `Double rate`
+  and four hand-set orders; spec in `docs/design/scan-and-background.md`) ships it.
 - **Video stabilisation**: needs a video geometry handler and crop output dimensions passed
   to `VideoChainContext`.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI
   row, and running after the primary in video (today refused).
-- **Denoise/deblur strength**: declare `strength` on the fix step, and blend the fix output
-  with its input by that scalar in `_run_stage`, next to the mask blend.
+- **Denoise/deblur strength**: built in 0.7.0 as `Light` / `Medium` / `Full` on a ticked Blur,
+  JPEG artifacts or Noise row; see `docs/design/tools-wave.md`, section 1.
 - **Object/scratch removal** (inpainting with a painted mask): a model-bearing step stage, a
   `requires_mask` registry flag, and the host command that writes a painted mask.
 - **Masks per fix**: `supports_mask` on the fix steps and the painting UI; the plumbing is

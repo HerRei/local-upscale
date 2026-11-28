@@ -2074,6 +2074,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 data.get("has_audio")
                     .and_then(Value::as_bool)
                     .unwrap_or(true),
+                &string(data, "field_order"),
             )?;
             if lock(&state.database)?.get_media_by_path(&path)?.is_none() && !preview.is_empty() {
                 let mut runtime = lock(&state.runtime)?;

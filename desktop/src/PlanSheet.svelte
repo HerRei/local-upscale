@@ -9,6 +9,7 @@
   import { FIT_LABELS, displayName, fitFor, frameRateChange, type PlanStage } from './lib/plan';
   import { slowMotionName } from './lib/planLine';
   import { FIX_NAMES } from './lib/steps';
+  import { scanChoice, scanOptions, scanRate } from './lib/stepRows';
   import type {
     AppSnapshot,
     CatalogModel,
@@ -44,6 +45,13 @@
   export let openLibrary: EnhancePanelActions['openLibrary'];
   export let moveFix: EnhancePanelActions['moveFix'];
   export let refreshCapabilities: EnhancePanelActions['refreshCapabilities'];
+
+  $: scanSelected = scanChoice(settings);
+  $: scanNote =
+    scanOptions(selectedMedia?.field_order, selectedMedia?.fps ?? 0, scanSelected).find(
+      (option) => option.value === scanSelected,
+    )?.label ?? '';
+  $: baseFps = scanRate(scanSelected, selectedMedia?.field_order, selectedMedia?.fps ?? 0);
 
   function openFromSheet(
     slot: Parameters<EnhancePanelActions['openLibrary']>[0],
@@ -111,7 +119,7 @@
                 slowMotionName(settings)
                   ? `${settings.video_interpolation === 'x4' ? 4 : 2}× slower`
                   : settings.video_interpolation && settings.video_interpolation !== 'off'
-                    ? frameRateChange(settings.video_interpolation, selectedMedia?.fps ?? 0)
+                    ? frameRateChange(settings.video_interpolation, baseFps)
                     : '',
                 settings.video_interpolation_order === 'before_upscale'
                   ? 'before upscaling'
@@ -122,7 +130,9 @@
                 .join(' · ')
             : stage.audioModel
               ? stage.audioModel.summary || 'Audio cleanup'
-              : ''}
+              : stage.kind === 'deinterlace'
+                ? scanNote
+                : ''}
     {@const warning =
       stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
         ? stage.role === 'fix'

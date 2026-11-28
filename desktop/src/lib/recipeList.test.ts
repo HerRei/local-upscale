@@ -129,6 +129,29 @@ describe('recipeList', () => {
     ]);
   });
 
+  it('names a saved fix strength in the recipe plan line', () => {
+    const { catalog } = demoSnapshot();
+    expect(
+      recipePlanLine(
+        makeRecipe('light', {
+          task: 'upscale',
+          output_scale: 4,
+          fixes: ['noise'],
+          stages: [
+            {
+              kind: 'restore',
+              model_id: 'denoise_realplksr_1x',
+              fix: 'noise',
+              params: { strength: 0.4 },
+            },
+            { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+          ],
+        }),
+        catalog,
+      ),
+    ).toBe('Noise (light) → Upscale 4×');
+  });
+
   it('formats recipePlanLine for upscale with fixes, restore, video, and same size without fixes', () => {
     const { catalog } = demoSnapshot();
 

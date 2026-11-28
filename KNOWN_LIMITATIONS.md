@@ -52,9 +52,11 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
 - The built-in video decoder opens local files only; it does not fetch network playlist segments.
 - On Linux, comparing videos with different frame rates can show one side a frame
   early after a frame step or seek; playback and same-rate comparisons stay in step.
-- Interlacing is deinterlaced only when the file is tagged; untagged interlacing
-  and inverse telecine are not detected. DVD menus, disc images and encrypted
-  media are out of scope.
+- Interlacing is deinterlaced only when the file is tagged (or a field order is set
+  by hand in the Scan row); untagged interlacing and inverse telecine are not
+  detected. On macOS, a clip the system decoder opens carries no field flags, so
+  Double rate there assumes top field first: set the order by hand if motion jumps
+  back and forth. DVD menus, disc images and encrypted media are out of scope.
 - A `.mov` extension says little about compatibility: the codec, colour metadata,
   transforms and audio tracks all matter. Spatial audio and unsupported tracks
   are dropped with a warning.

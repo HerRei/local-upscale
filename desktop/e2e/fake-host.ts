@@ -17,6 +17,8 @@ export interface Scenario {
   video?: boolean;
   /** Whether the fake video reports an audio track (defaults to true). */
   videoHasAudio?: boolean;
+  /** What the fake video's probe says about interlacing; also makes it 768 × 576 at 25 fps. */
+  videoFieldOrder?: 'progressive' | 'tff' | 'bff' | 'unknown';
   /** Completed 15/60 fps outputs with tiny real playback sources. */
   videoCompare?: boolean;
   /** With `videoCompare`: a third result, stopped after two frames and kept. */
@@ -587,9 +589,10 @@ function hostScript(scenario: Scenario): void {
         path: '/fixture/alpine-lake.mp4',
         name: 'Alpine lake.mp4',
         kind: 'video',
-        width: scenario.videoSyncCompare ? 128 : 1920,
-        height: scenario.videoSyncCompare ? 72 : 1080,
-        fps: scenario.videoSyncCompare ? 30 : 24,
+        width: scenario.videoSyncCompare ? 128 : scenario.videoFieldOrder ? 768 : 1920,
+        height: scenario.videoSyncCompare ? 72 : scenario.videoFieldOrder ? 576 : 1080,
+        fps: scenario.videoSyncCompare ? 30 : scenario.videoFieldOrder ? 25 : 24,
+        ...(scenario.videoFieldOrder ? { field_order: scenario.videoFieldOrder } : {}),
         frame_count: scenario.videoSyncCompare ? 90 : 288,
         has_audio: scenario.videoHasAudio ?? true,
         duration_seconds: scenario.videoSyncCompare ? 3 : scenario.videoCompare ? 4 : 12,

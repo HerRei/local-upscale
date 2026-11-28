@@ -696,6 +696,26 @@ function buildCorpus(): ParityCase[] {
       { task: 'upscale', step_stages: [{ step: 'deinterlace', params: {} }, background] },
     ],
     [
+      'deinterlace-video-before-interpolation',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        video_interpolation: 'x2',
+        video_interpolation_order: 'before_upscale',
+        step_stages: [{ step: 'deinterlace', params: { mode: 'field', parity: 'auto' } }],
+      },
+    ],
+    [
+      'deinterlace-and-background-stored-on-a-photo',
+      {
+        task: 'upscale',
+        step_stages: [
+          { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+          background,
+        ],
+      },
+    ],
+    [
       'background-video',
       { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [background] },
     ],
@@ -881,6 +901,7 @@ describe('job_plan parity corpus', () => {
         'audio_denoise',
         'grain',
         'remove_background',
+        'deinterlace',
         'test_cutout',
         'test_tone',
         'test_key',

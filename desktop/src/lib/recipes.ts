@@ -1,3 +1,4 @@
+import { strengthOf, withStrength } from './fixRows';
 import { choosePresetModel, fixesOf } from './plan';
 import { isFixStageKind, isVideoOrUpscalePrimaryKind } from './steps';
 import type {
@@ -119,8 +120,15 @@ export function recipeFixStages(
       ? fixesOf(model).filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
       : [];
     const fix = stage.fix ?? (chip && (!model || fixes.includes(chip)) ? chip : fixes[0]);
-    if (fix && !result.some((selection) => selection.fix === fix))
-      result.push({ fix, model_id: stage.model_id });
+    if (fix && !result.some((selection) => selection.fix === fix)) {
+      const entry: FixStageSelection = { fix, model_id: stage.model_id };
+      const strength = stage.params?.strength;
+      result.push(
+        typeof strength === 'number' && strength >= 0 && strength < 1
+          ? withStrength(entry, strength)
+          : entry,
+      );
+    }
   });
   return result;
 }
@@ -130,7 +138,9 @@ export function sameFixStages(left: FixStageSelection[], right: FixStageSelectio
     left.length === right.length &&
     left.every(
       (selection, index) =>
-        selection.fix === right[index].fix && selection.model_id === right[index].model_id,
+        selection.fix === right[index].fix &&
+        selection.model_id === right[index].model_id &&
+        strengthOf(selection) === strengthOf(right[index]),
     )
   );
 }

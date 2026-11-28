@@ -9,6 +9,13 @@
   the Output line says no sound, Clean up audio is off while it is chosen, and the file
   name ends in `_slow`. A slow-motion result opens in Enhanced only, because it cannot
   play on one clock with the original.
+- **Fix strength.** A ticked Blur, JPEG artifacts (Compression on a video) or Noise row
+  now shows how strongly its fix is applied: Full, Medium or Light. Click the value to
+  choose. Light and Medium mix the fixed picture with the picture before the fix, so
+  more of its grain and texture stays. Full, the default, is the whole fix and changes
+  nothing for existing recipes and workflows. The plan line names it (`Noise (light)`),
+  recipes keep it, and the preview patch mixes again without running the model. The
+  model you use is in the same popover, under the three choices.
 - **Remove a photo's background.** Under Result, the new Backgr. row has Keep and Remove.
   Remove makes everything behind the main subject transparent, using BiRefNet, which
   downloads (444 MB) the first time you start. The subject is found on the original
@@ -18,6 +25,12 @@
   ticked, the cut-out is the whole job and the file ends in `_cutout`. In the preview
   patch the Background chip is struck through, because the patch cannot show
   transparency.
+- **Deinterlace old camcorder, TV and DVD video.** A video whose file says it is
+  interlaced, or does not say, gets a Scan row between Content and Fix. Automatic keeps
+  the frame rate; Double rate makes a frame from every half-picture, so 25 fps becomes
+  50 and motion is as smooth as on a TV (twice the frames to process). When stripes
+  remain, or motion jumps back and forth, set the field order by hand. Scan is not
+  saved in recipes and is left out of the preview patch.
 - **Preview on your photo.** Under the viewer's header, Preview shows what the ticked
   fixes and the upscale will do on a square of the open photo, before you start. The
   square sits over the photo with a tab above it: one chip for Original and one for each
@@ -54,9 +67,9 @@
   illustration upscalers show a before and after picture, made with the model itself
   from a CC0 or public-domain source; Before and After switch between them. The
   recommended workflows show theirs on their card.
-- **Prompt examples for Edit.** With FLUX.2 klein 4B, Examples beside What to change
-  offers prompts that were tested on it: Colour and Film look. Choosing one replaces
-  your text, and ⌘Z brings it back.
+- **Prompt examples for Edit.** With FLUX.2 klein 4B and Qwen Image Edit 2511, Examples
+  beside What to change offers the prompts that passed our tests on them; today that is
+  Colour. Choosing one replaces your text, and ⌘Z brings it back.
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a
   glance, and open settings where you need them. Once the same kind of job has run twice,
   the panel shows about how long Start will take. The new blue accent follows your Mac’s

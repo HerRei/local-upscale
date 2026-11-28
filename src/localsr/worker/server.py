@@ -859,6 +859,7 @@ class WorkerServer:
                                     hdr_format=probe.hdr_format,
                                     audio_warning=probe.audio_warning,
                                     has_audio=bool(probe.has_audio),
+                                    field_order=probe.field_order,
                                 )
                             )
                         else:

@@ -36,16 +36,19 @@ export const PROMPT_EXAMPLES: PromptExample[] = [
     title: 'Film look',
     prompt:
       'Give the photo a subtle colour-film look: a little warmer, a little softer contrast and fine grain. Keep the colours natural, and the subject and the framing unchanged.',
+    families: [],
   },
 ];
 
 /**
- * Edit model families the examples passed on (task E0, 2026-11-28: FLUX.2 klein 4B Q4 at 768 px,
- * three photos per prompt). Qwen Image Edit 2511 is not tested yet. The prompts with
- * `families: []` redrew small faces on FLUX.2 klein, so they wait for a family they pass on.
+ * Edit model families the examples passed on (task E0, 2026-11-28, at the 512 px these models get
+ * on 16-32 GB machines, three photos per prompt: FLUX.2 klein 4B Q4_0 on a Mac, Qwen Image Edit
+ * 2511 Q4_K_M on a 16 GB GPU). Only Colour passed on both. Film look turned photos strongly orange
+ * on klein and redrew small text (date stamps, signs) on Qwen; the other three redrew small faces
+ * on both. Those carry `families: []` until a family passes them. Qwen's Q3_K_S is not tested.
  * Mage-Flow-Edit-Turbo and the user's own edit model get no examples.
  */
-export const PROMPT_EXAMPLE_FAMILIES: string[] = ['flux2-klein-4b'];
+export const PROMPT_EXAMPLE_FAMILIES: string[] = ['flux2-klein-4b', 'qwen-image-edit-2511'];
 
 export function examplesFor(family: string | undefined): PromptExample[] {
   if (!family) return [];

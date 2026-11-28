@@ -11,7 +11,18 @@
   } from './lib/plan';
   import { FIX_NAMES, type FixStageKind } from './lib/steps';
   import type { EnhancePanelActions } from './lib/enhancePanel';
-  import { fixRows, fixRowValue, SETTING_ROWS, splitFixRows, type FixRow } from './lib/fixRows';
+  import {
+    choiceShown,
+    fixRows,
+    fixRowValue,
+    SETTING_ROWS,
+    splitFixRows,
+    STRENGTH_FEATURE,
+    strengthLabel,
+    strengthOf,
+    withStrength,
+    type FixRow,
+  } from './lib/fixRows';
   import type { PlanStage } from './lib/plan';
   import type {
     CatalogModel,
@@ -35,6 +46,7 @@
   /** The preview patch is on offer: `photo` when a photo is open, `example` otherwise, empty when off. */
   export let patchLink: 'photo' | 'example' | '' = '';
   export let updateSettings: EnhancePanelActions['updateSettings'];
+  export let radioGroupKeydown: EnhancePanelActions['radioGroupKeydown'];
   export let moreOpen = false;
 
   $: rows = fixRows(mediaKind, features);
@@ -75,10 +87,26 @@
     moreOpen,
   ));
 
-  $: fixTip =
-    mediaKind === 'video'
-      ? 'Tick what is wrong with the video. Each problem gets its own fix at the original size, before the video is enlarged. Quick picks a fast model for each problem, Best the most careful one. A ticked row names its model; click the name to change it, and LocalSR remembers your choice for that problem. The plan line at the bottom shows the order and lets you change it. De-flicker runs after the frames are processed.'
-      : 'Tick what is wrong with the picture. Each problem gets its own fix at the original size, before the picture is enlarged. Quick picks a fast model for each problem, Best the most careful one. A ticked row names its model; click the name to change it, and LocalSR remembers your choice for that problem. The plan line at the bottom shows the order and lets you change it.';
+  function setStrength(row: FixRow, value: number): void {
+    updateSettings({
+      fix_stages: settings.fix_stages.map((entry) =>
+        entry.fix === row.id ? withStrength(entry, value) : entry,
+      ),
+    });
+  }
+
+  $: strengthListed = features.includes(STRENGTH_FEATURE);
+  $: fixTip = fixTipFor(mediaKind, strengthListed);
+
+  function fixTipFor(media: 'image' | 'video', strengthOffered: boolean): string {
+    const thing = media === 'video' ? 'video' : 'picture';
+    const unit = media === 'video' ? 'frame' : 'picture';
+    const intro = `Tick what is wrong with the ${thing}. Each problem gets its own fix at the original size, before the ${thing} is enlarged. Quick picks a fast model for each problem, Best the most careful one.`;
+    const middle = strengthOffered
+      ? ` A ticked row shows how strongly its fix is applied: click it to choose Light, Medium or Full, or another model. Light and Medium mix the fixed ${unit} with the ${unit} before the fix, so more of its grain and texture stays. LocalSR remembers the model you choose for a problem.`
+      : ' A ticked row names its model; click the name to change it, and LocalSR remembers your choice for that problem.';
+    return `${intro}${middle} The plan line at the bottom shows the order and lets you change it.${media === 'video' ? ' De-flicker runs after the frames are processed.' : ''}`;
+  }
 </script>
 
 <div class="panel-key fix-head">
@@ -89,11 +117,13 @@
     {@const ticked = isRowTicked(row, settings, preservingHdr)}
     {@const rowDisabled = isRowDisabled(row, preservingHdr)}
     {@const title = rowTitle(row, preservingHdr)}
+    {@const entry = settings.fix_stages.find((selection) => selection.fix === row.id)}
+    {@const showStrength = ticked && choiceShown(row, features, entry)}
     {@const value =
       ticked && row.source === 'fix_stage'
-        ? fixRowValue(row.id, plan, settings, models, downloadMap)
+        ? fixRowValue(row, plan, settings, models, downloadMap, showStrength)
         : ''}
-    {@const stage = plan.find((entry) => entry.fix === row.id)}
+    {@const stage = plan.find((candidate) => candidate.fix === row.id)}
     {@const model =
       stage?.model ??
       models.find(
@@ -101,6 +131,10 @@
           entry.model_id ===
           settings.fix_stages.find((selection) => selection.fix === row.id)?.model_id,
       )}
+    {@const valueTitle =
+      showStrength && value.startsWith(strengthLabel(strengthOf(entry))) && model
+        ? `${strengthLabel(strengthOf(entry))} · ${displayName(model)}${value.slice(strengthLabel(strengthOf(entry)).length)}`
+        : value}
     {@const meta = model
       ? [
           stage?.remembered ? 'Your pick' : '',
@@ -143,7 +177,7 @@
         <Popover
           label={`${row.label} options`}
           triggerClass={`fix-value${value === 'Needs your file' || value === 'No model for this fix' ? ' warn' : ''}`}
-          triggerTitle={value}
+          triggerTitle={valueTitle}
           disabled={settingsLocked}
         >
           <svelte:fragment slot="trigger">
@@ -162,6 +196,32 @@
             >
           </svelte:fragment>
           <div class="fix-pop-head">{row.label}</div>
+          {#if showStrength && row.choice}
+            {@const current = strengthOf(entry)}
+            <div
+              class="seg-inline strength-switch"
+              role="radiogroup"
+              aria-label={row.choice.name}
+              title={strengthListed
+                ? undefined
+                : "This engine cannot change a fix's strength. Update LocalSR."}
+            >
+              {#each row.choice.options as option (option.value)}
+                <button
+                  type="button"
+                  role="radio"
+                  aria-checked={Math.abs(option.value - current) <= 0.005}
+                  class:active={Math.abs(option.value - current) <= 0.005}
+                  disabled={!strengthListed &&
+                    option.value < 1 &&
+                    Math.abs(option.value - current) > 0.005}
+                  title={option.title}
+                  on:keydown={radioGroupKeydown}
+                  on:click={() => setStrength(row, option.value)}>{option.label}</button
+                >
+              {/each}
+            </div>
+          {/if}
           <div class="fix-pop-model">
             <span>Model</span><strong>{model ? displayName(model) : value}</strong>
           </div>

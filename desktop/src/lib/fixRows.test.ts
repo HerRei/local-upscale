@@ -1,9 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { demoSnapshot } from './demo';
-import { fixRowOrder, fixRows, fixRowValue, splitFixRows } from './fixRows';
+import {
+  fixRowOrder,
+  fixRows,
+  fixRowValue,
+  splitFixRows,
+  strengthLabel,
+  strengthOf,
+  takesStrength,
+  withStrength,
+} from './fixRows';
 import type { PlanStage } from './plan';
 import { STEPS, type StepDefinition } from './steps';
-import type { ModelDownloadStatus } from './types';
+import type { FixStageSelection, ModelDownloadStatus } from './types';
 
 function extraStep(
   id: string,
@@ -116,6 +125,9 @@ describe('fixRows', () => {
 
   it('formats ticked-row values from the plan or settings fallback', () => {
     const snap = demoSnapshot();
+    const noiseRow = fixRows('image', ['multi_fix', 'stage_params_and_masks', 'fix_strength']).find(
+      (row) => row.id === 'noise',
+    )!;
     const model = snap.catalog.models.find((m) => m.model_id === 'denoise_realplksr_1x')!;
     const settings = {
       ...snap.settings,
@@ -123,7 +135,7 @@ describe('fixRows', () => {
     };
     const emptyDownloads = new Map<string, ModelDownloadStatus>();
 
-    expect(fixRowValue('noise', [], settings, [model], emptyDownloads)).toBe('RealPLKSR Denoise');
+    expect(fixRowValue(noiseRow, [], settings, [model], emptyDownloads)).toBe('RealPLKSR Denoise');
 
     const missingStage: PlanStage = {
       kind: 'restore',
@@ -136,7 +148,7 @@ describe('fixRows', () => {
       needsFile: false,
       sizeBytes: 28 * 1024 * 1024,
     };
-    expect(fixRowValue('noise', [missingStage], settings, [model], emptyDownloads)).toBe(
+    expect(fixRowValue(noiseRow, [missingStage], settings, [model], emptyDownloads)).toBe(
       'RealPLKSR Denoise · 29 MB',
     );
 
@@ -152,7 +164,7 @@ describe('fixRows', () => {
         },
       ],
     ]);
-    expect(fixRowValue('noise', [missingStage], settings, [model], downloading)).toBe(
+    expect(fixRowValue(noiseRow, [missingStage], settings, [model], downloading)).toBe(
       'RealPLKSR Denoise',
     );
 
@@ -168,13 +180,13 @@ describe('fixRows', () => {
         },
       ],
     ]);
-    expect(fixRowValue('noise', [missingStage], settings, [model], queued)).toBe(
+    expect(fixRowValue(noiseRow, [missingStage], settings, [model], queued)).toBe(
       'RealPLKSR Denoise',
     );
 
     expect(
       fixRowValue(
-        'noise',
+        noiseRow,
         [{ ...missingStage, canDownload: false, needsFile: true }],
         settings,
         [model],
@@ -184,12 +196,106 @@ describe('fixRows', () => {
 
     expect(
       fixRowValue(
-        'noise',
+        noiseRow,
         [{ ...missingStage, model: undefined, missing: true }],
         settings,
         [model],
         emptyDownloads,
       ),
     ).toBe('No model for this fix');
+  });
+
+  describe('strength', () => {
+    it('strengthOf reads a number from 0 to 1 and falls back to 1', () => {
+      expect(strengthOf(undefined)).toBe(1);
+      expect(strengthOf({})).toBe(1);
+      expect(strengthOf({ params: { strength: 'low' } })).toBe(1);
+      expect(strengthOf({ params: { strength: -1 } })).toBe(1);
+      expect(strengthOf({ params: { strength: 2 } })).toBe(1);
+      expect(strengthOf({ params: { strength: 0.4 } })).toBe(0.4);
+    });
+
+    it('withStrength sets the key and drops it, and an empty params, at 1', () => {
+      const entry: FixStageSelection = { fix: 'noise', model_id: 'm' };
+      expect(withStrength(entry, 0.4)).toEqual({
+        fix: 'noise',
+        model_id: 'm',
+        params: { strength: 0.4 },
+      });
+      expect(withStrength({ params: { strength: 0.4 } }, 1)).toEqual({});
+      expect(withStrength({ params: { strength: 0.4, other: 'x' } }, 1)).toEqual({
+        params: { other: 'x' },
+      });
+      expect(withStrength({ params: { other: 'x' } }, 0.7)).toEqual({
+        params: { other: 'x', strength: 0.7 },
+      });
+    });
+
+    it('strengthLabel names the stops and prints other amounts', () => {
+      expect(strengthLabel(0.4)).toBe('Light');
+      expect(strengthLabel(0.7)).toBe('Medium');
+      expect(strengthLabel(1)).toBe('Full');
+      expect(strengthLabel(0.55)).toBe('55%');
+    });
+
+    it('the registry gives Blur, JPEG and Noise the choice, not Colour or De-flicker', () => {
+      const rows = fixRows('video', ['multi_fix', 'stage_params_and_masks', 'fix_strength']);
+      const withChoice = rows.filter((row) => row.choice).map((row) => row.id);
+      expect(withChoice.sort()).toEqual(['blur', 'jpeg', 'noise']);
+      expect(takesStrength('colour')).toBe(false);
+      expect(takesStrength('deflicker')).toBe(false);
+      expect(takesStrength('noise')).toBe(true);
+    });
+
+    it('fixRowValue shows the strength in place of the model name', () => {
+      const snap = demoSnapshot();
+      const model = snap.catalog.models.find((m) => m.model_id === 'denoise_realplksr_1x')!;
+      const row = fixRows('image', ['multi_fix', 'stage_params_and_masks', 'fix_strength']).find(
+        (entry) => entry.id === 'noise',
+      )!;
+      const settings = {
+        ...snap.settings,
+        fix_stages: [
+          {
+            fix: 'noise' as const,
+            model_id: 'denoise_realplksr_1x',
+            params: { strength: 0.4 },
+          },
+        ],
+      };
+      const none = new Map<string, ModelDownloadStatus>();
+      const stage: PlanStage = {
+        kind: 'restore',
+        role: 'fix',
+        fix: 'noise',
+        label: 'Fix noise',
+        model,
+        installed: false,
+        canDownload: true,
+        needsFile: false,
+        sizeBytes: 28 * 1024 * 1024,
+      };
+      expect(fixRowValue(row, [], settings, [model], none, true)).toBe('Light');
+      expect(fixRowValue(row, [stage], settings, [model], none, true)).toBe('Light · 29 MB');
+      expect(fixRowValue(row, [stage], settings, [model], none, false)).toBe(
+        'RealPLKSR Denoise · 29 MB',
+      );
+      expect(
+        fixRowValue(
+          row,
+          [{ ...stage, canDownload: false, needsFile: true }],
+          settings,
+          [model],
+          none,
+          true,
+        ),
+      ).toBe('Needs your file');
+      const colour = fixRows('image', ['multi_fix', 'stage_params_and_masks', 'fix_strength']).find(
+        (entry) => entry.id === 'colour',
+      )!;
+      expect(
+        fixRowValue(colour, [{ ...stage, fix: 'colour' }], settings, [model], none, true),
+      ).toBe('RealPLKSR Denoise · 29 MB');
+    });
   });
 });

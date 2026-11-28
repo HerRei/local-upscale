@@ -1080,13 +1080,11 @@ describe('Prompt examples', () => {
     return screen.getByRole('group', { name: 'Prompt examples' });
   };
 
-  it('ships FLUX.2 klein with Colour and Film look only', () => {
-    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b']);
-    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual([
-      'Colour',
-      'Film look',
-    ]);
-    expect(examplesFor(QWEN)).toEqual([]);
+  it('ships FLUX.2 klein and Qwen Image Edit 2511 with Colour only', () => {
+    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b', QWEN]);
+    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual(['Colour']);
+    expect(examplesFor(QWEN).map((example) => example.title)).toEqual(['Colour']);
+    expect(examplesFor('mage-flow-edit-turbo')).toEqual([]);
   });
 
   it('shows the link with the entries that passed on the listed family', async () => {
@@ -1097,7 +1095,7 @@ describe('Prompt examples', () => {
       within(list)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual([expect.stringMatching(/^Colour/), expect.stringMatching(/^Film look/)]);
+    ).toEqual([expect.stringMatching(/^Colour/)]);
     expect(
       within(list).getByText('Repaints the photo. To only add colour, use Fix \u203a Colour.'),
     );
@@ -1135,6 +1133,7 @@ describe('Prompt examples', () => {
 
   it('warns about own text and undo gives it back', async () => {
     withFamilies([QWEN]);
+    unlock('Film look');
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
     const field = screen.getByLabelText('What to change') as HTMLTextAreaElement;
@@ -10779,6 +10778,29 @@ describe('Slow motion', () => {
     expect((screen.getByLabelText('Colour output') as HTMLSelectElement).value).toBe('preserve');
     expect((screen.getByLabelText('Frames') as HTMLSelectElement).disabled).toBe(true);
   });
+
+  it('with Scan at Double rate, the head shows the doubled rate and the length', async () => {
+    const snapshot = slowSnapshot();
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.media = [{ ...snapshot.media[0], fps: 25, field_order: 'bff' }];
+    snapshot.settings.video_interpolation = 'x2';
+    snapshot.settings.video_slow_motion = true;
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    expect(head()).toMatch(/ · 50 fps · 24 s$/);
+    await waitFor(() =>
+      expect(planLineText()).toMatch(/Deinterlace to 50 fps → .*Slow motion 2×\s*$/),
+    );
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    expect(frames.selectedOptions[0].textContent).toBe('2× slower · 24 s');
+    expect(Array.from(frames.options).map((option) => option.textContent)).toContain(
+      '2× · 100 fps',
+    );
+    const sheet = await openPlanSheet(user);
+    expect(within(sheet).getByText('2× slower · after upscaling · Labs')).toBeTruthy();
+  });
 });
 
 describe('Plan sheet', () => {
@@ -12581,5 +12603,374 @@ describe('Backgr.', () => {
     await mountWith(snapshot);
     expect(screen.getByRole('radio', { name: 'Keep' }).matches(':disabled')).toBe(true);
     expect(screen.getByRole('radio', { name: 'Remove' }).matches(':disabled')).toBe(true);
+  });
+});
+
+describe('Scan', () => {
+  function tapeSnapshot(fieldOrder: MediaItem['field_order'] = 'bff'): AppSnapshot {
+    const snapshot = readySnapshot([
+      { ...video('clip', true), fps: 25, width: 768, height: 576, field_order: fieldOrder },
+    ]);
+    snapshot.engine!.features.push('video_deinterlace');
+    snapshot.catalog.models.forEach((model) => (model.installed = true));
+    Object.assign(snapshot.settings, {
+      task: 'video',
+      video_task: 'upscale',
+      selected_video_model_id: 'frame_by_frame',
+      selected_model_id: 'span_photo_x4',
+      output_scale: 2,
+    });
+    return snapshot;
+  }
+  const select = () => screen.queryByRole('combobox', { name: 'Scan' }) as HTMLSelectElement | null;
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const head = () =>
+    document.querySelector('[aria-label="Result"] .panel-head-value') as HTMLElement | null;
+
+  it('sits between Content and the Fix head, set to Automatic · interlaced', async () => {
+    await mountWith(tapeSnapshot());
+    const row = select()!;
+    expect(row.value).toBe('auto');
+    expect(row.selectedOptions[0].textContent).toBe('Automatic · interlaced');
+    const content = document.getElementById('content-label')!;
+    const fix = screen.getByRole('group', { name: 'Fix' });
+    expect(content.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(row.compareDocumentPosition(fix) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('is not there for a progressive file, no field order, a missing feature, SeedVR2 or a photo', async () => {
+    for (const fieldOrder of ['progressive', ''] as const) {
+      await mountWith(tapeSnapshot(fieldOrder));
+      expect(select()).toBeNull();
+      cleanup();
+    }
+    const noFeature = tapeSnapshot();
+    noFeature.engine!.features = noFeature.engine!.features.filter(
+      (feature) => feature !== 'video_deinterlace',
+    );
+    await mountWith(noFeature);
+    expect(select()).toBeNull();
+    cleanup();
+    const temporal = tapeSnapshot();
+    temporal.settings.selected_video_model_id = temporal.catalog.video_models[0].model_id;
+    await mountWith(temporal);
+    expect(select()).toBeNull();
+    cleanup();
+    const photo = tapeSnapshot();
+    photo.media = [image('photo', true)];
+    photo.settings.task = 'upscale';
+    await mountWith(photo);
+    expect(select()).toBeNull();
+  });
+
+  it('shows a file that does not say as Automatic', async () => {
+    await mountWith(tapeSnapshot('unknown'));
+    expect(select()!.options[0].textContent).toBe('Automatic');
+  });
+
+  it('Double rate stores the step and changes the head, the plan line and Frames', async () => {
+    const user = await mountWith(tapeSnapshot());
+    await user.selectOptions(select()!, 'Double rate · 50 fps');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'field', parity: 'auto' } }],
+        }),
+      ),
+    );
+    expect(head()!.textContent).toMatch(/ · 50 fps$/);
+    expect(await within(foot()).findByText(/^Deinterlace to 50 fps/)).toBeTruthy();
+    const frames = screen.getByLabelText('Frames') as HTMLSelectElement;
+    const labels = Array.from(frames.options).map((option) => option.textContent);
+    expect(labels).toContain('2× · 100 fps');
+    expect(labels).toContain('4× · 200 fps');
+  });
+
+  it('a hand-set order at the file rate leaves the rate alone', async () => {
+    const user = await mountWith(tapeSnapshot());
+    await user.selectOptions(select()!, 'Bottom field first · 25 fps');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          step_stages: [{ step: 'deinterlace', params: { mode: 'frame', parity: 'bff' } }],
+        }),
+      ),
+    );
+    expect(head()!.textContent).not.toMatch(/fps/);
+    expect(await within(foot()).findByText(/^Deinterlace/)).toBeTruthy();
+    expect(within(foot()).queryByText(/^Deinterlace to/)).toBeNull();
+  });
+
+  it('Automatic takes the step out again', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.selectOptions(select()!, 'Automatic · interlaced');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ step_stages: [] }),
+      ),
+    );
+  });
+
+  it('a stored Double rate on a progressive file reads Double rate, explains itself and adds no rate', async () => {
+    const snapshot = tapeSnapshot('progressive');
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    await mountWith(snapshot);
+    expect(select()!.selectedOptions[0].textContent).toBe('Double rate');
+    expect(select()!.title).toBe(
+      'This file says it is not interlaced, so it is left as it is. To deinterlace it anyway, set the field order by hand.',
+    );
+    expect(head()!.textContent).not.toMatch(/fps/);
+  });
+
+  it('is disabled but for Automatic when the engine cannot deinterlace and a choice is stored', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.engine!.features = snapshot.engine!.features.filter(
+      (feature) => feature !== 'video_deinterlace',
+    );
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    await mountWith(snapshot);
+    expect(select()!.title).toBe('This engine cannot deinterlace. Update LocalSR.');
+    const disabled = Array.from(select()!.options).map((option) => option.disabled);
+    expect(disabled).toEqual([false, true, true, true, true, true]);
+  });
+
+  it('the Plan sheet names the step with the chosen option', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    const sheet = await openPlanSheet(user);
+    const row = within(sheet).getAllByRole('listitem')[0];
+    expect(within(row).getByText(/^Deinterlace/)).toBeTruthy();
+    expect(within(row).getByText('Double rate · 50 fps')).toBeTruthy();
+  });
+
+  it('runs alone at Same size', async () => {
+    const snapshot = tapeSnapshot();
+    snapshot.settings.step_stages = [
+      { step: 'deinterlace', params: { mode: 'field', parity: 'auto' } },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('radio', { name: 'Same size' }));
+    expect(await within(foot()).findByText(/^Deinterlace to 50 fps/)).toBeTruthy();
+    expect(within(foot()).queryByText('Nothing to run')).toBeNull();
+  });
+});
+
+describe('Strength', () => {
+  function strengthSnapshot(listed = true): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    if (listed) snapshot.engine!.features.push('fix_strength', 'stage_params_and_masks');
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    return snapshot;
+  }
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const noiseEntry = { fix: 'noise', model_id: 'denoise_realplksr_1x' } as const;
+
+  async function tickNoise(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    return within(fixGroup()).findByRole('button', { name: 'Full' });
+  }
+
+  it('shows Full with the model in its title, and the segments before the model', async () => {
+    const user = await mountWith(strengthSnapshot());
+    const value = await tickNoise(user);
+    expect(value.textContent?.trim()).toBe('Full');
+    expect(value.getAttribute('title')).toBe('Full · RealPLKSR Denoise');
+    await user.click(value);
+    const group = await screen.findByRole('radiogroup', { name: 'Strength' });
+    expect(within(group).getByRole('radio', { name: 'Full' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    const model = document.querySelector('.fix-pop-model') as HTMLElement;
+    expect(group.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the model name where the engine does not list the feature', async () => {
+    const user = await mountWith(strengthSnapshot(false));
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    const value = await within(fixGroup()).findByRole('button', { name: 'RealPLKSR Denoise' });
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+
+  it('Light stores the strength, names it on the plan line and leaves the popover open', async () => {
+    const user = await mountWith(strengthSnapshot());
+    await user.click(await tickNoise(user));
+    await user.click(await screen.findByRole('radio', { name: 'Light' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ ...noiseEntry, params: { strength: 0.4 } }],
+        }),
+      ),
+    );
+    expect(screen.getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe('true');
+    expect(
+      within(fixGroup())
+        .getByRole('button', { name: /^Light/ })
+        .textContent?.trim(),
+    ).toBe('Light');
+    expect(await within(foot()).findByText('Noise (light) → Upscale 4×')).toBeTruthy();
+
+    await user.click(screen.getByRole('radio', { name: 'Full' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fix_stages: [noiseEntry] }),
+      ),
+    );
+  });
+
+  it('keeps the strength through Quick and Best, and forgets it when unticked', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best$/i }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } })],
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Quick$/i }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } })],
+        }),
+      ),
+    );
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    expect(await within(fixGroup()).findByRole('button', { name: /^Full/ })).toBeTruthy();
+  });
+
+  it('Colour keeps its model name and has no strength', async () => {
+    const user = await mountWith(strengthSnapshot());
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Colour' }));
+    const value = await within(fixGroup()).findByRole('button', { name: 'DDColor' });
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+
+  it('names the strength on the Same size plan line', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.output_scale = 1;
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.7 } }];
+    snapshot.settings.fixes = ['noise'];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('Noise (medium)')).toBeTruthy();
+  });
+
+  it('saves a recipe with the strength, and Update appears when it changes', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Grain');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const saved = api.saveRecipe.mock.calls[0][0] as Recipe;
+    expect(saved.stages?.[0]).toEqual(
+      expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } }),
+    );
+    expect(saved.stages?.at(-1)?.params).toBeUndefined();
+  }, 20_000);
+
+  it('a recipe saved at Light stops matching at Medium and offers Update', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.recipes = [
+      {
+        id: 'grain',
+        name: 'Grain',
+        task: 'upscale',
+        quality: 'quick',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp32',
+        safe_memory: false,
+        fixes: ['noise'],
+        stages: [
+          {
+            kind: 'restore',
+            model_id: 'denoise_realplksr_1x',
+            fix: 'noise',
+            params: { strength: 0.4 },
+          },
+          { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+        ],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: /^Grain/ }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user.click(await within(fixGroup()).findByRole('button', { name: 'Light' }));
+    await user.click(await screen.findByRole('radio', { name: 'Medium' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(await screen.findByRole('button', { name: 'Update “Grain”' })).toBeTruthy();
+  }, 20_000);
+
+  it('says which stops an engine without the feature still allows', async () => {
+    const snapshot = strengthSnapshot(false);
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Light/ }));
+    const group = await screen.findByRole('radiogroup', { name: 'Strength' });
+    expect(group.getAttribute('title')).toBe(
+      "This engine cannot change a fix's strength. Update LocalSR.",
+    );
+    expect(within(group).getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(
+      (within(group).getByRole('radio', { name: 'Medium' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((within(group).getByRole('radio', { name: 'Full' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('keeps the value readable and the popover shut while a job runs', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 5,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const value = await within(fixGroup()).findByRole('button', { name: /^Light/ });
+    expect(value.textContent?.trim()).toBe('Light');
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
   });
 });

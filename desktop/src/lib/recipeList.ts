@@ -5,7 +5,14 @@ import { displayName, fixesOf, pendingDownloads, resolvePlan, type PlanStage } f
 import { planLine, slowMotionName } from './planLine';
 import { isRestoreRecipe, recipeFixStages, recipeSettingsPatch } from './recipes';
 import type { Workflow } from './workflows';
-import type { AppSnapshot, FixKind, MediaKind, Recipe, UiSettings } from './types';
+import type {
+  AppSnapshot,
+  FixKind,
+  FixStageSelection,
+  MediaKind,
+  Recipe,
+  UiSettings,
+} from './types';
 import { videoModelShortName } from './videoEngines';
 
 export const MAX_RECIPE_PINS = 20;
@@ -92,8 +99,9 @@ export function recipePlanLine(
   };
 
   const stages: PlanStage[] = [];
+  let fixStages: FixStageSelection[] = [];
   if (!temporalVideo) {
-    let fixStages = recipeFixStages(recipe, fullCatalog);
+    fixStages = recipeFixStages(recipe, fullCatalog);
     if (fixStages.length === 0 && !recipe.stages?.length && recipe.fixes?.length) {
       fixStages = recipe.fixes
         .filter((fix): fix is Exclude<FixKind, 'faces'> => fix !== 'faces')
@@ -174,6 +182,7 @@ export function recipePlanLine(
       video_target_resolution: recipe.video_target_resolution,
       video_interpolation: recipe.video_interpolation || 'off',
       video_slow_motion: slow,
+      fix_stages: fixStages,
     },
     isVideo ? { kind: 'video' } : { kind: 'image' },
   );

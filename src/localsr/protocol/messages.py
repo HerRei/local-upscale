@@ -396,6 +396,7 @@ class MediaInfo:
     hdr_format: str = ""
     audio_warning: str = ""
     has_audio: bool = True
+    field_order: str = ""
 
     def to_json(self) -> str:
         return json.dumps({"type": "media_info", "data": asdict(self)})

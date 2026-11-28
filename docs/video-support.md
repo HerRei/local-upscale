@@ -143,7 +143,8 @@ for artifacts.
 
 **Slow motion.** Under Result, the Frames select has a third group, **Slow motion (no
 sound)**, with **2× slower** and **4× slower** and the length the clip then has. It adds the
-same frames as 2× and 4× after upscaling, but plays them at the clip's own rate, so the
+same frames as 2× and 4× after upscaling, but plays them at the clip's own rate (twice it
+after Scan at Double rate, which the Result head then shows beside the length), so the
 video becomes two or four times as long: each frame's time and length are multiplied, and a
 variable-rate clip keeps its rhythm. The file has no sound track and no subtitles (stretched
 speech is poor at half speed and unusable at a quarter), the Output line says `no sound`, and
