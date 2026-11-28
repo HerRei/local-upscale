@@ -1,9 +1,12 @@
 // @vitest-environment jsdom
 import { cleanup, render, screen, within } from '@testing-library/svelte';
 import userEvent from '@testing-library/user-event';
+import { readFileSync, statSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import ModelLibrary from './ModelLibrary.svelte';
 import { demoSnapshot } from './lib/demo';
+import { EXAMPLES } from './lib/examples';
 import type { AppSnapshot, ContentKind, Quality, TaskKind } from './lib/types';
 
 afterEach(cleanup);
@@ -186,5 +189,65 @@ describe('ModelLibrary details attribution and licensing across all model kinds'
     expect(within(detail).queryByRole('button', { name: /↗/ })).toBeNull();
     expect(openLicense).not.toHaveBeenCalled();
     expect(openSource).not.toHaveBeenCalled();
+  });
+});
+
+describe('Examples', () => {
+  const dir = join(process.cwd(), 'src/assets/examples');
+
+  it('has every file, stays under 1,000,000 bytes, and names catalog models', () => {
+    const snapshot = demoSnapshot();
+    let total = 0;
+    for (const example of EXAMPLES) {
+      for (const file of [example.before, example.after]) {
+        total += statSync(join(dir, file)).size;
+      }
+      expect(snapshot.catalog.models.some((m) => m.model_id === example.model_id)).toBe(true);
+    }
+    const files = new Set(EXAMPLES.flatMap((example) => [example.before, example.after]));
+    expect(files.size).toBe(14);
+    expect(total).toBeLessThanOrEqual(1_000_000);
+    for (const fix of ['noise', 'jpeg', 'blur', 'colour'] as const) {
+      expect(EXAMPLES.filter((example) => example.fix === fix)).toHaveLength(1);
+    }
+  });
+
+  it("shows the model's own example with its caption, and Before swaps the file", async () => {
+    const user = userEvent.setup();
+    renderLibrary(undefined, { select: 'denoise_realplksr_1x' });
+    const detail = screen.getByLabelText('Model details');
+    const picture = within(detail).getByRole('img', { name: /noisy photo/ });
+    const after = picture.getAttribute('src');
+    expect(within(detail).getByText('Example · Noise')).toBeTruthy();
+    const group = within(detail).getByRole('radiogroup', { name: 'Example picture' });
+    expect(within(group).getByRole('radio', { name: 'After' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    await user.click(within(group).getByRole('radio', { name: 'Before' }));
+    expect(
+      within(detail)
+        .getByRole('img', { name: /noisy photo/ })
+        .getAttribute('src'),
+    ).not.toBe(after);
+  });
+
+  it("shows the fix's example with the second caption for another fix model", () => {
+    renderLibrary(undefined, { select: 'nafnet_sidd_width64' });
+    const detail = screen.getByLabelText('Model details');
+    expect(
+      within(detail).getByText('Example of the Noise fix, made with RealPLKSR Denoise'),
+    ).toBeTruthy();
+  });
+
+  it('shows no picture for an upscaler without one', () => {
+    renderLibrary(undefined, { select: 'swinir_m_real_x4_gan' });
+    expect(within(screen.getByLabelText('Model details')).queryByRole('img')).toBeNull();
+  });
+
+  it('lets a fifth fact span both columns', () => {
+    const css = readFileSync(join(process.cwd(), 'src/styles.css'), 'utf8');
+    expect(css).toMatch(
+      /\.facts > div:last-child:nth-child\(odd\)\s*\{\s*grid-column: 1 \/ -1;\s*\}/,
+    );
   });
 });

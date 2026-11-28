@@ -17,6 +17,8 @@
   import { chooseFixModel, fixQuality, rememberedFixModel } from './lib/fixStages';
   import { formatBytes } from './lib/format';
   import FileName from './FileName.svelte';
+  import ModelExample from './ModelExample.svelte';
+  import { exampleCaption, exampleChoice } from './lib/examples';
   import HelpTip from './HelpTip.svelte';
   import { modal } from './lib/modal';
   import { fitLine, runsOnAccelerator } from './lib/neuralEngine';
@@ -1715,6 +1717,10 @@
                 <span class="pill labs">Labs</span>
               </div>{/if}
           </div>
+          {@const choice = exampleChoice(selected)}
+          {#if choice}
+            <ModelExample example={choice.example} caption={exampleCaption(choice, models)} />
+          {/if}
           <p class="model-description">{selected.description}</p>
           <dl class="facts">
             <div>
