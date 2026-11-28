@@ -1,5 +1,7 @@
+import { displayName, type PlanStage } from './plan';
+import { planLine } from './planLine';
 import type { Size } from './viewport';
-import type { PatchRegion, PatchState, PatchStep, StartBatchInput } from './types';
+import type { PatchRegion, PatchState, PatchStep, StartBatchInput, UiSettings } from './types';
 
 /** The patch is this many source pixels on a side, or the picture's shorter side when smaller. */
 export const PATCH_SIZE = 384;
@@ -126,6 +128,36 @@ export interface PatchPlanEntry {
   name: string;
   /** Shown in the `title` of a chip whose model is missing. */
   modelName?: string;
+  /** The model needs a licence tick or an own file, which only the panel can give. */
+  needsPanel?: boolean;
+}
+
+const VIDEO_ONLY_KINDS: ReadonlySet<PlanStage['kind']> = new Set([
+  'deflicker',
+  'interpolate',
+  'audio_denoise',
+  'video',
+  'edit',
+]);
+
+/**
+ * The plan line as the tab names it: the steps a photo goes through, the upscale named by its size.
+ * Missing models and models only a panel step can fix are marked for the chips and the button.
+ */
+export function patchPlanEntries(
+  stages: readonly PlanStage[],
+  settings: Pick<
+    UiSettings,
+    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation'
+  >,
+): PatchPlanEntry[] {
+  const kept = stages.filter((stage) => !VIDEO_ONLY_KINDS.has(stage.kind));
+  const names = planLine(kept, settings, { kind: 'image' });
+  return kept.map((stage, index) => ({
+    name: names[index].replace(/^Upscale (?=\d)/, ''),
+    modelName: stage.model ? displayName(stage.model) : undefined,
+    needsPanel: !stage.installed && stage.needsFile ? true : undefined,
+  }));
 }
 
 export interface PatchChip {

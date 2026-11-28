@@ -154,6 +154,19 @@ describe('SettingsSheet', () => {
       await user.click(screen.getByRole('switch', { name: 'Show previews while a job runs' }));
       expect(props.updateSettings).toHaveBeenCalledWith({ enable_live_preview: false });
 
+      const patch = screen.getByLabelText('Preview fixes on your photo') as HTMLSelectElement;
+      expect([...patch.options].map((option) => option.textContent)).toEqual([
+        'Automatic',
+        'Always update by itself',
+        'Update when I click',
+        'Off',
+      ]);
+      expect(patch.value).toBe('auto');
+      await user.selectOptions(patch, 'manual');
+      expect(props.setPreference).toHaveBeenCalledWith('preview_patch', 'manual');
+      await user.selectOptions(patch, 'off');
+      expect(props.setPreference).toHaveBeenCalledWith('preview_patch', 'off');
+
       await user.click(screen.getByRole('button', { name: 'Manage…' }));
       expect(props.onOpenIntegrations).toHaveBeenCalledTimes(1);
 

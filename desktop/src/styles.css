@@ -5514,3 +5514,139 @@ label.setting-label {
   padding-top: 2px;
   border-top: 0;
 }
+
+/* The preview patch: the frame follows the photo's zoom, the tab keeps its size. */
+.patch-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 28px;
+  margin-left: auto;
+  padding: 2px 10px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--recess);
+  color: var(--secondary);
+  font-size: calc(12px * var(--ui-scale));
+}
+.view-switch + .patch-toggle {
+  margin-left: 0;
+}
+.patch-toggle:hover:not(:disabled) {
+  background: var(--hover);
+  color: var(--text);
+}
+.patch-toggle[aria-pressed='true'] {
+  background: var(--raised);
+  color: var(--text);
+}
+.patch-toggle:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+.patch-toggle .activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+.patch-layer {
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  overflow: hidden;
+  pointer-events: none;
+}
+.patch-stage {
+  position: absolute;
+  transform-origin: center;
+  pointer-events: none;
+}
+.patch-frame {
+  position: absolute;
+  box-sizing: border-box;
+  /* The line stays 1 px on screen at every zoom. */
+  border: calc(1px / var(--zoom, 1)) solid var(--accent);
+  pointer-events: none;
+}
+.patch-frame.dashed {
+  border-style: dashed;
+}
+.patch-frame img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  max-width: none;
+  object-fit: fill;
+  user-select: none;
+}
+.patch-tab {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  max-width: calc(100% - 8px);
+  padding: 0 6px;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius);
+  background: var(--dialog-bg);
+  color: var(--text);
+  font-size: calc(11.5px * var(--ui-scale));
+  white-space: nowrap;
+  pointer-events: auto;
+  cursor: grab;
+  touch-action: none;
+}
+.patch-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 26px;
+}
+.patch-compare {
+  justify-content: space-between;
+  border-top: 1px solid var(--hairline);
+}
+.patch-switch {
+  display: inline-flex;
+  gap: 4px;
+  margin-left: 18px;
+}
+.patch-tab:active {
+  cursor: grabbing;
+}
+.patch-tab .step-chips-row {
+  flex-wrap: nowrap;
+}
+.patch-grip {
+  color: var(--secondary);
+  user-select: none;
+}
+.patch-state {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--secondary);
+  cursor: default;
+}
+.patch-action,
+.patch-link {
+  min-height: 22px;
+  padding: 0 8px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+  background: var(--raised);
+  color: var(--text);
+  font-size: inherit;
+}
+.patch-link {
+  border-color: transparent;
+  background: transparent;
+  color: var(--accent-text, var(--accent));
+  text-decoration: underline;
+}
+.patch-action:hover,
+.patch-link:hover {
+  background: var(--hover);
+}

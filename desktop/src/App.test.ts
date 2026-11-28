@@ -120,6 +120,7 @@ const api = vi.hoisted(() => ({
         | UiSettings['interface_scale']
         | NonNullable<UiSettings['contrast']>
         | NonNullable<UiSettings['viewer_background']>
+        | NonNullable<UiSettings['preview_patch']>
         | NonNullable<UiSettings['accent']>
         | UiSettings['stopped_job_result'],
     ): Promise<void> => undefined,
@@ -171,6 +172,8 @@ const api = vi.hoisted(() => ({
   })),
   requestCompare: vi.fn(async (_picks: ComparePick[]): Promise<void> => undefined),
   requestPreviewRegions: vi.fn(async () => undefined),
+  requestPatchPreview: vi.fn(async (_request: Record<string, unknown>): Promise<void> => undefined),
+  cancelPatchPreview: vi.fn(async (_slot: string): Promise<void> => undefined),
   clearPreviewRegions: vi.fn(async () => undefined),
   startModelTrials: vi.fn(
     async (_mediaId: string, _modelIds: string[], _base: StartBatchInput): Promise<string[]> => [],
@@ -5444,7 +5447,7 @@ describe('Several fixes in one pass', () => {
       selected_model_id: 'scunet_color_real_psnr',
       output_scale: 1,
       halo: 64,
-      fixes: ['blur', 'jpeg', 'noise'],
+      fixes: ['blur', 'colour', 'noise'],
       fix_stages: [blur, jpeg, noise],
     });
     const user = await mountWith(snapshot);
@@ -5947,7 +5950,7 @@ describe('Several fixes in one pass', () => {
         task: 'upscale',
         quality: 'best',
         selected_model_id: 'span_photo_x4',
-        fixes: ['blur', 'jpeg', 'noise'],
+        fixes: ['blur', 'colour', 'noise'],
         fix_stages: [blur, jpeg, { fix: 'noise', model_id: 'nafnet_sidd_width64' }],
       });
       const ids = snapshot.settings.fix_stages.map((stage) => stage.model_id);
@@ -11443,7 +11446,7 @@ describe('Step names', () => {
       ...snapshot.settings,
       task: 'upscale',
       output_scale: 4,
-      fixes: ['blur', 'jpeg', 'noise'],
+      fixes: ['blur', 'colour', 'noise'],
       fix_stages: [
         { fix: 'blur', model_id: 'nafnet_gopro_deblur' },
         { fix: 'jpeg', model_id: 'fbcnn_color' },
@@ -12049,5 +12052,215 @@ describe('Empty screen', () => {
       ),
     );
     expect(screen.getByRole('button', { name: 'or start from a workflow…' })).toBeTruthy();
+  });
+});
+
+describe('Patch', () => {
+  function patchSnapshot(media: MediaItem[], settings: Partial<UiSettings> = {}): AppSnapshot {
+    const snapshot = readySnapshot(media);
+    snapshot.engine!.features.push('patch_preview');
+    snapshot.settings = {
+      ...snapshot.settings,
+      preview_patch_shown: true,
+      task: 'upscale',
+      ...settings,
+    };
+    return snapshot;
+  }
+
+  const sent = () => api.requestPatchPreview.mock.calls.map(([request]) => request);
+  const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  it('10. asks once, 400 ms after the last of several settings changes', async () => {
+    const user = await mountWith(patchSnapshot([image('photo', true)]));
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(1));
+    expect(sent()[0]).toMatchObject({
+      mediaId: 'photo',
+      slot: 'a',
+      region: { width: 384, height: 384 },
+      force: false,
+    });
+    api.requestPatchPreview.mockClear();
+
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Colour' }));
+    await user.click(screen.getByRole('checkbox', { name: 'Blur' }));
+    expect(api.requestPatchPreview).not.toHaveBeenCalled();
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(1), {
+      timeout: 2000,
+    });
+    await pause(600);
+    expect(api.requestPatchPreview).toHaveBeenCalledTimes(1);
+    const input = sent()[0].input as StartBatchInput;
+    expect(input.fix_stages.map((stage) => stage.fix).sort()).toEqual(['blur', 'colour', 'noise']);
+  });
+
+  it('13. the fix popover link turns the patch on; with a missing model it opens the library', async () => {
+    const user = await mountWith(
+      patchSnapshot([image('photo', true)], { preview_patch_shown: false }),
+    );
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    let popover = await openFixPopover(user, 'Noise');
+    await user.click(within(popover).getByRole('button', { name: 'See it on this photo' }));
+    await waitFor(() =>
+      expect(api.setPreference).toHaveBeenCalledWith('preview_patch_shown', true),
+    );
+    cleanup();
+
+    const missing = patchSnapshot([image('photo', true)], {
+      preview_patch_shown: false,
+      fixes: ['noise'],
+      fix_stages: [{ fix: 'noise', model_id: 'nafnet_sidd_width64' }],
+    });
+    missing.catalog.models.forEach((model) => (model.installed = false));
+    const user2 = await mountWith(missing);
+    popover = await openFixPopover(user2, 'Noise');
+    expect(within(popover).queryByRole('button', { name: 'See it on this photo' })).toBeNull();
+    await user2.click(within(popover).getByRole('button', { name: 'See an example' }));
+    expect(await screen.findByRole('dialog', { name: 'Model library' })).toBeTruthy();
+  });
+
+  it('14. another file gets its own region and the request carries it', async () => {
+    const first = patchSnapshot([image('one', true), image('two')]);
+    await mountWith(first);
+    await waitFor(() => expect(sent().at(-1)).toMatchObject({ mediaId: 'one' }));
+    const next = patchSnapshot([image('one'), image('two', true)]);
+    api.refreshSnapshot.mockResolvedValue(structuredClone(next));
+    (api.listenForStateChange.mock.calls.at(-1)![0] as () => void)();
+    await waitFor(() => expect(sent().at(-1)).toMatchObject({ mediaId: 'two' }));
+  });
+
+  it('15. Off removes the button and the link and asks for nothing', async () => {
+    const user = await mountWith(patchSnapshot([image('photo', true)], { preview_patch: 'off' }));
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    const popover = await openFixPopover(user, 'Noise');
+    expect(within(popover).queryByRole('button', { name: 'See it on this photo' })).toBeNull();
+    expect(within(popover).queryByRole('button', { name: 'See an example' })).toBeNull();
+    await pause(500);
+    expect(api.requestPatchPreview).not.toHaveBeenCalled();
+  });
+
+  it('16. an empty plan disables the button, hides the patch and cancels the request', async () => {
+    const user = await mountWith(patchSnapshot([image('photo', true)]));
+    await waitFor(() => expect(api.requestPatchPreview).toHaveBeenCalledTimes(1));
+    planFetch.mock.mockImplementation(async () => []);
+    await user.click(screen.getByRole('checkbox', { name: 'Noise' }));
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: 'Preview' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      ),
+    );
+    await waitFor(() => expect(api.cancelPatchPreview).toHaveBeenCalledWith('a'));
+    expect(document.querySelector('.patch-frame')).toBeNull();
+  });
+});
+
+describe('Patch, two models', () => {
+  function pairSnapshot(settings: Partial<UiSettings> = {}): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.engine!.features.push('patch_preview');
+    snapshot.settings = {
+      ...snapshot.settings,
+      preview_patch_shown: true,
+      task: 'upscale',
+      output_scale: 4,
+      ...settings,
+    };
+    return snapshot;
+  }
+
+  const sent = () => api.requestPatchPreview.mock.calls.map(([request]) => request);
+
+  async function tryCandidate(user: ReturnType<typeof userEvent.setup>): Promise<HTMLElement> {
+    await openPlanSheet(user);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    const library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^HAT-S ×4/ }));
+    await user.click(within(library).getByRole('button', { name: 'Try on this photo' }));
+    await waitFor(() => expect(screen.queryByRole('dialog', { name: 'Model library' })).toBeNull());
+    return await screen.findByRole('group', { name: 'Preview patch' });
+  }
+
+  it('Try on this photo closes the library, asks for slot b with replace, shows both names', async () => {
+    const user = await mountWith(pairSnapshot());
+    await waitFor(() => expect(sent().some((request) => request.slot === 'a')).toBe(true));
+    const tab = await tryCandidate(user);
+    await waitFor(() => expect(sent().some((request) => request.slot === 'b')).toBe(true));
+    const request = sent().find((entry) => entry.slot === 'b')!;
+    expect(request.replace).toEqual({ slot: 'b', fix: 'upscale', model_id: 'hat_s_x4' });
+    expect(request).toMatchObject({ mediaId: 'photo', force: false });
+    const compare = within(tab).getByRole('group', { name: 'Compare models' });
+    const [a, b] = within(compare).getAllByRole('button');
+    expect(a.textContent).toMatch(/^\s*A .+/);
+    expect(b.textContent).toMatch(/B HAT-S ×4/);
+    expect(b.getAttribute('aria-pressed')).toBe('true');
+    expect(compare.getAttribute('title')).toBe('Press X to flip');
+  });
+
+  it('the button is hidden when the setting is Off and disabled without a photo or download', async () => {
+    const off = await mountWith(pairSnapshot({ preview_patch: 'off' }));
+    await openPlanSheet(off);
+    await off.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    let library = screen.getByRole('dialog', { name: 'Model library' });
+    await off.click(within(library).getByRole('button', { name: /^HAT-S ×4/ }));
+    expect(within(library).queryByRole('button', { name: 'Try on this photo' })).toBeNull();
+    cleanup();
+
+    const snapshot = pairSnapshot();
+    snapshot.catalog.models.find((model) => model.model_id === 'hat_s_x4')!.installed = false;
+    const user = await mountWith(snapshot);
+    await openPlanSheet(user);
+    await user.click(await screen.findByRole('button', { name: 'Change the upscaler' }));
+    library = screen.getByRole('dialog', { name: 'Model library' });
+    await user.click(within(library).getByRole('button', { name: /^HAT-S ×4/ }));
+    const button = within(library).getByRole('button', {
+      name: 'Try on this photo',
+    }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe('Download the model first.');
+  });
+
+  it('X flips the pressed side, but not while typing in a field', async () => {
+    const user = await mountWith(pairSnapshot());
+    const tab = await tryCandidate(user);
+    const compare = within(tab).getByRole('group', { name: 'Compare models' });
+    const pressed = () =>
+      within(compare)
+        .getAllByRole('button')
+        .map((button) => button.getAttribute('aria-pressed'));
+    expect(pressed()).toEqual(['false', 'true']);
+    await user.keyboard('x');
+    expect(pressed()).toEqual(['true', 'false']);
+    await user.keyboard('x');
+    expect(pressed()).toEqual(['false', 'true']);
+    const field = document.createElement('input');
+    document.body.append(field);
+    field.focus();
+    await user.keyboard('x');
+    field.remove();
+    expect(pressed()).toEqual(['false', 'true']);
+  });
+
+  it('Use B applies the candidate like Use for this job and the second row goes', async () => {
+    const user = await mountWith(pairSnapshot());
+    const tab = await tryCandidate(user);
+    await user.click(within(tab).getByRole('button', { name: 'Use B' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ selected_model_id: 'hat_s_x4' }),
+      ),
+    );
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Compare models' })).toBeNull());
+    expect(api.cancelPatchPreview).toHaveBeenCalledWith('b');
+  });
+
+  it('Done drops B and cancels its request', async () => {
+    const user = await mountWith(pairSnapshot());
+    const tab = await tryCandidate(user);
+    await user.click(within(tab).getByRole('button', { name: 'Done' }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Compare models' })).toBeNull());
+    expect(api.cancelPatchPreview).toHaveBeenCalledWith('b');
+    expect(sent().filter((request) => request.slot === 'b')).toHaveLength(1);
   });
 });

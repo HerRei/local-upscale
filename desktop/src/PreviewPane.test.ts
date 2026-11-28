@@ -1820,3 +1820,290 @@ describe('Viewer between steps', () => {
     expect(selectStepChip).toHaveBeenCalledWith('job-1#1');
   });
 });
+
+describe('Patch', () => {
+  const photo: MediaItem = {
+    id: 'photo',
+    path: '/photo.jpg',
+    name: 'photo.jpg',
+    kind: 'image',
+    width: 2000,
+    height: 1000,
+    frame_count: 1,
+    fps: 0,
+    duration_seconds: 0,
+    preview_data_url: 'data:image/jpeg;base64,source',
+    probe_status: 'ready',
+    error: '',
+    selected: true,
+  };
+  const plan = [
+    { name: 'JPEG' },
+    { name: 'Noise', modelName: 'RealPLKSR Denoise' },
+    { name: '4×' },
+  ];
+  // The middle of the 2000 x 1000 photo, snapped to 16 px: where the pane starts a patch.
+  const region = { x: 816, y: 304, width: 384, height: 384 };
+
+  function stepsOf(states: string[], extra: Record<number, object> = {}) {
+    return states.map((state, index) => ({
+      kind: index === 2 ? 'upscale' : 'fix',
+      fix: index === 2 ? '' : ['jpeg', 'noise'][index],
+      model_id: `m${index}`,
+      state,
+      url: state === 'done' ? `asset://step${index}.png` : '',
+      width: 384,
+      height: 384,
+      seconds: state === 'done' ? 2.1 : 0,
+      note: '',
+      ...extra[index],
+    }));
+  }
+
+  function patchState(state: string, steps: ReturnType<typeof stepsOf>, more = {}) {
+    return {
+      state,
+      media_id: 'photo',
+      region,
+      estimate_seconds: 0,
+      error: '',
+      steps,
+      ...more,
+    } as never;
+  }
+
+  function rect() {
+    return vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      width: 800,
+      height: 600,
+      top: 0,
+      left: 0,
+      right: 800,
+      bottom: 600,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    } as DOMRect);
+  }
+
+  async function open(props: Record<string, unknown> = {}) {
+    rect();
+    const setPatchShown = vi.fn();
+    const patchMoved = vi.fn();
+    const updatePatch = vi.fn();
+    const downloadPatchModel = vi.fn();
+    const view = render(PreviewPane, {
+      selectedMedia: photo,
+      resultPreview: '',
+      completedVideoOutput: '',
+      patchAvailable: true,
+      patchShown: true,
+      patchPlan: plan,
+      setPatchShown,
+      patchMoved,
+      updatePatch,
+      downloadPatchModel,
+      ...props,
+    });
+    await waitFor(() =>
+      expect(view.container.querySelector<HTMLElement>('.image-stage')?.style.width).toBe('744px'),
+    );
+    return { ...view, setPatchShown, patchMoved, updatePatch, downloadPatchModel };
+  }
+
+  const frame = (container: HTMLElement) => container.querySelector<HTMLElement>('.patch-frame');
+
+  it('1. shows the button for a photo with a plan, and hides it in Edit or without the feature', async () => {
+    const view = await open({ patchShown: false });
+    expect(screen.getByRole('button', { name: 'Preview' }).getAttribute('aria-pressed')).toBe(
+      'false',
+    );
+    await view.rerender({ editing: true });
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+    await view.rerender({ editing: false, patchAvailable: false });
+    expect(screen.queryByRole('button', { name: 'Preview' })).toBeNull();
+  });
+
+  it('2. disables the button while a job runs and does not render the patch', async () => {
+    const view = await open({ patch: patchState('ready', stepsOf(['done', 'done', 'done'])) });
+    expect(frame(view.container)).not.toBeNull();
+    await view.rerender({ patchJobBusy: true });
+    const button = screen.getByRole('button', { name: 'Preview' }) as HTMLButtonElement;
+    expect(button.disabled).toBe(true);
+    expect(button.title).toBe('Available when the job finishes.');
+    expect(frame(view.container)).toBeNull();
+  });
+
+  it('3. turns on at a low zoom: 1:1, the Original, and the shown setting', async () => {
+    const view = await open({ patchShown: false, resultPreview: 'data:image/png;base64,r' });
+    // The window decides what a fit is worth; this 2000 px photo is shown at 744 px.
+    await fireEvent.click(screen.getByRole('radio', { name: 'Split' }));
+    await fireEvent.click(screen.getByRole('button', { name: 'Preview' }));
+    expect(view.setPatchShown).toHaveBeenCalledWith(true);
+    expect(screen.getByRole('radio', { name: 'Original' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(screen.getByRole('button', { name: '1:1' }).className).toContain('active');
+    expect(view.patchMoved).toHaveBeenCalledTimes(1);
+    expect(view.patchMoved.mock.calls[0][0]).toBe('photo');
+  });
+
+  it('4. names the running step in the tab and marks its chip', async () => {
+    vi.useFakeTimers();
+    try {
+      const view = await open({
+        patch: patchState('running', stepsOf(['done', 'running', 'waiting'])),
+      });
+      const group = screen.getByRole('group', { name: 'Preview steps' });
+      const chip = (name: string) =>
+        [...group.querySelectorAll('.step-chip')].find((node) =>
+          node.textContent?.includes(name),
+        ) as HTMLElement;
+      expect(chip('Noise').querySelector('.activity-dot')).not.toBeNull();
+      expect(chip('JPEG').querySelector('.activity-dot')).toBeNull();
+      await vi.advanceTimersByTimeAsync(3000);
+      expect(view.container.querySelector('.patch-state')?.textContent?.trim()).toBe('Noise · 3 s');
+      expect(frame(view.container)?.classList.contains('dashed')).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('5. presses the newest chip and places its picture with the region crop', async () => {
+    const view = await open({ patch: patchState('ready', stepsOf(['done', 'done', 'done'])) });
+    const group = screen.getByRole('group', { name: 'Preview steps' });
+    expect(within(group, '4×').getAttribute('aria-pressed')).toBe('true');
+    const img = frame(view.container)?.querySelector('img');
+    expect(img?.getAttribute('src')).toBe('asset://step2.png');
+    expect(frame(view.container)?.getAttribute('style')).toContain(
+      'left: 40.8%; top: 30.4%; width: 19.2%; height: 38.4%',
+    );
+    expect(frame(view.container)?.classList.contains('dashed')).toBe(false);
+    expect(screen.getByRole('button', { name: 'Noise' }).title).toBe('After Noise · 2.1 s');
+    await fireEvent.click(screen.getByRole('button', { name: 'Noise' }));
+    expect(frame(view.container)?.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://step1.png',
+    );
+    await fireEvent.click(screen.getByRole('button', { name: 'Original' }));
+    expect(frame(view.container)?.querySelector('img')).toBeNull();
+  });
+
+  it('6. waits for a click when stale and forces the update', async () => {
+    const view = await open({
+      patch: patchState('stale', stepsOf(['done', 'done', 'waiting']), { estimate_seconds: 12 }),
+    });
+    expect(frame(view.container)?.classList.contains('dashed')).toBe(true);
+    await fireEvent.click(screen.getByRole('button', { name: 'Update preview · about 12 s' }));
+    expect(view.updatePatch).toHaveBeenCalledTimes(1);
+  });
+
+  it('7. offers the download when a model is missing, and says so when only the panel helps', async () => {
+    const view = await open({
+      patch: patchState('ready', stepsOf(['done', 'missing', 'waiting'])),
+      patchDownloadSize: '30 MB',
+    });
+    const chip = screen.getByRole('button', { name: 'Noise' });
+    expect(chip.title).toBe('RealPLKSR Denoise is not downloaded.');
+    expect(chip.textContent).toContain('↓');
+    await fireEvent.click(screen.getByRole('button', { name: 'Download 30 MB and preview' }));
+    expect(view.downloadPatchModel).toHaveBeenCalledTimes(1);
+    await view.rerender({
+      patchPlan: [plan[0], { ...plan[1], needsPanel: true }, plan[2]],
+    });
+    expect(screen.queryByRole('button', { name: /Download/ })).toBeNull();
+    expect(view.container.querySelector('.patch-state')?.textContent).toContain(
+      'Noise needs a step in the panel first.',
+    );
+  });
+
+  it('8. says the preview failed and tries again', async () => {
+    const view = await open({
+      patch: patchState('failed', stepsOf(['waiting', 'waiting', 'waiting']), {
+        error: 'Out of memory',
+      }),
+    });
+    expect(screen.getByText('Preview failed.').title).toBe('Out of memory');
+    await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(view.updatePatch).toHaveBeenCalledTimes(1);
+    const group = screen.getByRole('group', { name: 'Preview steps' });
+    expect(group.querySelectorAll('.step-chip')).toHaveLength(1);
+  });
+
+  it('9. shows the original while the tab is dragged, asks once 250 ms after release, and moves by keys', async () => {
+    vi.useFakeTimers();
+    try {
+      const view = await open({ patch: patchState('ready', stepsOf(['done', 'done', 'done'])) });
+      // The first position per file is announced when it is chosen.
+      view.patchMoved.mockClear();
+      const tab = screen.getByRole('group', { name: 'Preview patch' });
+      expect(frame(view.container)?.querySelector('img')).not.toBeNull();
+
+      await fireEvent.pointerDown(tab, { pointerId: 1, button: 0, clientX: 100, clientY: 100 });
+      // 744 px for 2000 source pixels: 37.2 screen pixels are 100 source pixels.
+      await fireEvent.pointerMove(tab, { pointerId: 1, clientX: 137.2, clientY: 100 });
+      expect(frame(view.container)?.querySelector('img')).toBeNull();
+      await fireEvent.pointerUp(tab, { pointerId: 1, clientX: 137.2, clientY: 100 });
+      await vi.advanceTimersByTimeAsync(249);
+      expect(view.patchMoved).not.toHaveBeenCalled();
+      await vi.advanceTimersByTimeAsync(2);
+      expect(view.patchMoved).toHaveBeenCalledTimes(1);
+      const [, moved] = view.patchMoved.mock.calls[0];
+      expect(moved.x).toBe(912);
+      expect(moved.y).toBe(region.y);
+
+      await view.rerender({ patchShown: true });
+      view.patchMoved.mockClear();
+      await fireEvent.keyDown(tab, { key: 'ArrowRight' });
+      await fireEvent.keyDown(tab, { key: 'ArrowDown', shiftKey: true });
+      await vi.advanceTimersByTimeAsync(260);
+      expect(view.patchMoved).toHaveBeenCalledTimes(1);
+      expect(view.patchMoved.mock.calls[0][1]).toMatchObject({ x: 944, y: 432 });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('11. shows the original in the patch while M is held', async () => {
+    const view = await open({ patch: patchState('ready', stepsOf(['done', 'done', 'done'])) });
+    expect(frame(view.container)?.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://step2.png',
+    );
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(frame(view.container)?.querySelector('img')).toBeNull();
+    await fireEvent.keyUp(window, { key: 'm' });
+    expect(frame(view.container)?.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://step2.png',
+    );
+  });
+
+  it('13. the popover link presses that fix chip and turns the patch on', async () => {
+    const view = await open({
+      patchShown: false,
+      patch: patchState('ready', stepsOf(['done', 'done', 'done'])),
+    });
+    (view.component as unknown as { showPatchStep: (key: string) => void }).showPatchStep('noise');
+    expect(view.setPatchShown).toHaveBeenCalledWith(true);
+    await view.rerender({ patchShown: true });
+    const group = screen.getByRole('group', { name: 'Preview steps' });
+    expect(within(group, 'Noise').getAttribute('aria-pressed')).toBe('true');
+    expect(within(group, '4×').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('12. hides the patch in Split and brings it back with Original', async () => {
+    const view = await open({
+      patch: patchState('ready', stepsOf(['done', 'done', 'done'])),
+      resultPreview: 'data:image/png;base64,result',
+      patchShown: true,
+    });
+    await fireEvent.click(screen.getByRole('radio', { name: 'Split' }));
+    expect(frame(view.container)).toBeNull();
+    await fireEvent.click(screen.getByRole('radio', { name: 'Original' }));
+    expect(frame(view.container)).not.toBeNull();
+  });
+});
+
+function within(group: HTMLElement, name: string): HTMLElement {
+  return [...group.querySelectorAll<HTMLElement>('.step-chip')].find((node) =>
+    node.textContent?.includes(name),
+  ) as HTMLElement;
+}

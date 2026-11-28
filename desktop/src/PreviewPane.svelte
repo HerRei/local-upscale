@@ -10,6 +10,8 @@
   import UnfinishedTiles from './UnfinishedTiles.svelte';
   import BackgroundSwitch from './BackgroundSwitch.svelte';
   import StepChips from './StepChips.svelte';
+  import PreviewPatch from './PreviewPatch.svelte';
+  import { centreRegion, pickPatchRegion, type PatchPlanEntry } from './lib/previewPatch';
   import type { StepChip } from './lib/jobSteps';
   import type { ViewerBackground } from './lib/viewerBackground';
   import type { PaneUnfinished } from './lib/unfinished';
@@ -40,6 +42,8 @@
   } from './lib/viewport';
   import type {
     MediaItem,
+    PatchRegion,
+    PatchState,
     VideoComparisonSources,
     VideoComparisonProgress,
     WorkerEnvelope,
@@ -96,6 +100,26 @@
   /** Result chips shown in the header after a multi-step photo job. */
   export let stepChips: StepChip[] = [];
   export let selectStepChip: (id: string) => void = () => {};
+  /** The preview patch (section 3 of the build spec). The app decides availability and asks the host. */
+  export let patchAvailable = false;
+  export let patchShown = false;
+  export let setPatchShown: (shown: boolean) => void = () => {};
+  /** A job runs or waits: the button is disabled and the patch hides. */
+  export let patchJobBusy = false;
+  export let patch: PatchState | null = null;
+  /** Two models: variant B's state, the two names, and which side the frame shows. */
+  export let patchB: PatchState | null = null;
+  export let patchCompare: { aName: string; bName: string } | null = null;
+  export let patchSide: 'a' | 'b' = 'a';
+  export let useCandidate: () => void = () => {};
+  export let endCandidate: () => void = () => {};
+  /** The plan line's names, one per step; empty when nothing would run. */
+  export let patchPlan: PatchPlanEntry[] = [];
+  export let patchDownloadSize = '';
+  /** The patch moved (and once for a file's first position): ask for a new preview. */
+  export let patchMoved: (mediaId: string, region: PatchRegion) => void = () => {};
+  export let updatePatch: () => void = () => {};
+  export let downloadPatchModel: () => void = () => {};
   /** Why a pair is shown as a single result, for example a different framing. */
   export let comparisonNote = '';
   export let completedVideoOutput: string;
@@ -193,6 +217,7 @@
     Boolean((resultPreview && !singleFrame) || pairShown || videoComparison?.enhanced_url);
   $: canPeek =
     canCompare ||
+    patchVisible ||
     Boolean(singleFrame && resultPreview) ||
     Boolean(processing && (committedStagePreview || hasLiveTiles || videoSourcePreview));
   $: if (!canPeek) holdingOriginal = false;
@@ -379,6 +404,119 @@
     sourcePreviewWidth = 0;
     sourcePreviewHeight = 0;
   }
+  // The preview patch. Its position is kept per file for the session; the picture comes from
+  // the host through `patch`.
+  let patchPositions: Record<string, PatchRegion> = {};
+  let patchPicked: string | null = null;
+  $: patchOffered = patchAvailable && !editing && selectedMedia?.kind === 'image';
+  $: patchEmpty = patchPlan.length === 0;
+  $: patchBlocked = processing || patchJobBusy;
+  $: patchButtonTitle = patchBlocked
+    ? 'Available when the job finishes.'
+    : patchEmpty
+      ? 'Tick a fix or choose a larger size first.'
+      : 'Show what the ticked fixes do on a part of this photo';
+  $: patchRegion = selectedMedia ? (patchPositions[selectedMedia.id] ?? null) : null;
+  $: patchState = patch && selectedMedia && patch.media_id === selectedMedia.id ? patch : null;
+  $: patchStateB = patchB && selectedMedia && patchB.media_id === selectedMedia.id ? patchB : null;
+  $: patchVisible = Boolean(
+    patchOffered &&
+    patchShown &&
+    !patchBlocked &&
+    !patchEmpty &&
+    !pairShown &&
+    !loading &&
+    !videoComparison &&
+    sourcePreview &&
+    selectedMedia?.probe_status === 'ready' &&
+    (!canCompare || comparisonView === 'original') &&
+    patch?.state !== 'busy' &&
+    patchRegion,
+  );
+  // A remembered "on" has no position yet for a file opened later.
+  $: if (patchOffered && patchShown && selectedMedia && !patchPositions[selectedMedia.id]) {
+    const first = startingPatchPosition(selectedMedia);
+    if (first) {
+      patchPositions = { ...patchPositions, [selectedMedia.id]: first };
+      patchMoved(selectedMedia.id, first);
+    }
+  }
+
+  function sourcePixels() {
+    const img = sourceImg;
+    if (!img || !img.complete || img.naturalWidth < 2 || img.naturalHeight < 2) return null;
+    try {
+      const factor = Math.min(1, 128 / Math.max(img.naturalWidth, img.naturalHeight));
+      const width = Math.max(2, Math.round(img.naturalWidth * factor));
+      const height = Math.max(2, Math.round(img.naturalHeight * factor));
+      const surface = document.createElement('canvas');
+      surface.width = width;
+      surface.height = height;
+      const context = surface.getContext('2d', { willReadFrequently: true });
+      if (!context) return null;
+      context.drawImage(img, 0, 0, width, height);
+      return { width, height, data: context.getImageData(0, 0, width, height).data };
+    } catch {
+      // A picture the canvas may not read: the patch starts in the middle.
+      return null;
+    }
+  }
+
+  function startingPatchPosition(media: MediaItem): PatchRegion | null {
+    if (media.width <= 0 || media.height <= 0) return null;
+    const image = { width: media.width, height: media.height };
+    const pixels = sourcePixels();
+    return pixels ? pickPatchRegion(pixels, image) : centreRegion(image);
+  }
+
+  function movePatchTo(region: PatchRegion): void {
+    if (!selectedMedia) return;
+    patchPositions = { ...patchPositions, [selectedMedia.id]: region };
+    patchMoved(selectedMedia.id, region);
+  }
+
+  /** Turning it on shows the Original, and at less than 1:1 zooms to the patch. */
+  export function showPatch(): void {
+    if (!patchOffered || patchBlocked || patchEmpty || !selectedMedia) return;
+    let region: PatchRegion | null = patchPositions[selectedMedia.id] ?? null;
+    if (!region) {
+      region = startingPatchPosition(selectedMedia);
+      if (region) {
+        patchPositions = { ...patchPositions, [selectedMedia.id]: region };
+        patchMoved(selectedMedia.id, region);
+      }
+    }
+    comparisonView = 'original';
+    if (region && zoom < actualPixelZoom) {
+      const next = actualPixelZoom;
+      const offsetX = ((region.x + region.width / 2) / selectedMedia.width - 0.5) * stageWidth;
+      const offsetY = ((region.y + region.height / 2) / selectedMedia.height - 0.5) * stageHeight;
+      zoom = next;
+      const bounded = clampPan(
+        { x: -offsetX * next, y: -offsetY * next },
+        panBounds(
+          { width: canvasWidth, height: canvasHeight },
+          { width: stageWidth, height: stageHeight },
+          next,
+        ),
+      );
+      panX = bounded.x;
+      panY = bounded.y;
+    }
+    setPatchShown(true);
+  }
+
+  /** Shows the patch with this step's chip pressed (the fix popover's link). */
+  export function showPatchStep(key: string): void {
+    patchPicked = key;
+    showPatch();
+  }
+
+  function togglePatch(): void {
+    if (patchShown) setPatchShown(false);
+    else showPatch();
+  }
+
   $: handleStagePreviewChange(stagePreview);
   $: displayedSourcePreview =
     (processing &&
@@ -431,6 +569,7 @@
     sourcePreviewHeight = 0;
     laidOutSourcePreview = '';
     previewRetryMediaId = '';
+    patchPicked = null;
     clearScheduledRegions(true);
     resetProgressivePreview();
     resetView();
@@ -1301,6 +1440,22 @@
     {/if}
   {/snippet}
 
+  {#snippet patchButton()}
+    {#if patchOffered}
+      <button
+        type="button"
+        class="patch-toggle"
+        class:on={patchShown}
+        aria-pressed={patchShown}
+        disabled={patchBlocked || patchEmpty}
+        title={patchButtonTitle}
+        on:click={togglePatch}
+      >
+        {#if patchShown}<span class="activity-dot" aria-hidden="true"></span>{/if}Preview
+      </button>
+    {/if}
+  {/snippet}
+
   <div class="preview-header" class:has-steps={stepChips.length > 0} data-tauri-drag-region>
     <div class="header-file" data-tauri-drag-region>
       {#if selectedMedia}<span class="header-name"><FileName name={selectedMedia.name} /></span
@@ -1319,9 +1474,11 @@
           onSelect={selectStepChip}
         />
         {@render viewSwitch()}
+        {@render patchButton()}
       </div>
     {:else}
       {@render viewSwitch()}
+      {@render patchButton()}
     {/if}
   </div>
 
@@ -1427,6 +1584,31 @@
             ></div>
           {/if}
         </SplitComparison>
+        {#if patchVisible && patchRegion && selectedMedia}
+          <PreviewPatch
+            media={{ width: selectedMedia.width, height: selectedMedia.height }}
+            stageStyle={`width:${stageWidth}px;height:${stageHeight}px;left:50%;top:50%;transform:translate(calc(-50% + ${panX}px), calc(-50% + ${panY}px)) scale(${zoom})`}
+            canvas={{ width: canvasWidth, height: canvasHeight }}
+            stage={{ width: stageWidth, height: stageHeight }}
+            {zoom}
+            pan={{ x: panX, y: panY }}
+            region={patchRegion}
+            patch={patchState}
+            patchB={patchStateB}
+            compare={patchCompare}
+            bind:side={patchSide}
+            onUseB={useCandidate}
+            onDone={endCandidate}
+            plan={patchPlan}
+            bind:picked={patchPicked}
+            {holdingOriginal}
+            downloadSize={patchDownloadSize}
+            onMove={movePatchTo}
+            onUpdate={updatePatch}
+            onDownload={downloadPatchModel}
+            onRetry={updatePatch}
+          />
+        {/if}
         {#if loading}<div class="pair-loading">
             <PreviewActivity media={selectedMedia} loading={loadingLabel} />
           </div>{/if}
