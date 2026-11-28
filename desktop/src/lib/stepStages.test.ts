@@ -303,3 +303,64 @@ describe('a step that needs paint', () => {
     ).toEqual([]);
   });
 });
+
+describe('a step with an optional model', () => {
+  const repair: StepStageSelection = { step: 'repair' };
+  const plan = (features: string[], install: boolean, models?: CatalogModel[]) => {
+    const snapshot = demoSnapshot();
+    if (models) snapshot.catalog.models = models;
+    for (const model of snapshot.catalog.models) {
+      if (model.model_id === 'migan') model.installed = install;
+    }
+    const settings = settingsWith({ task: 'upscale', fix_stages: [], step_stages: [repair] });
+    return {
+      snapshot,
+      stages: resolvePlan(snapshot, settings, {
+        faceEnabled: false,
+        usingTemporalVideo: false,
+        maskedSteps: ['repair'],
+        features,
+      }),
+    };
+  };
+  const listed = ['image_repair', 'image_repair_model'];
+
+  it('carries the model and waits for its download while it is missing', () => {
+    const { stages } = plan(listed, false);
+    expect(stages[0]).toMatchObject({
+      kind: 'repair',
+      role: 'step',
+      label: 'Dust & scratches',
+      installed: false,
+      canDownload: true,
+      needsFile: false,
+      sizeBytes: 28_079_181,
+    });
+    expect(stages[0].model?.model_id).toBe('migan');
+    expect(pendingDownloads(stages.slice(0, 1)).bytes).toBe(28_079_181);
+    expect(stepStagesReady(stages)).toBe(false);
+  });
+
+  it('is ready and costs nothing once the model is installed', () => {
+    const { stages } = plan(listed, true);
+    expect(stages[0]).toMatchObject({ kind: 'repair', installed: true, sizeBytes: 0 });
+    expect(pendingDownloads(stages.slice(0, 1)).bytes).toBe(0);
+    expect(stepStagesReady(stages)).toBe(true);
+  });
+
+  it("is today's stage without the engine feature or without a catalog entry", () => {
+    const today = {
+      kind: 'repair',
+      role: 'step',
+      label: 'Dust & scratches',
+      installed: true,
+      canDownload: false,
+      needsFile: false,
+      sizeBytes: 0,
+    };
+    expect(plan(['image_repair'], false).stages[0]).toEqual(today);
+    expect(plan([], false).stages[0]).toEqual(today);
+    const without = demoSnapshot().catalog.models.filter((model) => model.model_id !== 'migan');
+    expect(plan(listed, false, without).stages[0]).toEqual(today);
+  });
+});

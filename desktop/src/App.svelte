@@ -98,7 +98,7 @@
     presetSlot,
     type PlanStage,
   } from './lib/plan';
-  import { withStepStage } from './lib/stepRows';
+  import { repairModel, startRepairStage, withStepStage } from './lib/stepRows';
   import { REPAIR_STEP, type MediaFacts } from './lib/fixRows';
   import { brushLimits, emptyHistory, type PaintHistory } from './lib/maskPaint';
   import { createPlanClient, fetchPlan } from './lib/jobPlanClient';
@@ -1028,7 +1028,18 @@
   $: interpolationReady = !interpolationStage || interpolationStage.installed;
   $: audioStage = plan.find((stage) => stage.kind === 'audio_denoise');
   $: audioReady = !audioStage || audioStage.installed;
-  $: stepsReady = stepStagesReady(plan);
+  // Dust & scratches downloads its model with a start that has a painted photo, also when the
+  // open photo (whose plan this is) has no marks.
+  $: repairModelEntry = repairModel(snapshot.catalog.models, snapshot.engine?.features ?? []);
+  $: startRepairDownload = startRepairStage({
+    model: repairModelEntry,
+    ticked: repairTicked,
+    startMarked: queueSelection.some(
+      (media) => media.kind === 'image' && (media.repair_marks ?? 0) > 0,
+    ),
+    plan,
+  });
+  $: stepsReady = stepStagesReady(plan) && !startRepairDownload;
   $: fixesReady =
     fixPlanSupported &&
     imageFixes.every((selection) => {
@@ -1579,7 +1590,9 @@
             settings.task,
             settings.batch_mode,
           ),
-          stamp: `${$planState.stages.map((stage) => (stage.installed ? '1' : '0')).join('')}|${
+          stamp: `${$planState.stages.map((stage) => (stage.installed ? '1' : '0')).join('')}${
+            startRepairDownload ? '0' : ''
+          }|${
             snapshot.jobs.filter((job) => job.status === 'completed' && job.elapsed_seconds).length
           }`,
         }
@@ -1589,7 +1602,10 @@
     planErrorRecorded = true;
     void api.recordFrontendError(`plan_job: ${$planState.message}`, '').catch(() => {});
   }
-  $: downloads = pendingDownloads(plan, keptDownloadBytes);
+  $: downloads = pendingDownloads(
+    startRepairDownload ? [...plan, startRepairDownload] : plan,
+    keptDownloadBytes,
+  );
   const stageModelId = (stage: (typeof plan)[number]): string =>
     (
       stage.model ??
@@ -2844,6 +2860,10 @@
     );
     const label = thenText ?? (scopeChoice && settings.batch_mode ? allPhrase : startVerb);
     if (!(await downloadModels(targets, label))) return;
+    await tick();
+    // A step's model (Dust & scratches, Backgr.) is ready in the plan, not in the catalog alone:
+    // the plan follows the download before Start is asked.
+    await planClient.settled();
     await tick();
     if (canStart) await start();
   }
@@ -5517,6 +5537,8 @@
           onPaint={paintChanged}
           onPaintSize={(size) => (paintBrush = size)}
           onPaintDone={() => void endPainting(true)}
+          repairModel={Boolean(repairModelEntry)}
+          repairModelMissing={Boolean(repairModelEntry && !repairModelEntry.installed)}
           activeTileSize={snapshot.runtime.active_tile_size}
           stagePreview={!activeJobMediaId || selectedMedia?.id === activeJobMediaId
             ? activeStepPreview

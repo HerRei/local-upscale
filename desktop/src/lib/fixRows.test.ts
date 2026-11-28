@@ -393,6 +393,17 @@ describe('fixRows, Dust & scratches', () => {
     expect(splitFixRows(rows, () => false, false).hiddenCount).toBe(0);
   });
 
+  it('names the model in its title only when one serves the row', () => {
+    const title = (modelled?: string[]) =>
+      fixRows('image', features, STEPS, undefined, [], modelled).find((row) => row.id === 'repair')
+        ?.title;
+    expect(title()).toBe('Repairs small marks that you paint over: dust, scratches, spots.');
+    expect(title([])).toBe('Repairs small marks that you paint over: dust, scratches, spots.');
+    expect(title(['repair'])).toBe(
+      'Repairs marks that you paint over: dust, scratches, spots, stains.',
+    );
+  });
+
   it('has no row on a video or without the feature, unless the step is stored', () => {
     expect(fixRows('video', features).some((row) => row.id === 'repair')).toBe(false);
     expect(fixRows('image', []).some((row) => row.id === 'repair')).toBe(false);

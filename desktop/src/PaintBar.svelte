@@ -20,8 +20,17 @@
   export let onClear: () => void;
   export let onDone: () => void;
 
-  const TIP =
-    'Paint over each mark: a speck of dust, a scratch, a spot. When you start, LocalSR fills the painted places from the picture around them, before the other fixes and the upscale. This works for small marks on even areas such as sky, walls and skin. A large area, or one that crosses fine detail, comes out smeared. Zoom in with the wheel to see small marks; hold Space and drag to move the picture. B paints, E erases, [ and ] change the brush, and holding M hides the paint. Each photo keeps its own marks, and a photo without marks is left as it is.';
+  /** A model fills the wider marks (MI-GAN): the tip says so. */
+  export let model = false;
+  /** That model is not downloaded yet; the first start fetches it. */
+  export let missing = false;
+
+  const TIP_START = 'Paint over each mark: a speck of dust, a scratch, a spot';
+  const TIP_END =
+    'Zoom in with the wheel to see small marks; hold Space and drag to move the picture. B paints, E erases, [ and ] change the brush, and holding M hides the paint. Each photo keeps its own marks, and a photo without marks is left as it is.';
+  $: tip = model
+    ? `${TIP_START}, a stain. When you start, LocalSR fills the painted places before the other fixes and the upscale. Thin marks are filled from the picture right beside them. Wider ones are filled by a small model, MI-GAN, which continues the surroundings into the gap. Use a brush that just covers the mark: a hairline painted with a wide brush is treated as a wide mark. A mark across a face, lettering or other fine detail can still come out wrong. ${TIP_END}${missing ? ' The first start downloads 28 MB.' : ''}`
+    : `${TIP_START}. When you start, LocalSR fills the painted places from the picture around them, before the other fixes and the upscale. This works for small marks on even areas such as sky, walls and skin. A large area, or one that crosses fine detail, comes out smeared. ${TIP_END}`;
 
   let paintButton: HTMLButtonElement | undefined;
 
@@ -95,7 +104,7 @@
     disabled={!canClear}
     on:click={onClear}>Clear</button
   >
-  <HelpTip label="Dust & scratches" text={TIP} />
+  <HelpTip label="Dust & scratches" text={tip} />
   <button
     type="button"
     class="button primary compact paint-done"

@@ -80,27 +80,28 @@
       stage.interpolationModel ??
       stage.audioModel}
     {@const tryOthers = stage.role === 'primary' && canTryOthers}
-    {@const name = stage.model
-      ? displayName(stage.model)
-      : stage.videoModel
-        ? videoModelShortName(stage.videoModel)
-        : stage.interpolationModel
-          ? stage.interpolationModel.name.split(' — ')[0]
-          : stage.audioModel
-            ? stage.audioModel.name.split(' — ')[0]
-            : stage.editModel
-              ? editFamilyLabel(stage.editModel.family)
-              : stage.missing
-                ? 'No model for this fix'
-                : stage.custom !== undefined
-                  ? (customModels(settings).find(
-                      (model) => model.path === settings.custom_model_path,
-                    )?.name ?? 'Checkpoint')
-                  : stage.kind === 'repair'
-                    ? marksValue(selectedMedia?.repair_marks ?? 0)
-                    : ''}
+    {@const name =
+      stage.kind === 'repair'
+        ? marksValue(selectedMedia?.repair_marks ?? 0)
+        : stage.model
+          ? displayName(stage.model)
+          : stage.videoModel
+            ? videoModelShortName(stage.videoModel)
+            : stage.interpolationModel
+              ? stage.interpolationModel.name.split(' — ')[0]
+              : stage.audioModel
+                ? stage.audioModel.name.split(' — ')[0]
+                : stage.editModel
+                  ? editFamilyLabel(stage.editModel.family)
+                  : stage.missing
+                    ? 'No model for this fix'
+                    : stage.custom !== undefined
+                      ? (customModels(settings).find(
+                          (model) => model.path === settings.custom_model_path,
+                        )?.name ?? 'Checkpoint')
+                      : ''}
     <!-- Licenses live in the model library; only exceptions show here. -->
-    {@const meta = stage.editModel
+    {@const modelMeta = stage.editModel
       ? `${editVariantName(stage.editModel)}${
           editFit !== 'unknown' && editFit !== 'runs' ? ` · ${EDIT_FIT_LABELS[editFit]}` : ''
         }`
@@ -140,6 +141,9 @@
                       smoothingOf(settings.step_stages?.find((s) => s.step === 'stabilise')),
                     )
                   : ''}
+    <!-- The marks are what the user did; the model is a detail, said on the note line. -->
+    {@const meta =
+      stage.kind === 'repair' ? (stage.model ? displayName(stage.model) : '') : modelMeta}
     {@const warning =
       stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
         ? stage.role === 'fix'

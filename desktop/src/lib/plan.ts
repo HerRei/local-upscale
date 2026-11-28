@@ -225,6 +225,23 @@ export function servesStep(model: CatalogModel, step: StepDefinition): boolean {
   return step.model_task !== null && model.purposes.includes(step.model_task);
 }
 
+/**
+ * The catalog model a step that runs without a model may use (Dust & scratches fills wider marks
+ * with MI-GAN): the one that serves the step's task, when the engine lists the step's feature
+ * with `_model` appended (`image_repair_model`). Mirrors `optional_step_model` in job_plan.rs.
+ */
+export function optionalStepModel(
+  models: readonly CatalogModel[],
+  step: StepDefinition,
+  features: readonly string[],
+): CatalogModel | undefined {
+  if (step.needs_model || step.model_task === null || step.required_feature === null) {
+    return undefined;
+  }
+  if (!features.includes(`${step.required_feature}_model`)) return undefined;
+  return models.find((model) => servesStep(model, step));
+}
+
 /** The catalog model a step stage runs: the chosen one, when it serves the step's task. */
 export function stepStageModel(
   models: CatalogModel[],
@@ -275,6 +292,8 @@ export function resolvePlan(
     hasAudio?: boolean;
     /** Steps that need paint, which the open photo has; a step that needs it runs only then. */
     maskedSteps?: readonly string[];
+    /** The engine's features: a step with an optional model gets it only when the engine lists it. */
+    features?: readonly string[];
     /** The step registry; tests add steps that exist only in them. */
     steps?: readonly StepDefinition[];
   },
@@ -341,6 +360,11 @@ export function resolvePlan(
   });
   const stepStageRow = (step: StepDefinition, selection: StepStageSelection): PlanStage => {
     const kind = step.id as PlanStage['kind'];
+    const optional = optionalStepModel(snapshot.catalog.models, step, options.features ?? []);
+    if (optional) {
+      // Runs without it, uses it when named: the row waits for the download like a fix.
+      return stageFor(kind, 'step', step.label, optional) ?? missingStage(kind, 'step', step.label);
+    }
     if (step.needs_model) {
       // Like a fix: the chosen model's row, or a row that waits for one.
       const model = stepStageModel(snapshot.catalog.models, step, selection);

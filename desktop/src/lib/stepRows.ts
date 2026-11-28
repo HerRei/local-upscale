@@ -1,4 +1,5 @@
-import { servesStep } from './plan';
+import { REPAIR_STEP } from './fixRows';
+import { optionalStepModel, type PlanStage, servesStep } from './plan';
 import { STEPS } from './steps';
 import type { CatalogModel, StepStageSelection, UiSettings } from './types';
 
@@ -155,4 +156,46 @@ export function scanOptions(
     options.push({ value: choice, label: `Deinterlace${at(fps)}`, group: '' });
   }
   return options;
+}
+
+/**
+ * The model Dust & scratches fills wider marks with (MI-GAN): the catalog model that serves the
+ * step, when the engine lists `image_repair_model`. Undefined for an older engine or catalog:
+ * the row and its copy are then what they were before the model.
+ */
+export function repairModel(
+  models: readonly CatalogModel[],
+  features: readonly string[],
+): CatalogModel | undefined {
+  const step = STEPS.find((candidate) => candidate.id === REPAIR_STEP);
+  return step ? optionalStepModel(models, step, features) : undefined;
+}
+
+/**
+ * The plan row that asks for the Dust & scratches model when the open photo has no marks but
+ * another photo of the start has: the plan lists the step only for the open photo, and the
+ * download is asked once for every painted photo. Undefined when it is not needed.
+ */
+export function startRepairStage(o: {
+  model: CatalogModel | undefined;
+  ticked: boolean;
+  /** A photo that Start would send has marks. */
+  startMarked: boolean;
+  plan: readonly PlanStage[];
+}): PlanStage | undefined {
+  const { model } = o;
+  if (!model || model.installed || !o.ticked || !o.startMarked) return undefined;
+  if (o.plan.some((stage) => stage.kind === REPAIR_STEP)) return undefined;
+  const step = STEPS.find((candidate) => candidate.id === REPAIR_STEP);
+  return {
+    kind: 'repair',
+    role: 'step',
+    remembered: false,
+    label: step?.label ?? 'Dust & scratches',
+    model,
+    installed: false,
+    canDownload: model.automated_download_allowed,
+    needsFile: !model.automated_download_allowed,
+    sizeBytes: model.size_bytes,
+  };
 }

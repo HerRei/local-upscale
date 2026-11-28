@@ -122,6 +122,7 @@ function resolveOptions(snapshot: AppSnapshot, settings: UiSettings, options: Pl
     editModel,
     hasAudio: options.has_audio === null ? undefined : options.has_audio,
     maskedSteps: options.masked_steps ?? [],
+    features: snapshot.engine?.features ?? [],
   };
 }
 
@@ -158,6 +159,7 @@ export function planKey(
       has_audio: options.has_audio ?? null,
       masked_steps: options.masked_steps ?? [],
     },
+    features: snapshot.engine?.features ?? [],
     installed: {
       models: installedIds(snapshot.catalog.models),
       video: installedIds(snapshot.catalog.video_models),

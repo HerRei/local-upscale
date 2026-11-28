@@ -72,7 +72,8 @@ class StepDefinition:
     # Runs only when the engine was started with LOCALSR_DEV_STEPS=1.
     dev_only: bool = False
     # A model-bearing step stage takes its model from the catalog models whose
-    # `purposes` name this task.
+    # `purposes` name this task. A step without `needs_model` may also set it: it runs without
+    # a model and uses this task's model when the host names one on the stage.
     model_task: str | None = None
     # The handler returns a single-channel matte that becomes the image's alpha.
     output_alpha: bool = False
@@ -400,6 +401,9 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Dust & scratches",
         stage_label="Repairing marks",
         required_feature="image_repair",
+        # Runs without a model and uses this task's model when the host names one on the stage
+        # (feature `image_repair_model`).
+        model_task="inpaint",
     ),
     StepDefinition(
         id="remove_background",

@@ -9,6 +9,8 @@ import {
   shownStep,
   snapRegion,
 } from './previewPatch';
+import { demoSnapshot } from './demo';
+import { resolvePlan } from './plan';
 import type { PatchState, PatchStep } from './types';
 
 function step(partial: Partial<PatchStep>): PatchStep {
@@ -194,6 +196,38 @@ describe('Patch, background', () => {
       { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
     );
     expect(entries.map((entry) => entry.name)).toEqual(['4×']);
+  });
+});
+
+describe('Patch, Dust & scratches model', () => {
+  it('names MI-GAN on the repair entry, and a missing one gives the download chip', () => {
+    const snapshot = demoSnapshot();
+    const settings = {
+      ...snapshot.settings,
+      task: 'upscale' as const,
+      selected_model_id: 'span_photo_x4',
+      output_scale: 4,
+      fix_stages: [],
+      step_stages: [{ step: 'repair' }],
+    };
+    const plan = resolvePlan(snapshot, settings, {
+      faceEnabled: false,
+      usingTemporalVideo: false,
+      maskedSteps: ['repair'],
+      features: ['image_repair', 'image_repair_model'],
+    });
+    const entries = patchPlanEntries(plan, settings);
+    expect(entries.map((entry) => entry.name)).toEqual(['Dust & scratches', '4×']);
+    expect(entries[0].modelName).toBe('MI-GAN');
+    const chips = patchChips(
+      state([step({ kind: 'repair', model_id: 'migan', state: 'missing' }), step({})]),
+      entries,
+    );
+    expect(chips[1].label).toBe('↓ Dust & scratches');
+    expect(chips[1].title).toBe('MI-GAN is not downloaded.');
+    // The other steps still show.
+    expect(chips[2].label).toBe('4×');
+    expect(chips[2].state).toBe('waiting');
   });
 });
 

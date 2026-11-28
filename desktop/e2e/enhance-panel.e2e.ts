@@ -1,7 +1,17 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { cutout, ready, scratched, shaky, slow, strength, tape, video } from './fixtures';
+import {
+  cutout,
+  ready,
+  scratched,
+  scratchedModel,
+  shaky,
+  slow,
+  strength,
+  tape,
+  video,
+} from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -455,6 +465,38 @@ test('Stabilise: the band shows while the popover is open and goes when it close
   await expect(crop(page)).toHaveAttribute('data-crop', '0.08');
   await page.keyboard.press('Escape');
   await expect(crop(page)).toHaveCount(0);
+});
+
+test('Dust & scratches with its model: the cost line asks for 28 MB and no row moves', async ({
+  page,
+}) => {
+  /** The panel with the row ticked: where each Fix row and the Result block start. */
+  const ticked = async (shown: Page, scenario: typeof scratched) => {
+    await openApp(shown, scenario);
+    await showPane(shown, 'enhance');
+    await shown.getByRole('button', { name: 'Not now' }).click();
+    await fix(shown, 'Dust & scratches').check();
+    await expect(value(shown, 'Dust & scratches')).toHaveText('3 marks');
+    const rows = await shown.locator('.fix-row').all();
+    return {
+      rows: await Promise.all(rows.map(async (row) => (await row.boundingBox())!.y)),
+      result: (await shown.locator('section[aria-label="Result"]').boundingBox())!.y,
+    };
+  };
+  const before = await ticked(page, scratched);
+  await expect(page.locator('.panel-foot')).not.toContainText('to download');
+  const other = await page.context().newPage();
+  await other.setViewportSize(page.viewportSize()!);
+  const after = await ticked(other, scratchedModel);
+  await expect(other.locator('.foot-cost')).toContainText('28 MB to download');
+  await expect(other.getByRole('button', { name: 'Download 28 MB, then upscale' })).toBeVisible();
+  expect(after.rows).toHaveLength(before.rows.length);
+  after.rows.forEach((y, i) => expect(Math.abs(y - before.rows[i])).toBeLessThanOrEqual(0.5));
+  expect(Math.abs(after.result - before.result)).toBeLessThanOrEqual(0.5);
+  await expect(fix(other, 'Dust & scratches').locator('../..')).toHaveAttribute(
+    'title',
+    'Repairs marks that you paint over: dust, scratches, spots, stains. · 28 MB download',
+  );
 });
 
 const bar = (page: Page) => page.getByRole('toolbar', { name: 'Dust & scratches' });

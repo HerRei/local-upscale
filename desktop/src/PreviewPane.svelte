@@ -161,6 +161,9 @@
   export let onPaint: (history: PaintHistory) => void = () => {};
   export let onPaintSize: (size: number) => void = () => {};
   export let onPaintDone: () => void = () => {};
+  /** A model fills the wider marks (MI-GAN), and it is not downloaded yet: for the bar's tip. */
+  export let repairModel = false;
+  export let repairModelMissing = false;
   export let videoEngineBusy = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
@@ -1762,6 +1765,8 @@
             onUndo={() => onPaint(undo(paintHistory))}
             onClear={() => onPaint(commit(paintHistory, []))}
             onDone={onPaintDone}
+            model={repairModel}
+            missing={repairModelMissing}
           />
         {/if}
         {#if patchVisible && patchRegion && selectedMedia}

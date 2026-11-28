@@ -221,6 +221,7 @@ def test_stabilise_is_a_shipped_video_geometry_step() -> None:
 
 
 def test_repair_is_a_shipped_photo_cleanup_step() -> None:
+    from localsr.core.model_catalog import MODEL_CATALOG
     from localsr.core.steps import REQUIRED_STEP_FEATURES, STEPS_BY_ID
 
     step = STEPS_BY_ID["repair"]
@@ -230,3 +231,7 @@ def test_repair_is_a_shipped_photo_cleanup_step() -> None:
     assert not step.dev_only and not step.needs_model
     assert step.required_feature == "image_repair"
     assert "image_repair" in REQUIRED_STEP_FEATURES
+    # Without a model it runs as before; with the catalog's inpainting model on the stage it
+    # fills the wide marks with it. The desktop derives the engine feature from the step.
+    assert step.model_task == "inpaint"
+    assert [m.model_id for m in MODEL_CATALOG if step.model_task in m.purposes] == ["migan"]

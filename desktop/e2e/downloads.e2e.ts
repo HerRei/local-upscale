@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { emit, failDownload, finishDownload, hostCalls, progressDownload } from './fake-host';
-import { ready, upscale, withOutputs } from './fixtures';
+import { ready, scratchedModel, upscale, withOutputs } from './fixtures';
 
 const EDIT_SCENARIO = {
   ...upscale,
@@ -98,6 +98,27 @@ test.describe('downloads', () => {
       after.forEach((y, index) => expect(Math.abs(y - before[index])).toBeLessThanOrEqual(0.5));
     });
   }
+
+  test('Start with a painted photo and no MI-GAN downloads it first, then starts the job', async ({
+    page,
+  }) => {
+    await openApp(page, { ...scratchedModel, concurrentDownloads: true });
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await fix(page, 'Dust & scratches').check();
+    await expect(page.locator('.foot-cost')).toContainText('28 MB to download');
+    await page.getByRole('button', { name: 'Download 28 MB, then upscale' }).click();
+    await expect(page.locator('.status-copy strong')).toContainText('Downloading MI-GAN');
+    expect(await hostCalls(page, 'start_jobs')).toHaveLength(0);
+    await progressDownload(page, 'migan', 60);
+    await finishDownload(page, 'migan');
+    await expect.poll(async () => (await hostCalls(page, 'start_jobs')).length).toBe(1);
+    const start = (await hostCalls(page, 'start_jobs'))[0];
+    expect((start.args as { input: { step_stages: unknown[] } }).input.step_stages).toEqual([
+      { step: 'repair' },
+    ]);
+    await expect(page.getByRole('button', { name: /^Download / })).toHaveCount(0);
+  });
 
   test('several downloads show one combined line and keep percentage from dropping when one finishes', async ({
     page,

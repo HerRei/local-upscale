@@ -1424,6 +1424,7 @@ pub(crate) fn plan_job_checked(
         edit_model,
         has_audio: options.has_audio,
         masked_steps: options.masked_steps,
+        features: engine_features(state)?,
     };
     Ok(crate::job_plan::resolve_plan(
         &catalog,
@@ -1593,11 +1594,23 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     }
     // A step that needs paint runs on the photos that have it. A photo left with nothing to run
     // is not queued.
-    let mut runnable = Vec::with_capacity(media.len());
+    let mut painted_inputs = Vec::with_capacity(media.len());
     for item in media {
         let photo_input = input_for_photo(state, &input, &item, true)?;
         if photo_has_work(&photo_input) {
-            runnable.push((item, photo_input));
+            painted_inputs.push((item, photo_input));
+        }
+    }
+    // A painted photo takes the Dust & scratches model with it; it is refused, not started
+    // without it, while the model is missing.
+    let mut runnable = Vec::with_capacity(painted_inputs.len());
+    {
+        let features = engine_features(state)?;
+        let catalog = lock(&state.catalog)?;
+        for (item, photo_input) in painted_inputs {
+            let extra = optional_step_models(&catalog, &features, &photo_input, None)?;
+            let photo_selection = selection_with_step_models(&selection, extra);
+            runnable.push((item, photo_input, photo_selection));
         }
     }
     if runnable.is_empty() {
@@ -1608,30 +1621,32 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     refuse_when_disk_is_short(&input, &selection, &runnable[0].0, &output_directory)?;
     let engine = lock(&state.engine)?.clone();
     let ui_json = ui_json(input.ui.as_ref())?;
-    let media_ids: Vec<&str> = runnable.iter().map(|(item, _)| item.id.as_str()).collect();
+    let media_ids: Vec<&str> = runnable.iter().map(|(item, ..)| item.id.as_str()).collect();
     lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
         runnable
             .iter()
-            .map(|(item, photo_input)| -> AppResult<NewJob> {
-                let job_id = Uuid::new_v4().to_string();
-                let output =
-                    unique_output_path(&output_directory, &item.path, photo_input, reserved);
-                let message = build_job_message_for_engine(
-                    &job_id,
-                    item,
-                    &output,
-                    &state.paths.work_root,
-                    photo_input,
-                    &selection,
-                    engine.as_ref(),
-                )?;
-                Ok(NewJob {
-                    id: job_id,
-                    media_id: item.id.clone(),
-                    request_json: serde_json::to_string(&message)?,
-                    ui_json: ui_json.clone(),
-                })
-            })
+            .map(
+                |(item, photo_input, photo_selection)| -> AppResult<NewJob> {
+                    let job_id = Uuid::new_v4().to_string();
+                    let output =
+                        unique_output_path(&output_directory, &item.path, photo_input, reserved);
+                    let message = build_job_message_for_engine(
+                        &job_id,
+                        item,
+                        &output,
+                        &state.paths.work_root,
+                        photo_input,
+                        photo_selection,
+                        engine.as_ref(),
+                    )?;
+                    Ok(NewJob {
+                        id: job_id,
+                        media_id: item.id.clone(),
+                        request_json: serde_json::to_string(&message)?,
+                        ui_json: ui_json.clone(),
+                    })
+                },
+            )
             .collect()
     })?;
     crate::stay_awake::sync(state);
@@ -1802,7 +1817,62 @@ pub(crate) fn use_current_programs(state: &AppState, message: &mut Value) -> App
                 Value::String(runtime.to_string_lossy().into_owned()),
             );
         }
+        "job_request" => refresh_step_models(state, data)?,
+        "image_batch_request" => {
+            for job in data
+                .get_mut("jobs")
+                .and_then(Value::as_array_mut)
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_object_mut)
+            {
+                refresh_step_models(state, job)?;
+            }
+        }
         _ => {}
+    }
+    Ok(())
+}
+
+/// A photo job queued with a model on a step that runs without one (Dust & scratches names
+/// MI-GAN) is sent with the path of the installed catalog entry as it is now, never the path
+/// it was queued with. A model that was removed since fails the job with the start's text.
+fn refresh_step_models(
+    state: &AppState,
+    job: &mut serde_json::Map<String, Value>,
+) -> AppResult<()> {
+    let steps = crate::steps::registry();
+    let catalog = lock(&state.catalog)?;
+    for stage in job
+        .get_mut("stages")
+        .and_then(Value::as_array_mut)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object_mut)
+    {
+        let Some((step, _)) = stage
+            .get("step")
+            .and_then(Value::as_str)
+            .and_then(|id| steps.step_stage(id))
+            .filter(|(step, _)| !step.needs_model)
+        else {
+            continue;
+        };
+        let Some(id) = stage
+            .get("model_id")
+            .and_then(Value::as_str)
+            .filter(|id| !id.is_empty())
+        else {
+            continue;
+        };
+        let path = catalog
+            .models
+            .iter()
+            .find(|model| model.model_id == id && crate::job_plan::serves_step(model, step))
+            .and_then(|model| model.installed_path.as_deref().filter(|_| model.installed))
+            .filter(|path| !path.is_empty())
+            .ok_or_else(|| AppError::Validation(REQUIRED_MODELS_MISSING.into()))?;
+        stage.insert("model_path".into(), Value::String(path.to_owned()));
     }
     Ok(())
 }
@@ -2430,6 +2500,7 @@ pub(crate) fn estimate_start_checked(
     validate_start(&input, state)?;
     let selection = resolve_model_selection(state, &input)?;
     let engine = lock(&state.engine)?.clone();
+    let features = engine_features(state)?;
     let mut media = Vec::with_capacity(media_ids.len());
     {
         let database = lock(&state.database)?;
@@ -2452,6 +2523,13 @@ pub(crate) fn estimate_start_checked(
         if !photo_has_work(&photo_input) {
             continue;
         }
+        // As the job carries it; a model still to download only means no measured time yet.
+        let photo_selection = {
+            let catalog = lock(&state.catalog)?;
+            let extra =
+                optional_step_models(&catalog, &features, &photo_input, Some(&mut Vec::new()))?;
+            selection_with_step_models(&selection, extra)
+        };
         // The work profile ignores paths and ids; these placeholders never run.
         let message = build_job_message_for_engine(
             "estimate",
@@ -2459,7 +2537,7 @@ pub(crate) fn estimate_start_checked(
             Path::new(""),
             &state.paths.work_root,
             &photo_input,
-            &selection,
+            &photo_selection,
             engine.as_ref(),
         )?;
         requests.push(message.to_string());
@@ -5401,6 +5479,74 @@ fn installed_stage_model<'a>(
     }
 }
 
+/// What a start that cannot run says while a model it needs is not installed (the window's
+/// own text for the same state).
+const REQUIRED_MODELS_MISSING: &str = "Choose or download the required models before starting.";
+
+/// The models the steps of one photo's input use without needing them (Dust & scratches fills
+/// wider marks with MI-GAN): one per such step that has paint (`mask_path`, so the photo is
+/// painted), when the engine lists the step's `_model` feature and the catalog has a model for
+/// it. They are resolved here, at send time, from the installed catalog entry. A model that is
+/// not installed refuses the photo, or with `missing` is recorded there (the preview patch and the
+/// time estimate, which never run it).
+fn optional_step_models(
+    catalog: &crate::types::CatalogManifest,
+    features: &[String],
+    input: &StartBatchInput,
+    mut missing: Option<&mut Vec<String>>,
+) -> AppResult<Vec<ResolvedStepModel>> {
+    let steps = crate::steps::registry();
+    let mut models = Vec::new();
+    for selection in input
+        .step_stages
+        .iter()
+        .filter(|selection| selection.mask_path.is_some())
+    {
+        let Some((step, _)) = steps.step_stage(&selection.step) else {
+            continue;
+        };
+        let Some(model) = crate::job_plan::optional_step_model(catalog, step, features) else {
+            continue;
+        };
+        let path = match model.installed_path.as_deref() {
+            Some(path) if model.installed && !path.is_empty() => path.to_owned(),
+            _ => match missing.as_deref_mut() {
+                Some(missing) => {
+                    missing.push(model.model_id.clone());
+                    String::new()
+                }
+                None => return Err(AppError::Validation(REQUIRED_MODELS_MISSING.into())),
+            },
+        };
+        models.push(ResolvedStepModel {
+            step: step.id.clone(),
+            model_id: model.model_id.clone(),
+            path,
+        });
+    }
+    Ok(models)
+}
+
+/// The engine's features, for `optional_step_models`.
+fn engine_features(state: &AppState) -> AppResult<Vec<String>> {
+    Ok(lock(&state.engine)?
+        .as_ref()
+        .map(|engine| engine.features.clone())
+        .unwrap_or_default())
+}
+
+/// `selection` with the models a photo's own steps add (`optional_step_models`).
+fn selection_with_step_models(
+    selection: &ModelSelection,
+    extra: Vec<ResolvedStepModel>,
+) -> ModelSelection {
+    let mut selection = selection.clone();
+    if let ModelSelection::Image { step_models, .. } = &mut selection {
+        step_models.extend(extra);
+    }
+    selection
+}
+
 fn resolve_model_selection(state: &AppState, input: &StartBatchInput) -> AppResult<ModelSelection> {
     resolve_model_selection_with(state, input, None)
 }
@@ -5423,6 +5569,7 @@ fn resolve_model_selection_with(
             "fixes run only before an upscale or restore".into(),
         ));
     }
+    let features = engine_features(state)?;
     let catalog = lock(&state.catalog)?;
     let skip_upscale = upscale_skips_sr(input) || no_restore_model(input);
     if input.task == "video" && input.video_model_id != "frame_by_frame" && !skip_upscale {
@@ -5593,6 +5740,8 @@ fn resolve_model_selection_with(
             path,
         });
     }
+    // The preview patch resolves one photo's input, which carries its mask.
+    step_models.extend(optional_step_models(&catalog, &features, input, missing)?);
     if restoring && !preprocess.is_empty() {
         if preprocess
             .last()

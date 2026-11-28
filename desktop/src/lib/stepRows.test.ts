@@ -4,6 +4,8 @@ import {
   backgroundModel,
   backgroundRemoved,
   backgroundRowShown,
+  repairModel,
+  startRepairStage,
   scanApplies,
   scanChoice,
   scanOptions,
@@ -164,5 +166,52 @@ describe('stepRows, scan', () => {
     const stored = scanOptions('bff', 25, 'frame:auto');
     expect(stored).toHaveLength(7);
     expect(stored[6].label).toBe('Deinterlace · 25 fps');
+  });
+});
+
+describe('Dust & scratches model', () => {
+  const { models } = demoSnapshot().catalog;
+  const features = ['image_repair', 'image_repair_model'];
+  const migan = () => structuredClone(models.find((model) => model.model_id === 'migan')!);
+
+  it('repairModel finds migan with the feature, and nothing without the feature or the entry', () => {
+    expect(repairModel(models, features)?.model_id).toBe('migan');
+    expect(repairModel(models, ['image_repair'])).toBeUndefined();
+    expect(repairModel(models, [])).toBeUndefined();
+    expect(
+      repairModel(
+        models.filter((model) => model.model_id !== 'migan'),
+        features,
+      ),
+    ).toBe(undefined);
+  });
+
+  it('startRepairStage asks for the download when another photo of the start has marks', () => {
+    const missing = { ...migan(), installed: false };
+    const ask = (o: Partial<Parameters<typeof startRepairStage>[0]> = {}) =>
+      startRepairStage({
+        model: missing,
+        ticked: true,
+        startMarked: true,
+        plan: [],
+        ...o,
+      });
+    expect(ask()).toMatchObject({
+      kind: 'repair',
+      role: 'step',
+      label: 'Dust & scratches',
+      installed: false,
+      canDownload: true,
+      sizeBytes: 28_079_181,
+    });
+    expect(ask()?.model?.model_id).toBe('migan');
+    expect(ask({ startMarked: false })).toBeUndefined();
+    expect(ask({ ticked: false })).toBeUndefined();
+    expect(ask({ model: undefined })).toBeUndefined();
+    expect(ask({ model: { ...missing, installed: true } })).toBeUndefined();
+    // The open photo's own plan already holds the step.
+    expect(
+      ask({ plan: [{ kind: 'repair', role: 'step', label: 'x', installed: false } as never] }),
+    ).toBeUndefined();
   });
 });

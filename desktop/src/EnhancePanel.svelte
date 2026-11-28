@@ -687,6 +687,7 @@
                 {seeFixOnPhoto}
                 {showCropGuide}
                 mediaFacts={repairFacts}
+                repairDownload={downloads.stages.some((stage) => stage.kind === 'repair')}
                 {paintRepair}
                 {radioGroupKeydown}
                 {patchLink}

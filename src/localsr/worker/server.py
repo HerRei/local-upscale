@@ -2615,6 +2615,7 @@ DEFERRED_IMPORTS = (
     "localsr.core.media_codecs",
     "localsr.core.model_adapter",
     "localsr.core.onnx_runtime",
+    "localsr.core.repair",
     "localsr.core.steps",
     "localsr.core.video_engines",
     "localsr.core.video_io",

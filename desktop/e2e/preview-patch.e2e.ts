@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { openApp, showPane } from './app';
 import { emit, hostCalls } from './fake-host';
-import { ready, video } from './fixtures';
+import { ready, scratchedModel, video } from './fixtures';
 
 // The preview patch (section 3 of docs/design/previews-and-recipes.md) against the fake host:
 // the Preview button, the request the app sends, the tab with its chips, moving it, the states
@@ -214,6 +214,33 @@ test.describe('preview patch', () => {
       'true',
     );
     await expect(frame(page).locator('img')).toHaveCount(1);
+  });
+
+  test('Dust & scratches without its model is a download chip and the other steps still show', async ({
+    page,
+  }) => {
+    await openApp(page, {
+      ...patchScenario,
+      photos: 2,
+      features: [...FEATURES, ...scratchedModel.features!],
+      marks: scratchedModel.marks,
+      settings: { ...patchScenario.settings, step_stages: [{ step: 'repair' }] },
+      patch: { missing: 0 },
+    });
+    await turnOn(page);
+    const row = chips(page).getByRole('button');
+    await expect(row).toHaveText(['Original', /^↓\s*Dust & scratches$/, 'Noise', '4×']);
+    await expect(chips(page).getByRole('button', { name: /Dust & scratches/ })).toHaveAttribute(
+      'title',
+      'MI-GAN is not downloaded.',
+    );
+    // The host stops at the missing step; the ones after it are named and wait.
+    await expect(chips(page).getByRole('button', { name: 'Noise' })).toBeVisible();
+    await expect(chips(page).getByRole('button', { name: '4×' })).toBeVisible();
+    const sent = (await requests(page)).at(-1)!;
+    expect((sent.input as unknown as { step_stages: { step: string }[] }).step_stages).toEqual([
+      { step: 'repair' },
+    ]);
   });
 
   test('dragging the tab moves the patch and asks again 250 ms after release', async ({ page }) => {

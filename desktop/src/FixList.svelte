@@ -31,7 +31,8 @@
     type FixRow,
     type MediaFacts,
   } from './lib/fixRows';
-  import { withStepStage } from './lib/stepRows';
+  import { formatBytes } from './lib/format';
+  import { repairModel, withStepStage } from './lib/stepRows';
   import type { PlanStage } from './lib/plan';
   import type {
     CatalogModel,
@@ -60,6 +61,8 @@
   export let showCropGuide: EnhancePanelActions['showCropGuide'] = () => {};
   /** Dust & scratches: the open photo's marks and the queue's, and the action that paints. */
   export let mediaFacts: MediaFacts = { marks: 0, marked: 0, photos: 0, open: false };
+  /** The next start downloads the Dust & scratches model (a photo of it has marks): the row's title says so. */
+  export let repairDownload = false;
   export let paintRepair: EnhancePanelActions['paintRepair'] = () => {};
   export let moreOpen = false;
 
@@ -71,7 +74,15 @@
   $: storedSteps = (settings.step_stages ?? [])
     .map((selection) => selection.step)
     .filter((step) => step === STABILISE_STEP || step === REPAIR_STEP);
-  $: rows = fixRows(mediaKind, features, undefined, undefined, storedSteps);
+  $: repairFill = repairModel(models, features);
+  $: rows = fixRows(
+    mediaKind,
+    features,
+    undefined,
+    undefined,
+    storedSteps,
+    repairFill ? [REPAIR_STEP] : [],
+  );
   let stabiliseOpen = false;
   $: if (!stabiliseEntry || preservingHdr) stabiliseOpen = false;
   $: showCropGuide(stabiliseOpen ? smoothingStop(smoothingOf(stabiliseEntry)).crop : null);
@@ -107,6 +118,9 @@
     }
     if (row.id === REPAIR_STEP && !features.includes(REPAIR_FEATURE)) {
       return 'This engine cannot repair marks. Update LocalSR.';
+    }
+    if (row.id === REPAIR_STEP && repairDownload && repairFill) {
+      return `${row.title} · ${formatBytes(repairFill.size_bytes)} download`;
     }
     return row.title;
   }

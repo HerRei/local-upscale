@@ -82,6 +82,9 @@ pub struct PlanOptions<'a> {
     /// Steps that need paint, which the open photo has; the plan leaves out any other step that
     /// `requires_mask`.
     pub masked_steps: Vec<String>,
+    /// The engine's features: a step that runs without a model and may use one (Dust & scratches)
+    /// gets its model on the plan only when the engine lists `<required_feature>_model`.
+    pub features: Vec<String>,
 }
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -284,6 +287,24 @@ pub fn serves_step(model: &CatalogModel, step: &StepDefinition) -> bool {
         .is_some_and(|task| model.purposes.iter().any(|purpose| purpose == task))
 }
 
+/// The catalog model a step that runs without a model may use (Dust & scratches fills wider
+/// marks with MI-GAN): the one that serves the step's task, when the engine lists the step's
+/// feature with `_model` appended (`image_repair_model`). Mirrors `optionalStepModel` in plan.ts.
+pub fn optional_step_model<'a>(
+    catalog: &'a CatalogManifest,
+    step: &StepDefinition,
+    features: &[String],
+) -> Option<&'a CatalogModel> {
+    if step.needs_model || step.model_task.is_none() {
+        return None;
+    }
+    let feature = format!("{}_model", step.required_feature.as_deref()?);
+    if !features.contains(&feature) {
+        return None;
+    }
+    catalog.models.iter().find(|model| serves_step(model, step))
+}
+
 /// The catalog model a step stage runs: the chosen one, when it serves the step's task.
 pub fn step_stage_model<'a>(
     catalog: &'a CatalogManifest,
@@ -321,7 +342,21 @@ fn step_stage_row(
     settings: &UiSettings,
     selection: &StepStageSelection,
     step: &StepDefinition,
+    features: &[String],
 ) -> PlanStage {
+    if let Some(model) = optional_step_model(catalog, step, features) {
+        // Runs without it, uses it when named: the row waits for the download like a fix.
+        return stage_for(
+            catalog,
+            settings,
+            &step.id,
+            "step",
+            &step.label,
+            Some(model),
+            None,
+        )
+        .unwrap_or_else(|| missing_stage(&step.id, "step", &step.label, None));
+    }
     if step.needs_model {
         // Like a fix: the chosen model's row, or a row that waits for one.
         let model = step_stage_model(catalog, step, selection);
@@ -462,7 +497,13 @@ pub fn resolve_plan(
     );
     for (selection, step, placement) in &step_stages {
         if *placement == StepPlacement::BeforeFixes {
-            stages.push(step_stage_row(catalog, settings, selection, step));
+            stages.push(step_stage_row(
+                catalog,
+                settings,
+                selection,
+                step,
+                &options.features,
+            ));
         }
     }
     // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
@@ -680,7 +721,13 @@ pub fn resolve_plan(
 
     for (selection, step, placement) in &step_stages {
         if *placement == StepPlacement::AfterPrimary {
-            stages.push(step_stage_row(catalog, settings, selection, step));
+            stages.push(step_stage_row(
+                catalog,
+                settings,
+                selection,
+                step,
+                &options.features,
+            ));
         }
     }
 
@@ -878,6 +925,8 @@ mod tests {
         has_audio: Option<bool>,
         #[serde(default)]
         masked_steps: Vec<String>,
+        #[serde(default)]
+        features: Vec<String>,
     }
 
     #[derive(Deserialize)]
@@ -967,6 +1016,7 @@ mod tests {
                 edit_model,
                 has_audio: case.options.has_audio,
                 masked_steps: case.options.masked_steps.clone(),
+                features: case.options.features.clone(),
             };
             let request = StartRequest {
                 media_ids: case.start_request.media_ids.clone(),

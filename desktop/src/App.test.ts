@@ -337,6 +337,7 @@ vi.mock('./lib/jobPlanClient', async (importOriginal) => {
       editModel,
       hasAudio: options.has_audio === null ? undefined : options.has_audio,
       maskedSteps: options.masked_steps ?? [],
+      features: snapshot.engine?.features ?? [],
     });
   };
   planFetch.defaultImpl = defaultFetchPlan;
@@ -13686,5 +13687,98 @@ describe('Dust & scratches', () => {
       'This engine cannot repair marks. Update LocalSR.',
     );
     expect(value()!.disabled).toBe(true);
+  });
+
+  describe('Dust & scratches, model', () => {
+    const WIDE_TITLE = 'Repairs marks that you paint over: dust, scratches, spots, stains.';
+    const OLD_TITLE = 'Repairs small marks that you paint over: dust, scratches, spots.';
+    /** The photos with these marks, the row ticked, an engine that lists the model. MI-GAN is
+     *  installed or not (the other models of the ready snapshot always are). */
+    function modelSnapshot(marks: number[], installed = false, listed = true): AppSnapshot {
+      const snapshot = ticked(scratchedSnapshot(marks));
+      if (listed) snapshot.engine!.features.push('image_repair_model');
+      for (const model of snapshot.catalog.models) {
+        if (model.model_id === 'migan') model.installed = installed;
+      }
+      return snapshot;
+    }
+    const rowTitle = () => box()!.closest('.fix-row')!.getAttribute('title');
+    const startButton = () => screen.queryByRole('button', { name: /^Download [\d.]+ MB, then / });
+    const tip = () => toolbar()!.querySelector<HTMLElement>('.help-tip-text')!.textContent ?? '';
+
+    it('ticked, 3 marks, model missing: the cost line, Start and the row title ask for 28 MB', async () => {
+      await mountWith(modelSnapshot([3]));
+      expect(await within(foot()).findByText('28 MB to download')).toBeTruthy();
+      expect(startButton()!.textContent?.trim()).toBe('Download 28 MB, then upscale');
+      expect(rowTitle()).toBe(`${WIDE_TITLE} · 28 MB download`);
+      expect(value()!.textContent?.trim()).toBe('3 marks');
+    });
+
+    it('ticked, no marks anywhere: no download is asked', async () => {
+      await mountWith(modelSnapshot([0, 0]));
+      await waitFor(() => expect(rowTitle()).toBe(WIDE_TITLE));
+      expect(within(foot()).queryByText(/to download/)).toBeNull();
+      expect(startButton()).toBeNull();
+      expect(value()!.textContent?.trim()).toBe('Paint…');
+    });
+
+    it('two photos, the open one unpainted and the other painted: the download is asked', async () => {
+      const snapshot = modelSnapshot([0, 2]);
+      snapshot.settings.batch_mode = true;
+      await mountWith(snapshot);
+      expect(await within(foot()).findByText('28 MB to download')).toBeTruthy();
+      // The plan line is the open photo's: it has no marks, so the step is not on it.
+      expect(within(foot()).queryByText(/Dust & scratches/)).toBeNull();
+      expect(startButton()).toBeTruthy();
+      expect(rowTitle()).toBe(`${WIDE_TITLE} · 28 MB download`);
+      expect(value()!.textContent?.trim()).toBe('Paint…');
+    });
+
+    it('one photo at a time, only the other painted: nothing is sent, so nothing is asked', async () => {
+      const snapshot = modelSnapshot([0, 2]);
+      snapshot.settings.batch_mode = false;
+      await mountWith(snapshot);
+      await waitFor(() => expect(rowTitle()).toBe(WIDE_TITLE));
+      expect(within(foot()).queryByText(/to download/)).toBeNull();
+    });
+
+    it('model installed: nothing to download, the Plan sheet names MI-GAN beside 3 marks', async () => {
+      const user = await mountWith(modelSnapshot([3], true));
+      expect(await within(foot()).findByText('Dust & scratches → Upscale 2×')).toBeTruthy();
+      expect(within(foot()).queryByText(/to download/)).toBeNull();
+      expect(startButton()).toBeNull();
+      expect(rowTitle()).toBe(WIDE_TITLE);
+      const sheet = await openPlanSheet(user);
+      const row = within(sheet).getByText('3 marks').closest('.plan-row') as HTMLElement;
+      expect(within(row).getByText('Dust & scratches')).toBeTruthy();
+      expect(within(row).getByText('MI-GAN')).toBeTruthy();
+    });
+
+    it("feature not listed: the row title and the paint bar tip are today's", async () => {
+      const { user: painter } = await painting(modelSnapshot([3], false, false));
+      void painter;
+      expect(rowTitle()).toBe(OLD_TITLE);
+      expect(tip()).toContain(
+        'This works for small marks on even areas such as sky, walls and skin.',
+      );
+      expect(tip()).not.toContain('MI-GAN');
+      expect(within(foot()).queryByText(/to download/)).toBeNull();
+    });
+
+    it('paint bar open, model listed: About Dust & scratches holds the new tip', async () => {
+      await painting(modelSnapshot([3], true));
+      expect(tip()).toContain('a speck of dust, a scratch, a spot, a stain.');
+      expect(tip()).toContain('Wider ones are filled by a small model, MI-GAN');
+      expect(tip()).toContain(
+        'A mark across a face, lettering or other fine detail can still come out wrong.',
+      );
+      expect(tip()).not.toContain('smeared');
+      expect(tip()).not.toContain('28 MB');
+    });
+
+    it("paint bar open, model missing: the tip adds the first start's download", async () => {
+      await painting(modelSnapshot([3], false));
+      expect(tip().endsWith(' The first start downloads 28 MB.')).toBe(true);
+    });
   });
 });

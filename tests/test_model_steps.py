@@ -497,7 +497,9 @@ def test_the_registry_keeps_models_and_alpha_on_step_stages_only():
     primary, face = PHASES.index("primary"), PHASES.index("face")
     for step in STEPS:
         if step.model_task is not None:
-            assert step.needs_model and is_model_step_stage(step), step.id
+            # Dust & scratches names a task and still runs without a model.
+            assert is_step_stage(step) and is_model_step_stage(step) == step.needs_model, step.id
+            assert step.needs_model or step.id == "repair", step.id
         if step.output_alpha:
             assert is_step_stage(step) and step.media == ("image",), step.id
         if is_step_stage(step):

@@ -251,3 +251,94 @@ describe('Examples', () => {
     );
   });
 });
+
+describe('Step models', () => {
+  const install = (snapshot: AppSnapshot, ids: string[], ticked: string[] = []) => {
+    // The demo snapshot shares its catalog between tests: start from nothing installed.
+    for (const model of snapshot.catalog.models) {
+      model.installed = ids.includes(model.model_id);
+      model.installed_path = model.installed ? `/models/${model.filename}` : undefined;
+    }
+    snapshot.settings.step_stages = ticked.map((step) => ({ step }));
+  };
+  const rail = (name: RegExp) => screen.getByRole('button', { name }).textContent ?? '';
+
+  it('lists MI-GAN and BiRefNet under Installed, and in no choosing group or count', async () => {
+    const user = userEvent.setup();
+    const { snapshot } = renderLibrary((value) =>
+      install(value, ['migan', 'birefnet_general', 'fbcnn_color']),
+    );
+    const fixModels = snapshot.catalog.models.filter(
+      (model) =>
+        model.native_scale === 1 &&
+        !model.purposes.includes('face') &&
+        !model.purposes.some((purpose) => ['background', 'inpaint'].includes(purpose)),
+    );
+    // The fix group counts the fix models only; Installed counts the two step models too.
+    expect(rail(/^Fix noise, blur, JPEG, colour/)).toBe(
+      `Fix noise, blur, JPEG, colour${fixModels.length}`,
+    );
+    expect(rail(/^Installed/)).toMatch(/^Installed3 · /);
+
+    for (const group of [/^Fix noise, blur, JPEG, colour/, /^Upscale photos/, /^Illustration/]) {
+      await user.click(screen.getByRole('button', { name: group }));
+      expect(screen.queryByRole('button', { name: /^MI-GAN/ })).toBeNull();
+      expect(screen.queryByRole('button', { name: /^BiRefNet/ })).toBeNull();
+    }
+    await user.click(screen.getByRole('button', { name: /^Installed/ }));
+    expect(screen.getByRole('button', { name: /^MI-GAN\s*Fills wider marks/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: /^BiRefNet\s*Background removal/ })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove MI-GAN' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Remove BiRefNet' })).toBeTruthy();
+  });
+
+  it('is not listed while it is not installed', async () => {
+    const user = userEvent.setup();
+    renderLibrary((value) => install(value, ['fbcnn_color']));
+    expect(rail(/^Installed/)).toMatch(/^Installed1 · /);
+    await user.click(screen.getByRole('button', { name: /^Installed/ }));
+    expect(screen.queryByRole('button', { name: /^MI-GAN/ })).toBeNull();
+  });
+
+  it('shows details without scale, speed, memory, architecture or Use for this job', async () => {
+    const user = userEvent.setup();
+    const { openLicense } = renderLibrary((value) => install(value, ['migan']), {
+      slot: 'primary',
+    });
+    await user.click(screen.getByRole('button', { name: /^Installed/ }));
+    await user.click(screen.getByRole('button', { name: /^MI-GAN\s*Fills wider marks/ }));
+    const detail = screen.getByLabelText('Model details');
+    expect(within(detail).getByRole('heading', { name: 'MI-GAN' })).toBeTruthy();
+    expect(
+      within(detail).getByText(
+        'Fills the wider marks you paint in Dust & scratches by continuing what is around them. Thin marks are filled without it.',
+      ),
+    ).toBeTruthy();
+    expect(within(detail).getByText('Download')).toBeTruthy();
+    expect(within(detail).getByText('28 MB')).toBeTruthy();
+    expect(within(detail).getByText('migan_pipeline_v2.onnx')).toBeTruthy();
+    expect(within(detail).getByText('SHA-256 checked before use')).toBeTruthy();
+    await user.click(within(detail).getByRole('button', { name: 'MIT ↗' }));
+    expect(openLicense).toHaveBeenCalledWith('migan');
+    for (const absent of ['Scale', 'Speed', 'Memory while running', 'Architecture', 'Runs on']) {
+      expect(within(detail).queryByText(absent)).toBeNull();
+    }
+    expect(within(detail).queryByRole('button', { name: /Use for/ })).toBeNull();
+    expect(within(detail).getByRole('button', { name: 'Remove from this computer' })).toBeTruthy();
+  });
+
+  it('warns about the download while the row that uses the model is ticked', async () => {
+    const user = userEvent.setup();
+    const line = 'Dust & scratches uses this model. Removing it means a 28 MB download again.';
+    cleanup();
+    renderLibrary((value) => install(value, ['migan']));
+    await user.click(screen.getByRole('button', { name: /^Installed/ }));
+    await user.click(screen.getByRole('button', { name: /^MI-GAN\s*Fills wider marks/ }));
+    expect(within(screen.getByLabelText('Model details')).queryByText(line)).toBeNull();
+    cleanup();
+    renderLibrary((value) => install(value, ['migan'], ['repair']));
+    await user.click(screen.getByRole('button', { name: /^Installed/ }));
+    await user.click(screen.getByRole('button', { name: /^MI-GAN\s*Fills wider marks/ }));
+    expect(within(screen.getByLabelText('Model details')).getByText(line)).toBeTruthy();
+  });
+});

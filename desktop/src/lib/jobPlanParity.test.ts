@@ -39,6 +39,8 @@ interface ParityCase {
     has_audio: boolean | null;
     /** Left out of a case that names none. */
     masked_steps?: string[];
+    /** The engine's features; left out of a case that names none. */
+    features?: string[];
   };
   start_request: {
     media_ids: string[];
@@ -99,6 +101,7 @@ function makeCase(
     editModelId?: string | null;
     hasAudio?: boolean | null;
     maskedSteps?: string[];
+    features?: string[];
     mediaIds?: string[];
     batchMode?: boolean;
     recipeName?: string;
@@ -146,6 +149,7 @@ function makeCase(
   const editModelId = spec.editModelId ?? null;
   const hasAudio = spec.hasAudio === undefined ? null : spec.hasAudio;
   const maskedSteps = spec.maskedSteps ?? [];
+  const features = spec.features ?? [];
 
   const faceModel = faceModelId
     ? snapshot.catalog.models.find((m) => m.model_id === faceModelId)
@@ -165,6 +169,7 @@ function makeCase(
     editModel,
     hasAudio: hasAudio === null ? undefined : hasAudio,
     maskedSteps,
+    features,
     steps,
   });
 
@@ -196,6 +201,7 @@ function makeCase(
       edit_model_id: editModelId,
       has_audio: hasAudio,
       ...(maskedSteps.length > 0 ? { masked_steps: maskedSteps } : {}),
+      ...(features.length > 0 ? { features } : {}),
     },
     start_request: {
       media_ids: mediaIds,
@@ -959,6 +965,53 @@ function buildCorpus(): ParityCase[] {
       installedIds: ['span_photo_x4', 'denoise_realplksr_1x', 'birefnet_general'],
     });
   }
+  // With the engine's `image_repair_model`, the step names MI-GAN: its download is on the plan
+  // while it is missing, and nothing when it is installed or the photo has no paint.
+  const withModel = ['image_repair', 'image_repair_model'];
+  const modelCases: [string, Partial<UiSettings>, string[], string[]][] = [
+    ['painted-missing', { task: 'upscale', step_stages: [repair] }, ['repair'], []],
+    ['painted-installed', { task: 'upscale', step_stages: [repair] }, ['repair'], ['migan']],
+    ['unpainted-missing', { task: 'upscale', step_stages: [repair] }, [], []],
+    [
+      'with-fix-and-background',
+      {
+        task: 'upscale',
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+        fixes: ['noise'],
+        step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }, repair],
+      },
+      ['repair'],
+      [],
+    ],
+    [
+      'restore-alone-missing',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [repair],
+      },
+      ['repair'],
+      [],
+    ],
+  ];
+  for (const [tag, patch, maskedSteps, installed] of modelCases) {
+    push(`repair-model-${tag}`, {
+      maskedSteps,
+      features: withModel,
+      settingsPatch: { selected_model_id: 'span_photo_x4', output_scale: 4, ...patch },
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x', 'birefnet_general', ...installed],
+    });
+  }
+  // A catalog or engine without the model: the stage is today's.
+  push('repair-model-engine-without-feature', {
+    maskedSteps: ['repair'],
+    features: ['image_repair'],
+    settingsPatch: { task: 'upscale', selected_model_id: 'span_photo_x4', step_stages: [repair] },
+    installedIds: ['span_photo_x4'],
+  });
 
   return cases;
 }

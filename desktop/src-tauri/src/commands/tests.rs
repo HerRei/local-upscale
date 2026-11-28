@@ -7441,6 +7441,204 @@ mod repair {
         assert_eq!(ask(&["c"]), None);
     }
 
+    /// The state of `repairing_state` with an engine that lists `image_repair_model`; MI-GAN is
+    /// installed at the returned path, or not installed at all.
+    fn repair_model_state(installed: bool) -> (tempfile::TempDir, Arc<AppState>, String) {
+        let (directory, state) = repairing_state();
+        lock(&state.engine)
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .features
+            .push("image_repair_model".into());
+        let path = directory.path().join("migan.onnx");
+        fs::write(&path, "weights").unwrap();
+        let path = path.to_string_lossy().into_owned();
+        for model in &mut lock(&state.catalog).unwrap().models {
+            if model.model_id == "migan" {
+                model.installed = installed;
+                model.installed_path = installed.then(|| path.clone());
+            }
+        }
+        (directory, state, path)
+    }
+
+    fn repair_stage(request: &serde_json::Value) -> Option<&serde_json::Value> {
+        request["data"]["stages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|stage| stage["step"] == "repair")
+    }
+
+    #[test]
+    fn a_painted_photo_carries_the_installed_model_and_an_unpainted_one_no_stage() {
+        let (_directory, state, path) = repair_model_state(true);
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        let mut both = estimate_input(4);
+        both.media_ids = vec!["a".into(), "b".into()];
+        both.batch_mode = true;
+        both.step_stages = vec![repair_step()];
+        start_jobs_checked(&state, both).unwrap();
+        let requests = queued_requests(&state);
+        let stage = repair_stage(&requests[0]).unwrap();
+        assert_eq!(stage["model_id"], "migan");
+        assert_eq!(stage["model_path"], path.as_str());
+        assert!(stage["mask_path"].as_str().unwrap().contains("a-1"));
+        assert!(repair_stage(&requests[1]).is_none());
+    }
+
+    #[test]
+    fn a_painted_photo_is_refused_while_the_model_is_missing() {
+        let (_directory, state, _path) = repair_model_state(false);
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        let mut both = estimate_input(4);
+        both.media_ids = vec!["a".into(), "b".into()];
+        both.batch_mode = true;
+        both.step_stages = vec![repair_step()];
+        let refused = start_jobs_checked(&state, both.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused.contains("Choose or download the required models before starting."),
+            "{refused}"
+        );
+        assert!(queued_requests(&state).is_empty());
+        // Photos without marks need no model: the step is left out for them.
+        both.media_ids = vec!["b".into()];
+        both.batch_mode = false;
+        start_jobs_checked(&state, both).unwrap();
+        let requests = queued_requests(&state);
+        assert_eq!(requests.len(), 1);
+        assert!(repair_stage(&requests[0]).is_none());
+    }
+
+    #[test]
+    fn an_engine_without_the_model_feature_gets_the_stage_as_before() {
+        let (_directory, state, _path) = repair_model_state(true);
+        lock(&state.engine)
+            .unwrap()
+            .as_mut()
+            .unwrap()
+            .features
+            .retain(|feature| feature != "image_repair_model");
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        start_jobs_checked(&state, repair_alone(&["a"])).unwrap();
+        let requests = queued_requests(&state);
+        let stage = repair_stage(&requests[0]).unwrap();
+        assert!(stage.get("model_id").is_none_or(serde_json::Value::is_null));
+        assert!(stage
+            .get("model_path")
+            .is_none_or(serde_json::Value::is_null));
+        assert!(stage["mask_path"].is_string());
+    }
+
+    #[test]
+    fn a_queued_job_is_sent_with_the_model_path_of_the_day() {
+        let (directory, state, queued_path) = repair_model_state(true);
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        start_jobs_checked(&state, repair_alone(&["a"])).unwrap();
+        let queued: serde_json::Value = {
+            let job = lock(&state.database)
+                .unwrap()
+                .next_queued_job()
+                .unwrap()
+                .unwrap();
+            serde_json::from_str(&job.request_json).unwrap()
+        };
+        assert_eq!(
+            repair_stage(&queued).unwrap()["model_path"],
+            queued_path.as_str()
+        );
+        // The file moved (a changed model folder): the path sent is the installed one now.
+        let moved = directory.path().join("elsewhere.onnx");
+        fs::write(&moved, "weights").unwrap();
+        let moved = moved.to_string_lossy().into_owned();
+        for model in &mut lock(&state.catalog).unwrap().models {
+            if model.model_id == "migan" {
+                model.installed_path = Some(moved.clone());
+            }
+        }
+        for batch in [false, true] {
+            let mut sent = queued.clone();
+            if batch {
+                sent = serde_json::json!({"type": "image_batch_request", "data": {"jobs": [sent["data"].clone()]}});
+            }
+            use_current_programs(&state, &mut sent).unwrap();
+            let job = if batch {
+                &sent["data"]["jobs"][0]
+            } else {
+                &sent["data"]
+            };
+            let stage = job["stages"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|stage| stage["step"] == "repair")
+                .unwrap();
+            assert_eq!(stage["model_path"], moved.as_str());
+        }
+        // Removed since it was queued: the job fails with the start's text.
+        for model in &mut lock(&state.catalog).unwrap().models {
+            if model.model_id == "migan" {
+                model.installed = false;
+                model.installed_path = None;
+            }
+        }
+        let mut sent = queued;
+        let error = use_current_programs(&state, &mut sent)
+            .unwrap_err()
+            .to_string();
+        assert!(
+            error.contains("Choose or download the required models before starting."),
+            "{error}"
+        );
+    }
+
+    #[test]
+    fn the_estimate_of_a_painted_photo_does_not_need_the_model() {
+        let (_directory, state, _path) = repair_model_state(false);
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        let input = StartBatchInput {
+            media_ids: vec!["a".into()],
+            step_stages: vec![repair_step()],
+            ..estimate_input(4)
+        };
+        assert_eq!(
+            estimate_start_checked(&state, vec!["a".into()], input).unwrap(),
+            None
+        );
+        assert_eq!(mask_files(&state), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_patch_of_a_painted_photo_names_the_missing_model() {
+        let (_directory, state, path) = repair_model_state(false);
+        set_repair_strokes_checked(&state, "a", &[paint(10.0, 10.0)]).unwrap();
+        let media = lock(&state.database)
+            .unwrap()
+            .get_media("a")
+            .unwrap()
+            .unwrap();
+        let input = StartBatchInput {
+            media_ids: vec!["a".into()],
+            step_stages: vec![repair_step()],
+            ..estimate_input(4)
+        };
+        let plan = patch_plan(&state, input.clone(), &media).unwrap();
+        assert_eq!(plan.missing, ["migan"]);
+        assert_eq!(plan.stages[0].model_id.as_deref(), Some("migan"));
+        for model in &mut lock(&state.catalog).unwrap().models {
+            if model.model_id == "migan" {
+                model.installed = true;
+                model.installed_path = Some(path.clone());
+            }
+        }
+        let plan = patch_plan(&state, input, &media).unwrap();
+        assert!(plan.missing.is_empty());
+        assert_eq!(plan.stages[0].model_path.as_deref(), Some(path.as_str()));
+    }
+
     #[test]
     fn a_start_of_repair_alone_queues_only_painted_photos() {
         let (_directory, state) = repairing_state();

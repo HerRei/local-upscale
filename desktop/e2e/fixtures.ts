@@ -107,6 +107,16 @@ export const scratched: Scenario = {
   },
 };
 
+/**
+ * `scratched` on an engine that fills the wider marks with MI-GAN, which is not downloaded: the
+ * first start with a painted photo fetches it. The plan wants its 28 MB, and the patch's chip
+ * names it.
+ */
+export const scratchedModel: Scenario = {
+  ...scratched,
+  features: [...(scratched.features ?? []), 'image_repair_model'],
+};
+
 /** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */
 export const withEdit: Scenario = {
   ...ready,

@@ -57,7 +57,7 @@ task makes it.
 | Dust & scratches: where | A Fix row on a photo, first in the list. Its value opens painting in the viewer. | enhance-panel.md:72 and :1036. It runs before the fixes so they do not sharpen a scratch. |
 | Dust & scratches: the mask | The window sends strokes, never pixels or paths. The host keeps them with the photo, draws the mask and names it on that photo's job. | Masks are per photo, and one start carries one set of settings (`StartBatchInput`). The host's own rule stays whole: the worker opens no path the window chose (`check_stage_masks_granted`, `commands.rs:4743-4758`). |
 | Dust & scratches: a photo without paint | The step is left out for that photo. If nothing else would run on it, the photo is not started. | Ticking is a setting for the whole queue; paint is per photo. |
-| Dust & scratches: the method | OpenCV inpainting (Telea), no model, for small marks. | The gap study's rank 4; foundation-c.md:282. A model is "Later". |
+| Dust & scratches: the method | OpenCV inpainting (Telea), no model, for small marks. Wider marks later got MI-GAN (`fast-edit-and-large-marks.md`, Part 2). | The gap study's rank 4; foundation-c.md:282. A model was "Later". |
 | Slow motion: where | A third group in the Frames select. | It is the same added frames; one select still writes the row (enhance-panel.md:50). |
 | Slow motion: sound **(open)** | None, and no subtitles. The option's group says so. | The engine already leaves both out when the speed changes (`video_pipeline.py:698-716`). Stretched speech at half speed is poor and at quarter speed unusable. |
 | Slow motion: storage | A new optional field `video_slow_motion`; `video_interpolation` stays `x2` or `x4`. | An older build that reads the recipe adds the frames at normal speed instead of refusing an unknown target. |
@@ -614,6 +614,11 @@ band shows while the popover is open and goes when it closes`. `screens.e2e.ts`:
 (ticked, popover open, band in the viewer).
 
 ## 3. Dust & scratches
+
+0.7.0 adds a model for wider marks (MI-GAN, 28 MB, downloaded with the first start that has a
+painted photo): Part 2 of `fast-edit-and-large-marks.md` has its decisions, copy and states. The
+row, strings and engine contract below are the ones without that model, which an older engine or
+catalog keeps.
 
 ### Layout
 

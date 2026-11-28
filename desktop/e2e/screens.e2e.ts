@@ -6,6 +6,7 @@ import {
   firstRun,
   ready,
   scratched,
+  scratchedModel,
   shaky,
   slow,
   strength,
@@ -119,6 +120,17 @@ test.describe('screens @visual', () => {
     await expect(page.locator('.fix-value[data-paints]')).toHaveText('3 marks');
     await expect(page.locator('.foot-plan')).toHaveText(/^Dust & scratches → /);
     await shoot(page, 'panel-dust');
+  });
+
+  test('plan with Dust & scratches that has to download its model', async ({ page }) => {
+    await openApp(page, scratchedModel);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page.getByRole('checkbox', { name: 'Dust & scratches', exact: true }).check();
+    await expect(page.locator('.fix-value[data-paints]')).toHaveText('3 marks');
+    await expect(page.locator('.foot-plan')).toHaveText(/^Dust & scratches → /);
+    await expect(page.locator('.foot-cost')).toContainText('28 MB to download');
+    await shoot(page, 'panel-dust-download');
   });
 
   test('painting Dust & scratches in the viewer', async ({ page }) => {

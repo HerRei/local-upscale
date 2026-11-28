@@ -157,7 +157,7 @@ interface RowCopy {
   title: string;
 }
 
-function copyForRow(step: StepDefinition, media: 'image' | 'video'): RowCopy {
+function copyForRow(step: StepDefinition, media: 'image' | 'video', modelled: boolean): RowCopy {
   switch (step.id) {
     case 'blur':
       return {
@@ -193,7 +193,10 @@ function copyForRow(step: StepDefinition, media: 'image' | 'video'): RowCopy {
     case 'repair':
       return {
         label: 'Dust & scratches',
-        title: 'Repairs small marks that you paint over: dust, scratches, spots.',
+        // With the model for wider marks the row no longer fails on blotches and stains.
+        title: modelled
+          ? 'Repairs marks that you paint over: dust, scratches, spots, stains.'
+          : 'Repairs small marks that you paint over: dust, scratches, spots.',
       };
     case 'deflicker':
       return {
@@ -240,6 +243,8 @@ export function fixRows(
   steps: readonly StepDefinition[] = STEPS,
   phases: readonly string[] = PHASES,
   stored: readonly string[] = [],
+  /** Steps a catalog model serves in this build: their rows say so (Dust & scratches). */
+  modelled: readonly string[] = [],
 ): FixRow[] {
   const order = fixRowOrder(steps, phases);
   const rank = new Map(order.map((id, index) => [id, index]));
@@ -258,7 +263,7 @@ export function fixRows(
         (rank.get(right.id) ?? Number.MAX_SAFE_INTEGER),
     )
     .map((step) => {
-      const copy = copyForRow(step, media);
+      const copy = copyForRow(step, media, modelled.includes(step.id));
       return {
         id: step.id,
         source: STEP_ROWS.has(step.id)

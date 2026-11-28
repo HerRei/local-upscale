@@ -766,7 +766,7 @@
       "media": [
         "image"
       ],
-      "model_task": null,
+      "model_task": "inpaint",
       "needs_model": false,
       "order": 3,
       "output_alpha": false,

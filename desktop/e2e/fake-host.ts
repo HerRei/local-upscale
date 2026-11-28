@@ -235,7 +235,16 @@ function hostScript(scenario: Scenario): void {
   };
   const patchSteps = (input: Json, replace: Json | null, slot: string, limit: number | null) => {
     const steps: Json[] = [];
-    // The cut-out runs before the fixes, as the plan orders it.
+    // Dust & scratches runs first, then the cut-out, both before the fixes, as the plan orders them.
+    for (const stage of input.step_stages ?? []) {
+      if (stage.step === 'repair')
+        steps.push({
+          kind: stage.step,
+          fix: '',
+          // The host names the model on the stage when the engine lists it.
+          model_id: snapshot?.engine?.features?.includes('image_repair_model') ? 'migan' : '',
+        });
+    }
     for (const stage of input.step_stages ?? []) {
       if (stage.step === 'remove_background')
         steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
@@ -249,7 +258,7 @@ function hostScript(scenario: Scenario): void {
       });
     }
     for (const stage of input.step_stages ?? []) {
-      if (stage.step === 'remove_background') continue;
+      if (stage.step === 'remove_background' || stage.step === 'repair') continue;
       steps.push({ kind: stage.step, fix: '', model_id: stage.model_id ?? '' });
     }
     if (input.output_scale > 1) {

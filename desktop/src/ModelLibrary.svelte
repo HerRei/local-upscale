@@ -14,7 +14,9 @@
     libraryModelsForTask,
     modelsForTask,
     rightsAllowPreset,
+    servesStep,
   } from './lib/plan';
+  import { STEPS } from './lib/steps';
   import { chooseFixModel, fixQuality, rememberedFixModel } from './lib/fixStages';
   import { formatBytes } from './lib/format';
   import FileName from './FileName.svelte';
@@ -176,6 +178,11 @@
   let runningTrials = false;
 
   $: models = snapshot.catalog.models.filter((model) => !isStepModel(model));
+  // A step's own model (MI-GAN for Dust & scratches, BiRefNet for the background) is nothing to
+  // choose: it is listed under Installed, where it can be read about and removed.
+  $: installedStepModels = snapshot.catalog.models.filter(
+    (model) => isStepModel(model) && model.installed,
+  );
   $: videoModels = snapshot.catalog.video_models;
   $: videoUnavailable = videoAvailability(
     videoModels,
@@ -334,6 +341,7 @@
       label: 'Installed',
       count:
         models.filter((model) => model.installed).length +
+        installedStepModels.length +
         installedVideoModels.length +
         installedInterpolationModels.length +
         installedAudioModels.length +
@@ -365,7 +373,7 @@
           (model) => model.native_scale === 1 && !model.purposes.includes('face'),
         );
       case 'installed':
-        return models.filter((model) => model.installed);
+        return [...models.filter((model) => model.installed), ...installedStepModels];
       default:
         return [];
     }
@@ -374,6 +382,7 @@
     models
       .filter((model) => model.installed)
       .reduce((total, model) => total + model.size_bytes, 0) +
+    installedStepModels.reduce((total, model) => total + model.size_bytes, 0) +
     installedVideoModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedInterpolationModels.reduce((total, model) => total + model.total_size_bytes, 0) +
     installedAudioModels.reduce((total, model) => total + model.total_size_bytes, 0) +
@@ -403,7 +412,15 @@
   $: selected =
     selectedEdit || selectedAudio || selectedVideo || selectedInterpolation || selectedOwn
       ? undefined
-      : (models.find((model) => model.model_id === selectedId) ?? rows[0]);
+      : (snapshot.catalog.models.find((model) => model.model_id === selectedId) ?? rows[0]);
+  // What the selected model's row uses it for, when a step does: the warning under Remove.
+  $: selectedStep =
+    selected && isStepModel(selected)
+      ? STEPS.find((step) => servesStep(selected, step))
+      : undefined;
+  $: selectedStepTicked = Boolean(
+    selectedStep && (settings.step_stages ?? []).some((entry) => entry.step === selectedStep.id),
+  );
   // The accelerator the selected hardware will use for a model: the Neural Engine on a Mac,
   // an Intel NPU elsewhere. Memoised per model id: rows and details read it on every render.
   $: accelerator = (model: CatalogModel) =>
@@ -498,10 +515,13 @@
       termsAccepted = false;
       return;
     }
-    const image = models.find((item) => item.model_id === modelId);
+    const image = snapshot.catalog.models.find((item) => item.model_id === modelId);
     if (!image) return;
     if (jobModels.some((item) => item.model_id === modelId)) {
       group = 'job';
+    } else if (isStepModel(image)) {
+      // A step's model is only ever listed under Installed.
+      group = 'installed';
     } else if (image.purposes.includes('face')) {
       // Face models have no group of their own any more; installed ones stay removable.
       group = 'installed';
@@ -1736,27 +1756,31 @@
           {/if}
           <p class="model-description">{selected.description}</p>
           <dl class="facts">
-            <div>
-              <dt>Scale</dt>
-              <dd>×{selected.native_scale}</dd>
-            </div>
+            {#if !selectedStep}
+              <div>
+                <dt>Scale</dt>
+                <dd>×{selected.native_scale}</dd>
+              </div>
+            {/if}
             <div>
               <dt>Download</dt>
               <dd>{formatBytes(selected.size_bytes)}</dd>
             </div>
-            <div>
-              <dt>Memory while running</dt>
-              <dd>{memoryLabel(selected)}</dd>
-            </div>
-            <div>
-              <dt>Speed</dt>
-              <dd>{speedLabel(selected)}</dd>
-            </div>
-            {#if accelerator(selected)}
+            {#if !selectedStep}
               <div>
-                <dt>Runs on</dt>
-                <dd>{accelerator(selected)}</dd>
+                <dt>Memory while running</dt>
+                <dd>{memoryLabel(selected)}</dd>
               </div>
+              <div>
+                <dt>Speed</dt>
+                <dd>{speedLabel(selected)}</dd>
+              </div>
+              {#if accelerator(selected)}
+                <div>
+                  <dt>Runs on</dt>
+                  <dd>{accelerator(selected)}</dd>
+                </div>
+              {/if}
             {/if}
           </dl>
           {#if fitLines.get(selected.model_id)}
@@ -1772,10 +1796,12 @@
               selected.author,
               selected.source_url,
             )}
-            <div>
-              <dt>Architecture</dt>
-              <dd>{selected.architecture} · Spandrel</dd>
-            </div>
+            {#if !selectedStep}
+              <div>
+                <dt>Architecture</dt>
+                <dd>{selected.architecture} · Spandrel</dd>
+              </div>
+            {/if}
             <div>
               <dt>File</dt>
               <dd><FileName name={selected.filename} /></dd>
@@ -1893,6 +1919,12 @@
                 <p class="inline-warning">
                   {selected.model_id === bestId ? 'Best' : 'Quick'} uses this model. Removing it means
                   the preset needs a {formatBytes(selected.size_bytes)} download again.
+                </p>
+              {:else if selectedStep && selectedStepTicked}
+                <p class="inline-warning">
+                  {selectedStep.label} uses this model. Removing it means a {formatBytes(
+                    selected.size_bytes,
+                  )} download again.
                 </p>
               {/if}
             {/if}
