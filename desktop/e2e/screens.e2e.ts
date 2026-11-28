@@ -314,4 +314,69 @@ test.describe('screens @visual', () => {
     await expect(chips.getByRole('button')).toHaveText(['JPEG', 'Colour', 'Noise', '4×']);
     await shoot(page, 'steps-chips');
   });
+  const patchScenario = {
+    ...ready,
+    features: [...(ready.features ?? []), 'patch_preview'],
+    installed: ['localsr_quick_x4_v1', 'denoise_realplksr_1x', 'scunet_color_real_psnr'],
+    settings: {
+      ...ready.settings,
+      output_scale: 4,
+      fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+      fixes: ['noise'],
+    },
+  };
+  const finishedPatch = async (page: Page) => {
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await showPane(page, 'preview');
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(
+      page.getByRole('group', { name: 'Preview patch' }).getByRole('button', { name: '4×' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await page.mouse.move(0, 0);
+  };
+
+  test('the preview patch with its tab, finished', async ({ page }) => {
+    await openApp(page, patchScenario);
+    await finishedPatch(page);
+    await shoot(page, 'patch-ready');
+  });
+
+  test('the preview patch waiting for a click', async ({ page }) => {
+    await openApp(page, {
+      ...patchScenario,
+      settings: { ...patchScenario.settings, preview_patch: 'manual' },
+    });
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await showPane(page, 'preview');
+    await page.getByRole('button', { name: 'Preview', exact: true }).click();
+    await expect(page.getByRole('button', { name: /^Update preview/ })).toBeVisible();
+    await page.mouse.move(0, 0);
+    await shoot(page, 'patch-update');
+  });
+
+  test('the preview patch comparing two models', async ({ page }) => {
+    await openApp(page, patchScenario);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    await page
+      .getByRole('checkbox', { name: 'Noise', exact: true })
+      .locator('../..')
+      .locator('.fix-value')
+      .click();
+    await page
+      .getByRole('group', { name: 'Noise options' })
+      .getByRole('button', { name: 'Change the noise fix model' })
+      .click();
+    const library = page.getByRole('dialog', { name: 'Model library' });
+    await library.getByRole('button', { name: /^SCUNet Color/ }).click();
+    await library.getByRole('button', { name: 'Try on this photo' }).click();
+    await page.keyboard.press('Escape');
+    await showPane(page, 'preview');
+    await expect(page.getByRole('group', { name: 'Compare models' })).toBeVisible();
+    await expect(
+      page.getByRole('group', { name: 'Preview patch' }).getByRole('button', { name: '4×' }),
+    ).toHaveAttribute('aria-pressed', 'true');
+    await page.mouse.move(0, 0);
+    await shoot(page, 'patch-two-models');
+  });
 });
