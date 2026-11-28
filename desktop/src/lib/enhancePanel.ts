@@ -181,6 +181,8 @@ export interface EnhancePanelView {
   interpolationSupported: boolean;
   /** What the fix popover offers for the preview patch; empty when there is none. */
   patchLink: 'photo' | 'example' | '';
+  /** Measured run time of what Start would process; null until there is an honest number. */
+  startSeconds: number | null;
 }
 
 export interface EnhancePanelActions {

@@ -127,6 +127,8 @@ export interface Scenario {
   unreadable?: { name: string; error: string };
   /** Simulate up to 3 concurrent model downloads with queue, progress, cancel, and errors. */
   concurrentDownloads?: boolean;
+  /** What `estimate_start` answers: the seconds measured runs of this work would give, or none. */
+  estimateSeconds?: number | null;
   /** Override plan_job behaviour for loading and error tests. */
   plan?: 'error' | { delayMs: number };
   /**
@@ -1085,6 +1087,8 @@ function hostScript(scenario: Scenario): void {
         };
         return planLocally(snapshot!, args.settings, args.options ?? {});
       }
+      case 'estimate_start':
+        return scenario.estimateSeconds ?? null;
       case 'save_recipe': {
         const recipe = structuredClone(args.recipe);
         const trimmedName = String(recipe?.name ?? '')

@@ -185,6 +185,9 @@ const api = vi.hoisted(() => ({
       _base: StartBatchInput,
     ): Promise<TrialEstimate[]> => [],
   ),
+  estimateStart: vi.fn(
+    async (_mediaIds: string[], _input: StartBatchInput): Promise<number | null> => null,
+  ),
   cancelJobsForMedia: vi.fn(
     async (_mediaId: string, _keepPartial?: boolean): Promise<void> => undefined,
   ),
@@ -1029,6 +1032,7 @@ beforeEach(() => {
   api.requestCompare.mockReset().mockResolvedValue(undefined);
   api.startModelTrials.mockReset().mockResolvedValue([]);
   api.estimateModelTrials.mockReset().mockResolvedValue([]);
+  api.estimateStart.mockReset().mockResolvedValue(null);
   api.cancelJobsForMedia.mockReset().mockResolvedValue(undefined);
   api.retryEngine.mockReset().mockResolvedValue(undefined);
   api.retryJobOnCpu.mockReset().mockResolvedValue(undefined);
@@ -10481,6 +10485,30 @@ describe('Enhance panel foot', () => {
       data: { model_id: 'localsr_quick_x4_v1', total_bytes: upscaler.size_bytes },
     });
     await waitFor(() => expect(foot.querySelector('.foot-cost')).toBeNull());
+  });
+
+  it('shows the measured run time on the cost line, and nothing without one', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, { task: 'upscale', quality: 'quick', fixes: ['noise'] });
+    api.estimateStart.mockResolvedValue(40);
+    await mountWith(snapshot);
+    const foot = document.querySelector('.panel-foot') as HTMLElement;
+    await waitFor(() => expect(within(foot).getByText('about 40s')).toBeTruthy());
+    expect(foot.querySelector('.foot-cost-download')).toBeNull();
+    const [mediaIds, input] = api.estimateStart.mock.calls[0];
+    expect(mediaIds).toEqual(['photo']);
+    expect(input.task).toBe('upscale');
+  });
+
+  it('shows no time while the host has no estimate or fails', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    Object.assign(snapshot.settings, { task: 'upscale', quality: 'quick', fixes: ['noise'] });
+    api.estimateStart.mockResolvedValue(null);
+    await mountWith(snapshot);
+    await waitFor(() => expect(api.estimateStart).toHaveBeenCalled());
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(document.querySelector('.panel-foot')?.textContent).not.toContain('about');
+    expect(document.querySelector('.foot-cost')).toBeNull();
   });
 
   it('shows no percentage or Waiting in Plan sheet Stages while models download', async () => {

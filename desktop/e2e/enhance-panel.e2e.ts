@@ -1,5 +1,6 @@
 import { expect, test, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
+import { hostCalls } from './fake-host';
 import { ready, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
@@ -210,4 +211,38 @@ test('a low fix popover flips above its row inside the scroll body', async ({ pa
   expect(popBox.y + popBox.height).toBeLessThanOrEqual(triggerBox.y + 1);
   expect(popBox.y).toBeGreaterThanOrEqual(bodyBox.y);
   expect(popBox.x + popBox.width).toBeLessThanOrEqual(bodyBox.x + bodyBox.width + 1);
+});
+
+test('the cost line shows a measured time, and nothing without one', async ({ page }) => {
+  await openApp(page, { ...ready, estimateSeconds: 40 });
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  const cost = page.locator('.foot-cost');
+  await expect(cost).toContainText('about 40s');
+  const first = await hostCalls(page, 'estimate_start');
+  expect(first.length).toBeGreaterThan(0);
+  const args = first[0].args as { mediaIds: string[]; input: { task: string } };
+  expect(args.mediaIds.length).toBe(1);
+  expect(args.input.task).toBe('upscale');
+
+  // Two quick changes are one call, and the answer follows the last one.
+  const before = (await hostCalls(page, 'estimate_start')).length;
+  await page.getByRole('radio', { name: '3×' }).click();
+  await page.getByRole('radio', { name: '2×' }).click();
+  await expect(async () => {
+    expect((await hostCalls(page, 'estimate_start')).length).toBe(before + 1);
+  }).toPass();
+  await page.waitForTimeout(700);
+  expect((await hostCalls(page, 'estimate_start')).length).toBe(before + 1);
+});
+
+test('the cost line has no time when the host has no estimate', async ({ page }) => {
+  await openApp(page, ready);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await expect
+    .poll(async () => (await hostCalls(page, 'estimate_start')).length)
+    .toBeGreaterThan(0);
+  await expect(page.locator('.panel-foot')).not.toContainText('about');
+  await expect(page.locator('.foot-cost')).toHaveCount(0);
 });
