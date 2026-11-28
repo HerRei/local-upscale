@@ -3,6 +3,7 @@
   import { onMount, tick } from 'svelte';
   import VideoComparison from './VideoComparison.svelte';
   import EmptyStage from './EmptyStage.svelte';
+  import CropGuide from './CropGuide.svelte';
   import FileName from './FileName.svelte';
   import MediaIllustration from './MediaIllustration.svelte';
   import PreviewActivity from './PreviewActivity.svelte';
@@ -134,6 +135,8 @@
   $: liveFrame = progressiveFrame;
   export let editing = false;
   export let processing = false;
+  /** The fraction Stabilise's open popover crops off each edge, drawn over a video's still picture. */
+  export let cropGuide: number | null = null;
   export let videoEngineBusy = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
@@ -1524,6 +1527,7 @@
             sourceWidth={selectedMedia.width}
             sourceHeight={selectedMedia.height}
             enhancedSrc={videoComparison.enhanced_url}
+            cropGuide={processing ? null : cropGuide}
             fps={videoFps}
             keptFrames={videoComparison.enhanced_url ? (showingUnfinished?.frames ?? 0) : 0}
             keptSeconds={videoComparison.enhanced_url ? (showingUnfinished?.seconds ?? 0) : 0}
@@ -1579,6 +1583,9 @@
               decoding="async"
               draggable="false"
             />
+          {/if}
+          {#if cropGuide !== null && selectedMedia.kind === 'video' && !processing}
+            <CropGuide fraction={cropGuide} />
           {/if}
           <canvas
             bind:this={progressiveCanvas}

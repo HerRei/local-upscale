@@ -158,7 +158,8 @@ export interface PlanStage {
     | 'grain'
     | 'remove_background'
     | 'repair'
-    | 'deinterlace';
+    | 'deinterlace'
+    | 'stabilise';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
    * Frame interpolation and audio cleanup are set directly and have no Change.

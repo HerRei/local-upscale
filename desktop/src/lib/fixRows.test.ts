@@ -3,6 +3,8 @@ import { demoSnapshot } from './demo';
 import {
   fixRowOrder,
   fixRows,
+  smoothingOf,
+  smoothingStop,
   fixRowValue,
   splitFixRows,
   strengthLabel,
@@ -53,7 +55,7 @@ describe('fixRows', () => {
     expect(rows.map((row) => row.id)).toEqual(['blur', 'jpeg', 'noise', 'colour']);
     expect(rows.map((row) => row.label)).toEqual(['Blur', 'JPEG artifacts', 'Noise', 'Colour']);
     expect(rows.every((row) => row.tag === '')).toBe(true);
-    expect(fixRowOrder()).toEqual(['blur', 'jpeg', 'noise', 'colour', 'deflicker']);
+    expect(fixRowOrder()).toEqual(['stabilise', 'blur', 'jpeg', 'noise', 'colour', 'deflicker']);
     expect(
       rows.some((row) => ['face_restore', 'interpolate', 'audio_denoise'].includes(row.id)),
     ).toBe(false);
@@ -298,5 +300,65 @@ describe('fixRows', () => {
         fixRowValue(colour, [{ ...stage, fix: 'colour' }], settings, [model], none, true),
       ).toBe('RealPLKSR Denoise · 29 MB');
     });
+  });
+});
+
+describe('fixRows, stabilise', () => {
+  const features = ['video_stabilise'];
+
+  it('is the first video row, a common Labs step_stage row with the Smoothing choice', () => {
+    const rows = fixRows('video', features);
+    expect(rows.map((row) => row.id)).toEqual([
+      'stabilise',
+      'blur',
+      'jpeg',
+      'noise',
+      'colour',
+      'deflicker',
+    ]);
+    const row = rows[0];
+    expect(row).toMatchObject({
+      label: 'Stabilise',
+      source: 'step_stage',
+      tag: 'Labs',
+      common: true,
+    });
+    expect(row.choice).toMatchObject({
+      param: 'smoothing',
+      name: 'Smoothing',
+      fallback: 'medium',
+    });
+    expect(row.choice?.options.map((option) => option.label)).toEqual([
+      'Light',
+      'Medium',
+      'Strong',
+    ]);
+    expect(row.choice?.options.map((option) => option.value)).toEqual([
+      'light',
+      'medium',
+      'strong',
+    ]);
+    expect(row.choice?.options[1].title).toBe(
+      "Evens out the camera's path over one second · cuts 5 % off each edge",
+    );
+    expect(splitFixRows(rows, () => false, false).hiddenCount).toBe(0);
+  });
+
+  it('has no row on a photo or without the feature, unless the step is stored', () => {
+    expect(fixRows('image', features).some((row) => row.id === 'stabilise')).toBe(false);
+    expect(fixRows('video', []).some((row) => row.id === 'stabilise')).toBe(false);
+    expect(fixRows('video', [], STEPS, undefined, ['stabilise'])[0].id).toBe('stabilise');
+    expect(fixRows('image', [], STEPS, undefined, ['stabilise']).length).toBe(4);
+  });
+
+  it('reads the smoothing, Medium for anything unknown, with the engine crop', () => {
+    expect(smoothingOf(undefined)).toBe('medium');
+    expect(smoothingOf({ params: { smoothing: 'strong' } })).toBe('strong');
+    expect(smoothingOf({ params: { smoothing: 'huge' } })).toBe('medium');
+    expect([
+      smoothingStop('light').crop,
+      smoothingStop('medium').crop,
+      smoothingStop('strong').crop,
+    ]).toEqual([0.03, 0.05, 0.08]);
   });
 });

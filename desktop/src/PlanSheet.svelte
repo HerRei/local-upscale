@@ -8,6 +8,7 @@
   import type { PlanState } from './lib/jobPlanClient';
   import { FIT_LABELS, displayName, fitFor, frameRateChange, type PlanStage } from './lib/plan';
   import { slowMotionName } from './lib/planLine';
+  import { smoothingNote, smoothingOf } from './lib/fixRows';
   import { FIX_NAMES } from './lib/steps';
   import { scanChoice, scanOptions, scanRate } from './lib/stepRows';
   import type {
@@ -132,7 +133,11 @@
               ? stage.audioModel.summary || 'Audio cleanup'
               : stage.kind === 'deinterlace'
                 ? scanNote
-                : ''}
+                : stage.kind === 'stabilise'
+                  ? smoothingNote(
+                      smoothingOf(settings.step_stages?.find((s) => s.step === 'stabilise')),
+                    )
+                  : ''}
     {@const warning =
       stage.model && UNSTABLE_FIX_MODELS.has(stage.model.model_id)
         ? stage.role === 'fix'

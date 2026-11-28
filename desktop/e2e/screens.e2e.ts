@@ -5,6 +5,7 @@ import {
   cutout,
   firstRun,
   ready,
+  shaky,
   slow,
   strength,
   tape,
@@ -95,6 +96,18 @@ test.describe('screens @visual', () => {
       .selectOption({ label: 'Double rate · 50 fps' });
     await expect(page.locator('.foot-plan')).toContainText('Deinterlace to 50 fps');
     await shoot(page, 'panel-scan');
+  });
+
+  test('plan with Stabilise, the band in the viewer', async ({ page }) => {
+    await openApp(page, shaky);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Not now' }).click();
+    const stabilise = page.getByRole('checkbox', { name: 'Stabilise', exact: true });
+    await stabilise.check();
+    await stabilise.locator('../..').getByRole('button').click();
+    await expect(page.locator('.crop-guide')).toHaveCount(1);
+    await expect(page.locator('.foot-plan')).toHaveText(/^Stabilise/);
+    await shoot(page, 'panel-stabilise');
   });
 
   test('plan with Noise at Light', async ({ page }) => {

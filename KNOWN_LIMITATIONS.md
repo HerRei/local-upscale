@@ -82,6 +82,12 @@ These apply to v0.6.3-beta. Please read them before starting a long job.
   variable-rate source may not. The viewer takes a result at least 1.5 times as long as its
   original for slow motion, so a result whose original was replaced on disk by a shorter file
   opens in Enhanced only.
+- Stabilise corrects the camera's shift and turn between frames and enlarges the picture
+  by 3, 5 or 8 % (Light, Medium, Strong) so that no edge of the source shows; the video
+  keeps its size, so that part of every frame is cut off. It does not remove the wobble of
+  a rolling shutter or blur that the shake left in single frames, it cannot be used while
+  HDR is kept, and a scene cut starts a new path. It costs extra time and holds back a
+  second or two of frames while it looks ahead.
 - Estimates are measured from completed tiles and frames, so they appear only
   after the first results and change with the scene.
 

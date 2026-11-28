@@ -2,6 +2,15 @@
 
 ## [0.7.0-beta] - Unreleased
 
+- **Stabilise shaky video (Labs).** A video on the frame-by-frame engine gets a Stabilise
+  row, first in the Fix list. It follows how the camera moves from frame to frame, evens
+  that path out over 0.5 s (Light), 1 s (Medium) or 2 s (Strong), and enlarges the picture
+  by the amount that keeps the edges that move in and out hidden: 3, 5 or 8 % is cut off
+  each edge. The video keeps its size, length, frame times and sound. While the row's
+  choice is open, the viewer dims the band the crop removes. Stabilise runs after Scan and
+  before the other fixes, so they work on the steadied picture. It is not available while
+  HDR is kept, is not saved in recipes, and is left out of the preview patch. Wobble from
+  a rolling shutter and blur that the shake left in single frames stay.
 - **Slow motion for video.** Under Result, the Frames select has a new group, Slow motion
   (no sound), with 2× slower and 4× slower and the length your clip then has. It adds the
   same frames as 2× and 4× after upscaling, but plays them at the clip's own rate, so

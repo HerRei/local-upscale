@@ -79,6 +79,19 @@ export const tape: Scenario = {
   },
 };
 
+/** A shaky 1080p clip on a ready engine that can stabilise. */
+export const shaky: Scenario = {
+  ...video,
+  worker: 'ready',
+  videoSource: true,
+  features: [...FEATURES, 'video_stabilise', 'stage_params_and_masks'],
+  settings: {
+    ...video.settings,
+    video_interpolation: 'off',
+    output_directory: '/Users/test/Desktop',
+  },
+};
+
 /** Two finished results of photo 1 on a host with pair slots: an upscale and an Edit at 512 px. */
 export const withEdit: Scenario = {
   ...ready,

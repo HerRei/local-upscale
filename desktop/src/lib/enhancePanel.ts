@@ -240,6 +240,8 @@ export interface EnhancePanelActions {
   toggleFix: (fix: FixKind) => void;
   /** Turns the preview patch on with this fix's chip pressed. */
   seeFixOnPhoto: (fix: FixKind) => void;
+  /** The viewer dims this fraction of each edge while Stabilise's popover is open; null clears it. */
+  showCropGuide: (fraction: number | null) => void;
   setSize: (scale: 1 | 2 | 3 | 4) => void;
   openLibrary: (
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',

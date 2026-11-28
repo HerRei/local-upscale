@@ -117,7 +117,6 @@ describe('step registry', () => {
     expect(grain.supports_mask).toBe(true);
     expect(grain.required_feature).toBe('image_grain');
     expect(STEPS.filter((step) => step.dev_only).map((step) => step.id)).toEqual([
-      'stabilise',
       'repair',
       'grain',
     ]);

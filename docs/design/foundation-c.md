@@ -275,8 +275,9 @@ steps (and a catalog model) of their own, as `test_pipeline.py` does for model-l
 - **Deinterlacing**: the video geometry step supports frame and field modes, field order
   selection, and progressive-source passthrough. The Scan row (`Automatic`, `Double rate`
   and four hand-set orders; spec in `docs/design/scan-and-background.md`) ships it.
-- **Video stabilisation**: needs a video geometry handler and crop output dimensions passed
-  to `VideoChainContext`.
+- **Video stabilisation**: built in 0.7.0 as the `stabilise` step with a Fix row (spec in
+  `docs/design/tools-wave.md`, section 2); it keeps the frame size, so no crop dimensions are
+  passed on.
 - **Grain/film look for real**: the look (midtone weighting, grain size, colour grain), a UI
   row, and running after the primary in video (today refused).
 - **Denoise/deblur strength**: built in 0.7.0 as `Light` / `Medium` / `Full` on a ticked Blur,

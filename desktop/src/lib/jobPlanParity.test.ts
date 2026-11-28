@@ -722,6 +722,30 @@ function buildCorpus(): ParityCase[] {
       },
     ],
     [
+      'stabilise-video-alone',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        output_scale: 1,
+        step_stages: [{ step: 'stabilise', params: { smoothing: 'medium' } }],
+      },
+    ],
+    [
+      'deinterlace-and-stabilise-video',
+      {
+        task: 'video',
+        selected_video_model_id: 'frame_by_frame',
+        step_stages: [
+          { step: 'stabilise', params: { smoothing: 'strong' } },
+          { step: 'deinterlace', params: { mode: 'frame', parity: 'tff' } },
+        ],
+      },
+    ],
+    [
+      'stabilise-stored-on-a-photo',
+      { task: 'upscale', step_stages: [{ step: 'stabilise', params: { smoothing: 'light' } }] },
+    ],
+    [
       'background-video',
       { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [background] },
     ],
@@ -963,6 +987,7 @@ describe('job_plan parity corpus', () => {
         'remove_background',
         'repair',
         'deinterlace',
+        'stabilise',
         'test_cutout',
         'test_tone',
         'test_key',

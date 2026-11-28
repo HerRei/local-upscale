@@ -21,6 +21,8 @@ export interface Scenario {
   videoFieldOrder?: 'progressive' | 'tff' | 'bff' | 'unknown';
   /** Completed 15/60 fps outputs with tiny real playback sources. */
   videoCompare?: boolean;
+  /** The unprocessed clip plays alone from a tiny real 16:9 source. */
+  videoSource?: boolean;
   /** With `videoCompare`: a third result, stopped after two frames and kept. */
   videoPartial?: boolean;
   /** With `videoCompare`: the length of the 15/60 fps results (defaults to the original's 4 s). */
@@ -1226,6 +1228,14 @@ function hostScript(scenario: Scenario): void {
             enhanced_url: args.resultId ? fixtureOf(args.resultId) : '',
             playback_note: '',
           };
+        if (scenario.videoSource && !args.resultId)
+          return {
+            original_path: '',
+            enhanced_path: '',
+            original_url: scenario.playbackFixtures![0],
+            enhanced_url: '',
+            playback_note: '',
+          };
         throw new Error('No video playback fixture for this request');
       }
       case 'cancel_video_comparison':
@@ -1706,7 +1716,7 @@ export async function installFakeHost(page: Page, scenario: Scenario): Promise<v
   }
   const enriched: Scenario = {
     ...scenario,
-    ...(scenario.videoCompare ? { playbackFixtures: videoFixtures } : {}),
+    ...(scenario.videoCompare || scenario.videoSource ? { playbackFixtures: videoFixtures } : {}),
     ...(scenario.videoSyncCompare ? { playbackFixtureMap: loadSyncFixtures() } : {}),
     ...(compare ? { compareFixtures: compare.meta } : {}),
   };
