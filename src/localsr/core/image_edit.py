@@ -633,21 +633,23 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             gpu_override=resolve_edit_gpu(runtime, device, backend),
         )
         specification = work / "guard.json"
-        specification.write_text(
-            json.dumps(
-                {
-                    "command": command,
-                    "plan": asdict(plan),
-                    "unified": initial.unified,
-                    "swap_used": initial.swap_used,
-                }
-            ),
-            encoding="utf-8",
-        )
+        payload = json.dumps(
+            {
+                "command": command,
+                "plan": asdict(plan),
+                "unified": initial.unified,
+                "swap_used": initial.swap_used,
+            }
+        ).encode("utf-8")
+        specification.write_bytes(payload)
         guard_command = [sys.executable]
         if not getattr(sys, "frozen", False):
             guard_command += ["-m", "localsr.worker"]
-        guard_command += ["--edit-guard", str(specification)]
+        guard_command += [
+            "--edit-guard",
+            hashlib.sha256(payload).hexdigest(),
+            str(specification),
+        ]
         logs = deque(maxlen=12)
         process = track(
             subprocess.Popen(
