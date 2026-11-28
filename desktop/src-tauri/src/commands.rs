@@ -5730,8 +5730,15 @@ fn image_pipeline_stages(
     use crate::steps::StepPlacement;
 
     let steps = crate::steps::registry();
+    // The plan's order, whatever order the steps were ticked in.
+    let mut ordered: Vec<&crate::types::StepStageSelection> = input.step_stages.iter().collect();
+    ordered.sort_by_key(|selection| {
+        steps
+            .step_stage(&selection.step)
+            .map(|(step, _)| (steps.phase_index(&step.phase), step.order))
+    });
     let step_stages = |placement: StepPlacement| {
-        input.step_stages.iter().filter_map(move |selection| {
+        ordered.iter().copied().filter_map(move |selection| {
             let (step, at) = steps.step_stage(&selection.step)?;
             let model = step_models.iter().find(|model| model.step == step.id);
             (at == placement).then(|| PipelineStageRequest {

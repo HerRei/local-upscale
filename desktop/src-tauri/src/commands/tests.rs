@@ -2147,6 +2147,51 @@ fn double_rate_reaches_the_worker_as_a_deinterlace_stage_with_no_upscale() {
 }
 
 #[test]
+fn stabilise_reaches_the_worker_after_deinterlace_whatever_order_they_were_ticked_in() {
+    let mut options = input("video");
+    options.video_task = "denoise".into();
+    options.model_id = String::new();
+    options.output_scale = 1;
+    let stage = |step: &str, params: serde_json::Value| crate::types::StepStageSelection {
+        step: step.into(),
+        params: params.as_object().cloned(),
+        mask_path: None,
+        model_id: None,
+    };
+    options.step_stages = vec![
+        stage("stabilise", json!({"smoothing": "strong"})),
+        stage("deinterlace", json!({"mode": "frame", "parity": "tff"})),
+    ];
+    let selection = ModelSelection::Image {
+        model_id: String::new(),
+        path: String::new(),
+        approved_checkpoint_sha256: None,
+        preprocess: Vec::new(),
+        step_models: Vec::new(),
+        face_path: None,
+        face_model_id: String::new(),
+        native_scale: 1,
+        skip_upscale: true,
+        interpolation: None,
+        audio_denoise: None,
+    };
+    let message = build_job_message(
+        "job",
+        &video_media(),
+        Path::new("/output/clip.mp4"),
+        Path::new("/app-owned/work"),
+        &options,
+        &selection,
+    )
+    .unwrap();
+    let stages = message["data"]["stages"].as_array().unwrap();
+    assert_eq!(stages.len(), 2, "{message}");
+    assert_eq!(stages[0]["kind"], "deinterlace");
+    assert_eq!(stages[1]["kind"], "stabilise");
+    assert_eq!(stages[1]["params"]["smoothing"], "strong");
+}
+
+#[test]
 fn frame_interpolation_reaches_the_worker_with_its_downloaded_model() {
     let directory = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(directory.path());

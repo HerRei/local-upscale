@@ -172,6 +172,16 @@ describe('Patch, background', () => {
     );
     expect(entries.map((entry) => entry.name)).toEqual(['4×']);
   });
+
+  it('leaves a stabilise stage out: one frame cannot show movement', () => {
+    const stage = (kind: string, role: string, label: string) =>
+      ({ kind, role, label, installed: true }) as never;
+    const entries = patchPlanEntries(
+      [stage('stabilise', 'step', 'Stabilise'), stage('upscale', 'primary', 'Upscale ×4')],
+      { task: 'upscale', output_scale: 4, video_target_resolution: 0, video_interpolation: 'off' },
+    );
+    expect(entries.map((entry) => entry.name)).toEqual(['4×']);
+  });
 });
 
 describe('Patch, video', () => {

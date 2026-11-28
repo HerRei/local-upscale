@@ -2144,7 +2144,7 @@ describe('Patch, video', () => {
     const label = view.container.querySelector<HTMLElement>('.patch-label');
     expect(label?.textContent).toBe('This frame');
     expect(label?.getAttribute('title')).toBe(
-      'De-flicker, added frames and sound cannot be shown on one frame.',
+      'Stabilise, De-flicker, added frames and sound cannot be shown on one frame.',
     );
     const chips = [...view.container.querySelectorAll('.patch-tab .step-chip')].map((node) =>
       node.textContent?.trim(),

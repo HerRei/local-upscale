@@ -2,6 +2,7 @@
   import { createEventDispatcher, onDestroy, onMount } from 'svelte';
   const dispatch = createEventDispatcher<{ compatibilityneeded: void }>();
   import { comparisonFromKey, comparisonFromPointer } from './lib/comparison';
+  import CropGuide from './CropGuide.svelte';
   import BackgroundSwitch from './BackgroundSwitch.svelte';
   import type { ViewerBackground } from './lib/viewerBackground';
   import VideoTransport from './VideoTransport.svelte';
@@ -25,6 +26,8 @@
   // Chosen in the preview header; holding M there shows the original.
   export let view: 'original' | 'split' | 'enhanced' = 'split';
   /** Frames per second of the result (or of the source alone); 0 hides the frame steps. */
+  /** Stabilise's crop, a fraction of each edge, drawn over a clip that plays alone. */
+  export let cropGuide: number | null = null;
   export let fps = 0;
   /** What a stopped job kept, as the host measured it in the file: frames and seconds. */
   export let keptFrames = 0;
@@ -449,6 +452,7 @@
           on:error={(event) => mediaError('Enhanced', event)}
         ></video>
       </div>
+      {#if single && cropGuide !== null}<CropGuide fraction={cropGuide} />{/if}
     </div>
     {#if !single}<div
         class="compare-line"

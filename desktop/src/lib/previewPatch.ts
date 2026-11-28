@@ -139,6 +139,7 @@ const VIDEO_ONLY_KINDS: ReadonlySet<PlanStage['kind']> = new Set([
   'video',
   'edit',
   'deinterlace',
+  'stabilise',
 ]);
 
 /**

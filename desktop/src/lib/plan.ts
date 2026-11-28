@@ -7,7 +7,14 @@ import {
   fitsFix,
   rememberedFixModel,
 } from './fixStages';
-import { FIX_LABELS, STEPS, stepStage, type StepDefinition, type StepPlacement } from './steps';
+import {
+  FIX_LABELS,
+  PHASES,
+  STEPS,
+  stepStage,
+  type StepDefinition,
+  type StepPlacement,
+} from './steps';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -150,7 +157,8 @@ export interface PlanStage {
     | 'audio_denoise'
     | 'grain'
     | 'remove_background'
-    | 'deinterlace';
+    | 'deinterlace'
+    | 'stabilise';
   /**
    * What the row's Change opens: the fix before the upscaler, the main model, or Faces.
    * Frame interpolation and audio cleanup are set directly and have no Change.
@@ -337,9 +345,14 @@ export function resolvePlan(
   };
 
   const stepStages = activeStepStages(settings, options.usingTemporalVideo, options.steps);
-  for (const { step, selection, placement } of stepStages) {
-    if (placement === 'before_fixes') stages.push(stepStageRow(step, selection));
-  }
+  // In the registry's order, whatever order they were ticked in: Stabilise follows Deinterlace.
+  const leading = stepStages
+    .filter(({ placement }) => placement === 'before_fixes')
+    .sort(
+      (a, b) =>
+        PHASES.indexOf(a.step.phase) - PHASES.indexOf(b.step.phase) || a.step.order - b.step.order,
+    );
+  for (const { step, selection } of leading) stages.push(stepStageRow(step, selection));
   // Steps ahead of the fixes (Scan) also run ahead of frames added before upscaling.
   const leadingSteps = stages.length;
   const restoring = isRestoreTask(settings);

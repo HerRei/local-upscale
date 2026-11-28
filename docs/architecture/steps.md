@@ -25,7 +25,7 @@ Each `StepDefinition` in `STEPS` declares:
 - `in_image_pipeline` / `in_recipe_stages`: whether the step appears in bounded image `stages[]` requests and saved `Recipe.stages`.
 - `label` / `row_label` / `short_name` / `stage_label`: UI and worker status strings.
 - `required_feature`: worker `engine_info.features` entry gating the step (`image_edit`, `video_interpolation`, `video_audio_denoise`, etc.).
-- `dev_only`: the worker lists the step's `required_feature` and runs the step only when it was started with `LOCALSR_DEV_STEPS=1` (the desktop host passes its environment on). Only `grain` uses this gate; `remove_background` shipped with the Backgr. row and `deinterlace` with the Scan row.
+- `dev_only`: the worker lists the step's `required_feature` and runs the step only when it was started with `LOCALSR_DEV_STEPS=1` (the desktop host passes its environment on). Only `grain` uses this gate; `remove_background` shipped with the Backgr. row, `deinterlace` with the Scan row and `stabilise` with the Stabilise row.
 - `model_task`: for a step stage that needs a model, the catalog `purposes` entry its models carry. A step with `needs_model=True` is a step stage only when it is not a fix and names one.
 - `output_alpha`: the step's handler returns a matte that becomes the image's alpha; a photo job with such a step saves as PNG unless its format keeps alpha (PNG, TIFF, WebP).
 - `parameters`: `StepParameter` entries naming each parameter's type, default, choices, numeric bounds, `nullable`, and `required`.

@@ -203,3 +203,15 @@ def test_deinterlace_is_a_video_geometry_step() -> None:
         parameter_for("deinterlace", "parity").default,
         parameter_for("deinterlace", "parity").choices,
     ) == ("auto", ("auto", "tff", "bff"))
+
+
+def test_stabilise_is_a_shipped_video_geometry_step() -> None:
+    from localsr.core.steps import REQUIRED_STEP_FEATURES, STEPS_BY_ID
+
+    step = STEPS_BY_ID["stabilise"]
+    assert step.media == ("video",)
+    assert step.phase == "geometry" and step.in_image_pipeline
+    assert step.order > STEPS_BY_ID["deinterlace"].order
+    assert not step.dev_only and not step.needs_model
+    assert step.required_feature == "video_stabilise"
+    assert "video_stabilise" in REQUIRED_STEP_FEATURES

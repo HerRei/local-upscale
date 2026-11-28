@@ -123,6 +123,9 @@ pub struct StepDefinition {
     #[serde(default)]
     pub media: Vec<String>,
     pub phase: String,
+    /// Position within the phase.
+    #[serde(default)]
+    pub order: i64,
     #[serde(default = "default_true")]
     pub needs_model: bool,
     #[serde(default)]
@@ -183,7 +186,7 @@ impl StepRegistry {
         registry
     }
 
-    fn phase_index(&self, phase: &str) -> Option<usize> {
+    pub fn phase_index(&self, phase: &str) -> Option<usize> {
         self.phases.iter().position(|candidate| candidate == phase)
     }
 
@@ -684,7 +687,7 @@ mod tests {
         assert!(reg
             .steps
             .iter()
-            .all(|step| step.dev_only == (step.id == "grain" || step.id == "stabilise")));
+            .all(|step| step.dev_only == (step.id == "grain")));
 
         let check = |params: serde_json::Value, mask: Option<&str>| {
             reg.validate_step_stage("grain", params.as_object(), mask)

@@ -175,6 +175,21 @@ describe('planLine', () => {
   });
 });
 
+describe('planLine, stabilise', () => {
+  it('names the step Stabilise after Deinterlace', () => {
+    expect(
+      planLine(
+        [
+          stage({ kind: 'deinterlace', role: 'step', label: 'Deinterlace' }),
+          stage({ kind: 'stabilise', role: 'step', label: 'Stabilise' }),
+        ],
+        { ...baseSettings, task: 'video' },
+        { kind: 'video', fps: 25 },
+      ),
+    ).toEqual(['Deinterlace', 'Stabilise']);
+  });
+});
+
 describe('planLine, strength', () => {
   const entry = (fix: 'noise' | 'jpeg', strength?: number) => ({
     fix,

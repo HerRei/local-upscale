@@ -69,7 +69,7 @@ def test_stabilise_is_a_video_geometry_step_after_deinterlace():
     assert step.phase == "geometry" and step.in_image_pipeline
     assert step.order > STEPS_BY_ID["deinterlace"].order
     assert not step.needs_model and step.model_task is None
-    assert step.dev_only
+    assert not step.dev_only
     assert step.required_feature == "video_stabilise"
     assert (step.label, step.stage_label) == ("Stabilise", "Stabilising")
     smoothing = parameter_for("stabilise", "smoothing")
@@ -386,12 +386,10 @@ def test_cancel_stops_reading():
     assert len(list(consumed)) == len(items) - 21
 
 
-def test_dev_gate(monkeypatch):
+def test_feature_is_listed_without_the_dev_switch(monkeypatch):
     from localsr.worker.server import _engine_features
 
     monkeypatch.delenv("LOCALSR_DEV_STEPS", raising=False)
-    assert "video_stabilise" not in _engine_features([])
-    monkeypatch.setenv("LOCALSR_DEV_STEPS", "1")
     assert "video_stabilise" in _engine_features([])
 
 
@@ -400,7 +398,7 @@ def test_the_worker_runs_the_step(tmp_path, monkeypatch):
     from localsr.core.video_io import decode_timed_frames, probe_video
     from localsr.worker.server import WorkerServer
 
-    monkeypatch.setenv("LOCALSR_DEV_STEPS", "1")
+    monkeypatch.delenv("LOCALSR_DEV_STEPS", raising=False)
     monkeypatch.setattr(server_module, "send_message", lambda message: None)
     items, _ = shaky(texture(384, 504), count=30)
     source = write_clip(tmp_path / "shaky.webm", items)

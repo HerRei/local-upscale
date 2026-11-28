@@ -377,7 +377,6 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Stabilise",
         stage_label="Stabilising",
         required_feature="video_stabilise",
-        dev_only=True,
         parameters=(
             StepParameter(
                 name="smoothing",
