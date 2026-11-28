@@ -542,6 +542,24 @@ pub struct UiSettings {
         deserialize_with = "deserialize_stopped_job_result"
     )]
     pub stopped_job_result: String,
+    // Recipe and workflow ids in pin order; the Presets menu gives the first seven Cmd+3 to
+    // Cmd+9. Always written, even empty: a file without the field is from before pins and
+    // gets its first seven recipes pinned on load (`settings.rs`).
+    #[serde(default)]
+    pub recipe_pins: Vec<String>,
+    // Applied recipe and workflow ids, newest first.
+    #[serde(default)]
+    pub recipe_recent: Vec<String>,
+}
+
+pub const MAX_RECIPES: usize = 100;
+pub const MAX_RECIPE_PINS: usize = 20;
+pub const MAX_RECIPE_RECENT: usize = 12;
+const MAX_RECIPE_ID_CHARS: usize = 64;
+
+/// An id the pin and recent lists can hold: a recipe's or a workflow's.
+pub fn is_valid_recipe_list_id(id: &str) -> bool {
+    !id.is_empty() && id.chars().count() <= MAX_RECIPE_ID_CHARS
 }
 
 fn default_true() -> bool {
@@ -747,6 +765,8 @@ impl Default for UiSettings {
             auto_cache_cleanup: true,
             keep_awake: true,
             stopped_job_result: default_stopped_job_result(),
+            recipe_pins: Vec::new(),
+            recipe_recent: Vec::new(),
         }
     }
 }

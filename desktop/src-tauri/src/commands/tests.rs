@@ -2645,8 +2645,12 @@ fn a_failed_write_leaves_the_settings_and_recipes_as_they_were() {
     assert!(store_recipe(&state, recipe_named("r1")).is_err());
     assert!(lock(&state.recipes).unwrap().is_empty());
     lock(&state.recipes).unwrap().push(recipe_named("kept"));
+    lock(&state.settings).unwrap().recipe_pins = vec!["kept".into()];
+    lock(&state.settings).unwrap().recipe_recent = vec!["kept".into()];
     assert!(remove_recipe(&state, "kept").is_err());
     assert_eq!(lock(&state.recipes).unwrap().len(), 1);
+    assert_eq!(lock(&state.settings).unwrap().recipe_pins, ["kept"]);
+    assert_eq!(lock(&state.settings).unwrap().recipe_recent, ["kept"]);
 }
 
 #[test]
@@ -2661,6 +2665,106 @@ fn a_written_recipe_is_kept_replaced_and_removed() {
     assert_eq!(lock(&state.recipes).unwrap()[0].name, "renamed");
     remove_recipe(&state, "r1").unwrap();
     assert!(lock(&state.recipes).unwrap().is_empty());
+}
+
+#[test]
+fn pins_and_recent_survive_a_settings_save_from_the_window_and_a_restart() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(directory.path());
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    for id in ["a", "b"] {
+        store_recipe(&state, recipe_named(id)).unwrap();
+    }
+    // The window sends its whole settings object, as `api.saveSettings` does.
+    let mut sent = serde_json::to_value(UiSettings::default()).unwrap();
+    sent["recipe_pins"] = json!(["b", "workflow.old-scan"]);
+    sent["recipe_recent"] = json!(["a", "b"]);
+    save_settings_checked(&state, serde_json::from_value(sent).unwrap()).unwrap();
+
+    let restarted = AppState::from_paths(paths).unwrap();
+    let settings = lock(&restarted.settings).unwrap().clone();
+    assert_eq!(settings.recipe_pins, ["b", "workflow.old-scan"]);
+    assert_eq!(settings.recipe_recent, ["a", "b"]);
+    let snapshot = serde_json::to_value(&settings).unwrap();
+    assert_eq!(snapshot["recipe_pins"], json!(["b", "workflow.old-scan"]));
+}
+
+#[test]
+fn deleting_a_recipe_takes_its_id_out_of_the_pins_and_the_recent_list() {
+    let directory = tempfile::tempdir().unwrap();
+    let paths = AppPaths::under(directory.path());
+    let state = AppState::from_paths(paths.clone()).unwrap();
+    for id in ["a", "b"] {
+        store_recipe(&state, recipe_named(id)).unwrap();
+    }
+    save_settings_checked(
+        &state,
+        UiSettings {
+            recipe_pins: vec!["a".into(), "workflow.old-scan".into(), "b".into()],
+            recipe_recent: vec!["b".into(), "a".into()],
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+    delete_recipe_checked(&state, "a").unwrap();
+    for settings in [
+        lock(&state.settings).unwrap().clone(),
+        crate::settings::load(&paths).0,
+    ] {
+        assert_eq!(settings.recipe_pins, ["workflow.old-scan", "b"]);
+        assert_eq!(settings.recipe_recent, ["b"]);
+    }
+}
+
+#[test]
+fn pins_and_recent_are_bounded_lists_of_different_short_ids() {
+    let check = |pins: Vec<String>, recent: Vec<String>| {
+        validate_settings(&UiSettings {
+            recipe_pins: pins,
+            recipe_recent: recent,
+            ..UiSettings::default()
+        })
+    };
+    let ids = |count: usize| -> Vec<String> { (0..count).map(|i| format!("r{i}")).collect() };
+    assert!(check(ids(20), ids(12)).is_ok());
+    assert!(check(vec!["x".repeat(64)], vec!["x".repeat(64)]).is_ok());
+    for (pins, recent) in [
+        (ids(21), Vec::new()),
+        (Vec::new(), ids(13)),
+        (vec!["a".into(), "a".into()], Vec::new()),
+        (Vec::new(), vec!["a".into(), "a".into()]),
+        (vec!["x".repeat(65)], Vec::new()),
+        (Vec::new(), vec!["x".repeat(65)]),
+        (vec![String::new()], Vec::new()),
+    ] {
+        assert!(
+            check(pins.clone(), recent.clone()).is_err(),
+            "{pins:?} {recent:?}"
+        );
+    }
+}
+
+#[test]
+fn a_pinned_workflow_does_not_count_toward_the_hundred_recipes() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(directory.path())).unwrap();
+    lock(&state.recipes)
+        .unwrap()
+        .extend((0..100).map(|i| recipe_named(&format!("r{i}"))));
+    assert!(store_recipe(&state, recipe_named("r100")).is_err());
+    save_settings_checked(
+        &state,
+        UiSettings {
+            recipe_pins: vec!["workflow.old-scan".into(), "r0".into()],
+            ..UiSettings::default()
+        },
+    )
+    .unwrap();
+    assert_eq!(
+        lock(&state.settings).unwrap().recipe_pins,
+        ["workflow.old-scan", "r0"]
+    );
+    assert_eq!(lock(&state.recipes).unwrap().len(), 100);
 }
 
 #[cfg(target_os = "linux")]

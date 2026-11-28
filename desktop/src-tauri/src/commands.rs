@@ -585,10 +585,20 @@ fn clear_all_media_and_previews(state: &AppState) -> AppResult<()> {
 }
 
 #[tauri::command]
-pub fn save_settings(state: State<'_, Arc<AppState>>, settings: UiSettings) -> AppResult<()> {
+pub fn save_settings(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    settings: UiSettings,
+) -> AppResult<()> {
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
-    save_settings_checked(&state, settings)
+    let pins_before = lock(&state.settings)?.recipe_pins.clone();
+    save_settings_checked(&state, settings)?;
+    // The Presets menu gives its shortcuts to the pins.
+    if lock(&state.settings)?.recipe_pins != pins_before {
+        native_menu::reconcile(&app);
+    }
+    Ok(())
 }
 
 pub(crate) fn save_settings_checked(state: &AppState, settings: UiSettings) -> AppResult<()> {
@@ -968,13 +978,18 @@ pub fn save_recipe(
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     save_recipe_checked(&state, recipe)?;
-    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
+    rebuild_presets_menu(&state, &app)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+fn rebuild_presets_menu(state: &AppState, app: &AppHandle) -> AppResult<()> {
+    let pins = lock(&state.settings)?.recipe_pins.clone();
+    native_menu::rebuild(app, &lock(&state.recipes)?, &pins).map_err(|error| {
         AppError::Config(format!(
             "could not refresh the native presets menu: {error}"
         ))
-    })?;
-    emit_state_changed(&app);
-    Ok(())
+    })
 }
 
 pub(crate) fn save_recipe_checked(state: &AppState, mut recipe: Recipe) -> AppResult<()> {
@@ -1043,7 +1058,7 @@ fn store_recipe(state: &AppState, recipe: Recipe) -> AppResult<()> {
         if let Some(existing) = recipes.iter_mut().find(|existing| existing.id == recipe.id) {
             *existing = recipe;
         } else {
-            if recipes.len() >= 100 {
+            if recipes.len() >= crate::types::MAX_RECIPES {
                 return Err(AppError::Validation("recipe limit reached".into()));
             }
             recipes.push(recipe);
@@ -1056,7 +1071,8 @@ fn store_recipe(state: &AppState, recipe: Recipe) -> AppResult<()> {
     reconcile_persisted_grants(state)
 }
 
-/// Remove a recipe and write the change; a failed write leaves the recipes as they were.
+/// Remove a recipe, and its id from the pins and the recent list, and write the change; a
+/// failed write leaves the recipes and both lists as they were.
 fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
     let previous = {
         let mut recipes = lock(&state.recipes)?;
@@ -1064,8 +1080,17 @@ fn remove_recipe(state: &AppState, id: &str) -> AppResult<()> {
         recipes.retain(|recipe| recipe.id != id);
         previous
     };
+    let previous_lists = {
+        let mut settings = lock(&state.settings)?;
+        let previous = (settings.recipe_pins.clone(), settings.recipe_recent.clone());
+        settings.recipe_pins.retain(|pin| pin != id);
+        settings.recipe_recent.retain(|recent| recent != id);
+        previous
+    };
     persist_or_restore(state, |state| {
-        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous
+        *state.recipes.lock().unwrap_or_else(|e| e.into_inner()) = previous;
+        let mut settings = state.settings.lock().unwrap_or_else(|e| e.into_inner());
+        (settings.recipe_pins, settings.recipe_recent) = previous_lists;
     })?;
     reconcile_persisted_grants(state)
 }
@@ -1180,11 +1205,7 @@ pub fn delete_recipe(state: State<'_, Arc<AppState>>, app: AppHandle, id: String
     crate::updates::ensure_not_installing(&state)?;
     let _scheduler = lock(&state.scheduler)?;
     delete_recipe_checked(&state, &id)?;
-    native_menu::rebuild(&app, &lock(&state.recipes)?).map_err(|error| {
-        AppError::Config(format!(
-            "could not refresh the native presets menu: {error}"
-        ))
-    })?;
+    rebuild_presets_menu(&state, &app)?;
     emit_state_changed(&app);
     Ok(())
 }
@@ -4347,6 +4368,29 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         ));
     }
     validate_custom_edit_model(&settings.custom_edit_model)?;
+    for (list, limit, name) in [
+        (
+            &settings.recipe_pins,
+            crate::types::MAX_RECIPE_PINS,
+            "pinned",
+        ),
+        (
+            &settings.recipe_recent,
+            crate::types::MAX_RECIPE_RECENT,
+            "recent",
+        ),
+    ] {
+        let mut seen = HashSet::new();
+        if list.len() > limit
+            || !list
+                .iter()
+                .all(|id| crate::types::is_valid_recipe_list_id(id) && seen.insert(id))
+        {
+            return Err(AppError::Validation(format!(
+                "{name} recipes must be at most {limit} different ids of 1 to 64 characters"
+            )));
+        }
+    }
     if !matches!(settings.quality.as_str(), "" | "quick" | "best" | "custom")
         || !matches!(settings.content.as_str(), "" | "photo" | "illustration")
         || settings.fixes.len() > limits.max_fix_chips

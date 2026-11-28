@@ -184,7 +184,8 @@ pub fn run() {
                 show_startup_notices(app.handle(), &state);
             }
             *lock(&state.bundled_engine_path)? = worker::bundled_engine_executable(app.handle());
-            native_menu::install(app, &lock(&state.recipes)?)?;
+            let pins = lock(&state.settings)?.recipe_pins.clone();
+            native_menu::install(app, &lock(&state.recipes)?, &pins)?;
             tray::install(app.handle());
             fit_main_window(app.handle());
             let startup_state = state.clone();
