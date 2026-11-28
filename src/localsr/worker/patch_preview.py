@@ -17,7 +17,7 @@ import time
 from collections import OrderedDict
 from collections.abc import Callable, Mapping
 from contextlib import ExitStack
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -52,6 +52,11 @@ _GEOMETRIES_KEPT = 256
 FACE_NOTE = "Face restoration is not shown in the preview patch."
 MASK_NOTE = "A masked step is not shown in the preview patch."
 ALPHA_NOTE = "This step changes transparency, which the preview patch cannot show."
+
+
+def _strength_of(chip: PipelineStage | None) -> float:
+    """How much of a fix the stage asks for, 1.0 when it names no strength."""
+    return 1.0 if chip is None else float(chip.params.get("strength", 1.0))
 
 
 def _file_identity(path: str) -> tuple:
@@ -335,6 +340,9 @@ class PatchRunner:
         identity = _file_identity(path)
         base_key = (identity, frame, region_key, padding)
         keys = [self._stage_key(chip, job, pipeline) for chip in chips]
+        # A fix with a strength below 1 also keeps its whole result under a key without the
+        # strength, so a new strength mixes that result again and the model does not run.
+        whole_keys = [self._stage_key(chip, job, pipeline, whole=True) for chip in chips]
 
         finished: list[_Done] = []
         for index in range(stage_count):
@@ -372,19 +380,40 @@ class PatchRunner:
                     working = _to_uint8(self.source.tensor[:, top:bottom, left:right])
                     scale = 1
                 assert geometry is not None
-                done = self._run_one(
-                    (patch_id, index, stage_count),
-                    chip,
-                    pipeline,
-                    job,
-                    working,
-                    scale,
-                    geometry,
-                    (identity, frame, path),
-                )
+                strength = _strength_of(chip)
+                ran = True
+                if strength < 1.0:
+                    whole_key = (*base_key, (*keys[:index], whole_keys[index]))
+                    whole = self.cache.get(whole_key)
+                    ran = whole is None
+                    if whole is None:
+                        whole = self._run_one(
+                            (patch_id, index, stage_count),
+                            chip,
+                            pipeline,
+                            job,
+                            working,
+                            scale,
+                            geometry,
+                            (identity, frame, path),
+                            whole=True,
+                        )
+                        self.cache.put(whole_key, whole)
+                    done = self._remix(whole, working, strength, geometry)
+                else:
+                    done = self._run_one(
+                        (patch_id, index, stage_count),
+                        chip,
+                        pipeline,
+                        job,
+                        working,
+                        scale,
+                        geometry,
+                        (identity, frame, path),
+                    )
                 self.cache.put((*base_key, tuple(keys[: index + 1])), done)
                 finished.append(done)
-                self._announce(patch_id, index, stage_count, done, cached=False)
+                self._announce(patch_id, index, stage_count, done, cached=not ran)
         finally:
             self.source = None
         self.emit(PatchCompleted(patch_id=patch_id, elapsed_seconds=time.monotonic() - started_at))
@@ -472,17 +501,23 @@ class PatchRunner:
 
     @staticmethod
     def _stage_key(
-        chip: PipelineStage | None, job: Mapping[str, Any], pipeline: ImagePipeline
+        chip: PipelineStage | None,
+        job: Mapping[str, Any],
+        pipeline: ImagePipeline,
+        *,
+        whole: bool = False,
     ) -> tuple:
+        """What a finished step is cached under; ``whole`` leaves the strength out."""
         if chip is None:
             return ("face",)
+        params = {k: v for k, v in chip.params.items() if not (whole and k == "strength")}
         return (
             chip.kind,
             chip.step_id,
             chip.fix,
             chip.model_id,
             _model_identity(chip.model_path),
-            json.dumps(chip.params, sort_keys=True, default=str),
+            json.dumps(params, sort_keys=True, default=str),
             chip.mask_path,
             job["device"],
             job["precision"],
@@ -499,7 +534,10 @@ class PatchRunner:
         scale: int,
         geometry: _Geometry,
         source: tuple[tuple, int, str],
+        *,
+        whole: bool = False,
     ) -> _Done:
+        """Run one step. With ``whole`` a fix runs at full strength, whatever it asks for."""
         patch_id, index, count = position
         identity, frame, path = source
         skip_note = self._skip_reason(chip)
@@ -512,6 +550,15 @@ class PatchRunner:
         started_at = time.monotonic()
         self._warnings.clear()
         is_primary = pipeline.primary is not None and chip is pipeline.primary
+        if whole and "strength" in chip.params:
+            stripped = replace(
+                chip, params={k: v for k, v in chip.params.items() if k != "strength"}
+            )
+            pipeline = ImagePipeline(
+                tuple(stripped if item is chip else item for item in pipeline.stages),
+                pipeline.primary_index,
+            )
+            chip = stripped
         info = self.model_adapter.inspect(chip.model_path) if chip.model_path else None
         step = step_registry.STEPS_BY_ID.get(chip.step_id)
         brings_model = step is not None and is_model_step_stage(step)
@@ -531,6 +578,17 @@ class PatchRunner:
                     working, scale, geometry, 0.0, skipped=True, note=self._warnings[0]
                 )
         return self._finish(result, result_scale, geometry, time.monotonic() - started_at)
+
+    def _remix(
+        self, whole: _Done, working: np.ndarray, strength: float, geometry: _Geometry
+    ) -> _Done:
+        """The fix's whole result mixed with the picture it started from, as a job mixes it."""
+        if whole.skipped:
+            return whole
+        from localsr.worker.image_job import apply_strength
+
+        mixed = apply_strength(strength, _to_image(working)["tensor"], whole.working)
+        return self._finish(np.ascontiguousarray(mixed), whole.scale, geometry, whole.seconds)
 
     @staticmethod
     def _skip_reason(chip: PipelineStage | None) -> str:

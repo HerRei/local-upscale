@@ -833,6 +833,29 @@ function buildCorpus(): ParityCase[] {
     });
   }
 
+  // 9. A fix's strength changes neither the plan nor the model: each case has a twin without it.
+  for (const task of ['upscale', 'denoise'] as const) {
+    for (const strength of [undefined, 0.4]) {
+      push(`strength-${task}-${strength ?? 'full'}`, {
+        settingsPatch: {
+          task,
+          quality: 'best',
+          selected_model_id: task === 'denoise' ? 'denoise_realplksr_1x' : 'span_photo_x4',
+          output_scale: task === 'denoise' ? 1 : 4,
+          fixes: ['noise'],
+          fix_stages: [
+            {
+              fix: 'noise',
+              model_id: 'denoise_realplksr_1x',
+              ...(strength === undefined ? {} : { params: { strength } }),
+            },
+          ],
+        },
+        installedIds: ['span_photo_x4', 'denoise_realplksr_1x'],
+      });
+    }
+  }
+
   return cases;
 }
 
@@ -886,6 +909,15 @@ describe('job_plan parity corpus', () => {
         (c) => c.expected_start_input.device === 'cpu' && c.settings.device_id === 'cuda:0',
       ),
     ).toBe(true);
+
+    for (const task of ['upscale', 'denoise']) {
+      const full = cases.find((c) => c.id.endsWith(`strength-${task}-full`));
+      const light = cases.find((c) => c.id.endsWith(`strength-${task}-0.4`));
+      expect(full && light).toBeTruthy();
+      expect(light!.expected_plan).toEqual(full!.expected_plan);
+      expect(light!.expected_start_input.fix_stages[0].params).toEqual({ strength: 0.4 });
+      expect(full!.expected_start_input.fix_stages[0].params).toBeUndefined();
+    }
 
     const serialized = `{\n  "schema_version": 1,\n  "cases": [\n${cases.map((c) => `    ${JSON.stringify(c)}`).join(',\n')}\n  ]\n}\n`;
     if (process.env.UPDATE_JOB_PLAN_FIXTURE === '1') {

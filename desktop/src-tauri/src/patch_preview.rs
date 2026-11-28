@@ -41,6 +41,11 @@ pub struct SlotBook {
     context: String,
     /// One signature per step of the slot's plan.
     signatures: Vec<String>,
+    /// The same signatures without any `strength`: a step that differs only there is a
+    /// new mix of a result the engine still holds.
+    bases: Vec<String>,
+    /// The steps after the ones that were mixed again were left for `Update preview`.
+    rest_waits: bool,
     device: String,
 }
 
@@ -297,6 +302,18 @@ fn step_signature(stage: &crate::protocol::PipelineStageRequest) -> String {
     serde_json::to_string(stage).unwrap_or_default()
 }
 
+/// The signature of a step with its `strength` left out.
+fn step_base(stage: &crate::protocol::PipelineStageRequest) -> String {
+    let mut base = stage.clone();
+    if let Some(params) = base.params.as_mut() {
+        params.remove(crate::commands::FIX_STRENGTH_PARAM);
+        if params.is_empty() {
+            base.params = None;
+        }
+    }
+    step_signature(&base)
+}
+
 pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> {
     let slot = slot_name(&ask.slot)?;
     if !lock(&state.engine)?
@@ -380,6 +397,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         input.safe_memory,
     ) + &format!("|{output_scale}");
     let signatures: Vec<String> = stages.iter().map(step_signature).collect();
+    let bases: Vec<String> = stages.iter().map(step_base).collect();
     let template: Vec<PatchStep> = stages
         .iter()
         .enumerate()
@@ -398,7 +416,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         .collect();
 
     // The steps the slot already shows for this file and position cost nothing again.
-    let shown = {
+    let (shown, mixed) = {
         let runtime = lock(&state.runtime)?;
         let book = lock(&state.patch)?;
         let slot_book = if slot == "a" { &book.a } else { &book.b };
@@ -412,29 +430,43 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
             },
         );
         match old {
-            Some(old) if slot_book.context == context => (0..runnable)
-                .take_while(|&index| {
-                    slot_book.signatures.get(index) == Some(&signatures[index])
-                        && old
-                            .steps
-                            .get(index)
-                            .is_some_and(|step| step.state == "done")
-                })
-                .count(),
-            _ => 0,
+            Some(old) if slot_book.context == context => {
+                let is_done = |index: usize| {
+                    old.steps
+                        .get(index)
+                        .is_some_and(|step| step.state == "done")
+                };
+                let shown = (0..runnable)
+                    .take_while(|&index| {
+                        slot_book.signatures.get(index) == Some(&signatures[index])
+                            && is_done(index)
+                    })
+                    .count();
+                // Fixes that differ from the shown ones only in strength are mixed again
+                // from the engine's cache: no model runs for them.
+                let mixed = (shown..runnable)
+                    .take_while(|&index| {
+                        slot_book.signatures.get(index) != Some(&signatures[index])
+                            && slot_book.bases.get(index) == Some(&bases[index])
+                            && is_done(index)
+                    })
+                    .count();
+                (shown, mixed)
+            }
+            _ => (0, 0),
         }
     };
     let estimate = {
         let database = lock(&state.database)?;
         let mut seconds = 0.0;
-        for step in &template[shown..runnable] {
+        for step in &template[shown + mixed..runnable] {
             seconds += database
                 .patch_seconds(&step.model_id, &device)?
                 .unwrap_or(0.0);
         }
         seconds
     };
-    let wait = match runs_by_itself(&mode, ask.force, estimate) {
+    let mut wait = match runs_by_itself(&mode, ask.force, estimate) {
         None => {
             return Err(AppError::Validation(
                 "The preview patch is turned off in Settings.".into(),
@@ -442,6 +474,16 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         }
         Some(runs) => !runs,
     };
+    // Under Automatic, steps that are too slow to run by themselves do not hold back the
+    // fix whose strength changed: the request is cut after the last step that costs nothing
+    // and the rest waits behind `Update preview`.
+    let mut rest_waits = false;
+    let mut sent = runnable;
+    if wait && mixed > 0 && mode != "manual" {
+        wait = false;
+        rest_waits = true;
+        sent = shown + mixed;
+    }
     // Even a wait replaces the run before it: its answer would be for another plan.
     let patch_id = format!("patch-{}", Uuid::new_v4());
     let message = json!({
@@ -458,7 +500,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
                 "height": ask.region.height,
             },
             "padding": PADDING,
-            "stages": &stages[..runnable],
+            "stages": &stages[..sent],
             "output_scale": output_scale,
             "device": device,
             "precision": precision,
@@ -468,7 +510,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
             "safe_memory": input.safe_memory,
         }
     });
-    let run = !wait && runnable > 0;
+    let run = !wait && sent > 0;
 
     let stale = {
         let mut runtime = lock(&state.runtime)?;
@@ -491,7 +533,7 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         patch.region = Some(ask.region.clone());
         patch.error.clear();
         patch.steps = steps;
-        patch.estimate_seconds = if wait { estimate } else { 0.0 };
+        patch.estimate_seconds = if wait || rest_waits { estimate } else { 0.0 };
         patch.state = if wait {
             "stale"
         } else if run {
@@ -502,6 +544,8 @@ pub(crate) fn request_checked(state: &AppState, ask: PatchAsk) -> AppResult<()> 
         .into();
         slot_book.context = context;
         slot_book.signatures = signatures;
+        slot_book.bases = bases;
+        slot_book.rest_waits = rest_waits;
         slot_book.device = device;
         slot_book.patch_id = if run { patch_id } else { String::new() };
         stale
@@ -560,7 +604,12 @@ pub(crate) fn apply_message(
         "patch_completed" => {
             book.slot(slot).running = false;
             if patch.state == "running" {
-                patch.state = "ready".into();
+                patch.state = if book.slot(slot).rest_waits {
+                    "stale"
+                } else {
+                    "ready"
+                }
+                .into();
             }
         }
         "patch_failed" => {

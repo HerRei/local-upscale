@@ -122,6 +122,9 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Blur",
         row_label="Fix blur",
         short_name="blur",
+        parameters=(
+            StepParameter(name="strength", kind="number", default=1.0, minimum=0.0, maximum=1.0),
+        ),
     ),
     StepDefinition(
         id="jpeg",
@@ -140,6 +143,9 @@ STEPS: tuple[StepDefinition, ...] = (
         row_label="Fix JPEG",
         short_name="JPEG",
         stage_label="Removing JPEG artifacts",
+        parameters=(
+            StepParameter(name="strength", kind="number", default=1.0, minimum=0.0, maximum=1.0),
+        ),
     ),
     StepDefinition(
         id="noise",
@@ -157,6 +163,9 @@ STEPS: tuple[StepDefinition, ...] = (
         label="Noise",
         row_label="Fix noise",
         short_name="noise",
+        parameters=(
+            StepParameter(name="strength", kind="number", default=1.0, minimum=0.0, maximum=1.0),
+        ),
     ),
     StepDefinition(
         id="colour",

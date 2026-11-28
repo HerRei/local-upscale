@@ -333,9 +333,12 @@ def save_output(
     return list(manager.notes)
 
 
-def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any) -> np.ndarray:
-    """Composite ``mask * stage_output + (1 - mask) * stage_input`` once in one place."""
-    assert stage.mask_path is not None
+def _stage_arrays(stage_input: Any, stage_output: Any) -> tuple[np.ndarray, np.ndarray]:
+    """The stage's output and its input as arrays of one shape and one depth.
+
+    The input is resized to the output when they differ and takes the output's depth (8 or
+    16 bits, or float), so a blend of the two stays in the result's own depth.
+    """
     if hasattr(stage_output, "detach"):
         out_arr = stage_output.detach().cpu().numpy()
     else:
@@ -348,7 +351,6 @@ def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any)
         in_tensor = F.interpolate(
             in_tensor[None], size=(height, width), mode="bilinear", align_corners=False
         )[0]
-    mask = load_mask(stage.mask_path, width, height)
     if out_arr.dtype == np.uint16:
         import torch
 
@@ -365,7 +367,26 @@ def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any)
     else:
         in_arr = in_tensor.numpy().astype(np.float32, copy=False)
         out_arr = out_arr.astype(np.float32, copy=False)
+    return out_arr, in_arr
+
+
+def _apply_stage_mask(stage: PipelineStage, stage_input: Any, stage_output: Any) -> np.ndarray:
+    """Composite ``mask * stage_output + (1 - mask) * stage_input`` once in one place."""
+    assert stage.mask_path is not None
+    out_arr, in_arr = _stage_arrays(stage_input, stage_output)
+    mask = load_mask(stage.mask_path, int(out_arr.shape[2]), int(out_arr.shape[1]))
     return blend_with_alpha(out_arr, in_arr, mask)
+
+
+def stage_strength(stage: PipelineStage) -> float:
+    """A fix's strength: its ``strength`` parameter, 1.0 (the whole fix) when it has none."""
+    return float(stage.params.get("strength", 1.0))
+
+
+def apply_strength(strength: float, stage_input: Any, stage_output: Any) -> np.ndarray:
+    """``input + strength * (output - input)`` in the output's own depth."""
+    out_arr, in_arr = _stage_arrays(stage_input, stage_output)
+    return blend_with_alpha(out_arr, in_arr, np.asarray(strength, dtype=np.float32))
 
 
 def _alpha_plane(alpha: Image.Image, width: int, height: int) -> np.ndarray:
@@ -892,6 +913,14 @@ class ImageJobRunner:
                 output_image = result
                 skip_preview = bool(output_image.pop("_skip_preview", False))
                 skipped_note = output_image.pop("_skipped_note", None)
+                if skipped_note is None and stage_strength(stage) < 1.0:
+                    mixed = apply_strength(
+                        stage_strength(stage), image["tensor"], output_image["tensor"]
+                    )
+                    output_image = {
+                        **output_image,
+                        "tensor": torch.from_numpy(np.array(mixed, copy=True)),
+                    }
                 if stage.mask_path:
                     blended = _apply_stage_mask(stage, image["tensor"], output_image["tensor"])
                     output_image = {
@@ -1160,8 +1189,12 @@ class ImageJobRunner:
                     image, primary, info, data, progress, keep_partial=self.keep_partial
                 )
                 self._register_writer(resources, writer, kept_writer)
-            if primary.mask_path:
-                blended = _apply_stage_mask(primary, image["tensor"], writer.get_array())
+            if primary.mask_path or stage_strength(primary) < 1.0:
+                blended = writer.get_array()
+                if stage_strength(primary) < 1.0:
+                    blended = apply_strength(stage_strength(primary), image["tensor"], blended)
+                if primary.mask_path:
+                    blended = _apply_stage_mask(primary, image["tensor"], blended)
                 target = getattr(writer, "mmap", None)
                 if target is not None:
                     target[:] = blended
