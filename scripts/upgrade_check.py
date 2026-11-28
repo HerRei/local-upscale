@@ -12,7 +12,8 @@ No test had run an older release's update code. This check does:
    test injected (scripts/upgrade_check/old_release_probe.rs) and run it on those files:
    the contract check, the signed release statement and the engine package installation.
 3. This release's host must then record the engine that updater installed and start it
-   (a real handshake), as it does at its first start after such an update.
+   (a real handshake), as it does at its first start after such an update: it checks the
+   engine against the signed file list the feed names, which the old updater ignores.
 
 Example (macOS, from the engine of a built app):
 
@@ -145,6 +146,8 @@ def candidate_feed(
             # --as-in-0.5.2 names the full manifest, as the 0.5.2 feed did: the check must fail.
             "manifest": download(folder / files["engine_manifest"] if as_in_052 else update),
             "parts": [download(part) for part in parts],
+            # Named as a release names it; older updaters must ignore the field.
+            "files": download(folder / files["engine_files"]),
         },
     }
     feed_key = expected_update_identity(entry, commit)["target"]
@@ -266,6 +269,11 @@ def check_from(
                 "LSR_PROBE_ROOT": str(profile),
                 "LSR_PROBE_ENGINE_ID": contract["engine_id"],
                 "LSR_PROBE_BACKEND": contract["backend"],
+                # The new host fetches the engine's signed file list from the feed's files.
+                "LSR_PROBE_FEED": str(feed),
+                "LSR_PROBE_KEY": contract["feed_key"],
+                "LSR_PROBE_PUBLIC_KEY": key.public_key,
+                "LSR_PROBE_FILES": str(files),
             },
         )
     except RuntimeError as error:

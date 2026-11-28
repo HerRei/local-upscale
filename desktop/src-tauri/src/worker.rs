@@ -36,7 +36,11 @@ fn helper_override_path(value: &std::ffi::OsStr, host_directory: &Path) -> PathB
     }
 }
 
+/// The environment of an engine process: helper paths from LocalSR's own environment, and
+/// never the general permission to load pickle-based checkpoints, which a job grants only
+/// through an approved checkpoint.
 pub(crate) fn set_helper_overrides(command: &mut Command) -> std::io::Result<()> {
+    command.env_remove("LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS");
     for name in ["LOCALSR_MEDIA_HELPER", "LOCALSR_EXTERNAL_FFMPEG"] {
         if let Some(value) = env::var_os(name).filter(|value| !value.is_empty()) {
             let path = helper_override_path(&value, &env::current_dir()?);
@@ -538,6 +542,11 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
         // Whatever ended the engine, nothing it started may outlive it: a helper
         // would keep writing into scratch the host removes next.
         tree.terminate();
+        if engine_exit_unexpected(&state.worker, generation, stopped_by_app) {
+            if let Some(id) = &specification.installed_engine_id {
+                crate::updates::forget_verified_engine_code(&state.paths.next_root, id);
+            }
+        }
         if !stopped_by_app && engine_crashed(&status) {
             state
                 .worker
@@ -926,6 +935,13 @@ enum Dispatch {
     Failed,
 }
 
+#[cfg(test)]
+std::thread_local! {
+    /// Runs once between the two reads of the queue in `dispatch_once`.
+    static BETWEEN_QUEUE_READS: std::cell::Cell<Option<Box<dyn FnOnce()>>> =
+        const { std::cell::Cell::new(None) };
+}
+
 fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if !lock(&state.runtime)?.active_job_id.is_empty() {
         return Ok(Dispatch::Idle);
@@ -939,6 +955,16 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     if lock(&state.runtime)?.worker != "ready" {
         return Ok(Dispatch::Idle);
     }
+    // A queued job comes from the queue file: one it may not hold, or one that lets the
+    // engine load a pickle-based checkpoint without an approval the user still holds, fails.
+    let refused = |request_json: &str| crate::commands::queued_request_refusal(state, request_json);
+    let fail = |id: &str, reason: &str| -> AppResult<Dispatch> {
+        lock(&state.database)?.finish_job(id, "failed", "", reason)?;
+        Ok(Dispatch::Failed)
+    };
+    if let Some(reason) = refused(&pending.request_json) {
+        return fail(&pending.id, reason);
+    }
     // Space changes while a queue runs: the next job is checked again before it is sent.
     if let Some(reason) = short_of_disk(state, &pending.request_json)? {
         lock(&state.database)?.finish_job(&pending.id, "failed", "", &reason)?;
@@ -948,10 +974,25 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     let support = batch_support(state, batches)?;
     let mut window = Vec::new();
     if !matches!(support, BatchSupport::None) {
+        #[cfg(test)]
+        if let Some(change) = BETWEEN_QUEUE_READS.take() {
+            change();
+        }
         window = lock(&state.database)?.queued_job_window(MAX_BATCH_PHOTOS)?;
     }
     if window.first().map(|job| &job.id) != Some(&pending.id) {
         window = vec![pending];
+    }
+    // Each request is sent as it was checked: the window read the first job again, and a
+    // later photo goes with it only once it has been checked the same way.
+    let refusal = window
+        .iter()
+        .enumerate()
+        .find_map(|(index, job)| refused(&job.request_json).map(|reason| (index, reason)));
+    match refusal {
+        Some((0, reason)) => return fail(&window[0].id, reason),
+        Some((index, _)) => window.truncate(index),
+        None => {}
     }
     let dispatch = match &support {
         BatchSupport::None => next_dispatch_for(&window, BatchPolicy::CoreMlOnly, |_| false)?,
@@ -967,6 +1008,10 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
     let Some((ids, mut message)) = dispatch else {
         return Ok(Dispatch::Idle);
     };
+    if let Err(error) = crate::commands::use_current_programs(state, &mut message) {
+        return fail(&ids[0], &error.to_string());
+    }
+    crate::commands::withdraw_unapproved_checkpoint_permission(&mut message);
     let first = ids[0].clone();
     let prepared = lock(&state.worker.cancellation)?.prepare(&first, &mut message);
     if let Err(error) = prepared {
@@ -1354,6 +1399,7 @@ pub fn shutdown(state: &AppState) {
     state.video_preview.shutdown();
     state.worker.shutting_down.store(true, Ordering::SeqCst);
     state.stay_awake.release();
+    request_engine_exit(&state.worker);
     let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
     if let Ok(mut sender) = state.worker.sender.lock() {
         *sender = None;
@@ -1421,7 +1467,15 @@ pub fn restart_for_model_directory(state: &AppState) {
         runtime.worker = "restarting".into();
         runtime.status_detail = "Reloading engine for the new model folder…".into();
     }
+    request_engine_exit(&state.worker);
     let _ = send(state, &json!({"type": "shutdown_request", "data": {}}));
+}
+
+/// Note that LocalSR asks the running engine to exit, before it asks.
+fn request_engine_exit(worker: &crate::state::WorkerControl) {
+    worker
+        .exit_requested
+        .store(worker.generation.load(Ordering::SeqCst), Ordering::SeqCst);
 }
 
 fn handle_worker_envelope(
@@ -1604,6 +1658,20 @@ const OUTPUT_DRAIN_LIMIT: Duration = Duration::from_secs(2);
 
 /// How long an engine that asked for a restart may take to exit before it is stopped.
 const RESTART_EXIT_GRACE: Duration = Duration::from_secs(15);
+
+/// Whether engine run `generation` ended without LocalSR asking for it: LocalSR neither
+/// stopped it (`stopped_by_app`) nor asked it to exit. Its exit code does not count, as
+/// another program can end it with any code. Its code files are then hashed again before
+/// it starts once more.
+fn engine_exit_unexpected(
+    worker: &crate::state::WorkerControl,
+    generation: u64,
+    stopped_by_app: bool,
+) -> bool {
+    !stopped_by_app
+        && !worker.shutting_down.load(Ordering::SeqCst)
+        && worker.exit_requested.load(Ordering::SeqCst) != generation
+}
 
 /// Whether an engine that ended on its own died of a fault in native code, such as an
 /// access violation in a graphics driver. A kill (the OOM killer, Task Manager) or an
@@ -3051,34 +3119,6 @@ pub(crate) fn codec_helper_command(state: &AppState, _app: &AppHandle) -> AppRes
     Ok(command)
 }
 
-fn adopt_engine_installed_by_older_updater(state: &AppState, app: &AppHandle) {
-    let compiled_id = option_env!("LOCALSR_ENGINE_ID").unwrap_or("");
-    let backend = option_env!("LOCALSR_UPDATE_BACKEND").unwrap_or("");
-    let work_root = state.paths.work_root.clone();
-    crate::updates::adopt_engine_from_older_updater(
-        &state.paths.next_root,
-        compiled_id,
-        backend,
-        || {
-            if let Ok(mut runtime) = state.runtime.lock() {
-                runtime.status_title = "Checking the inference engine".into();
-                runtime.status_detail =
-                    "The engine the update installed is checked once before it is used.".into();
-            }
-            emit_state_changed(app);
-        },
-        |executable| {
-            crate::headless_smoke::run_worker_handshake(
-                executable,
-                Duration::from_secs(60),
-                true,
-                &work_root,
-            )
-            .is_ok()
-        },
-    );
-}
-
 pub fn installed_worker_path(state: &AppState, app: &AppHandle) -> AppResult<PathBuf> {
     Ok(resolve_worker_command(state, app)?.program)
 }
@@ -3148,11 +3188,6 @@ fn resolve_worker_command(state: &AppState, app: &AppHandle) -> AppResult<Worker
     let selected = if state.worker.use_bundled_fallback.load(Ordering::SeqCst) {
         bundled.map(|path| (path, None))
     } else {
-        // An edition without a bundled engine updated by 0.4.0 to 0.5.0 has that release's
-        // engine installed without metadata; record it before choosing.
-        if bundled.is_none() && !crate::distribution::managed_by_store() {
-            adopt_engine_installed_by_older_updater(state, app);
-        }
         let mut failed = lock(&state.worker.failed_engines)?.clone();
         let (choice, verification_failed) =
             crate::updates::verified_worker_engine_choice(&state.paths, bundled, &mut failed);

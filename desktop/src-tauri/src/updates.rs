@@ -160,6 +160,26 @@ pub struct EngineUpdate {
     pub id: String,
     pub manifest: DownloadFile,
     pub parts: Vec<DownloadFile>,
+    /// The signed list of the files the package unpacks (engine_files.rs). It is not part
+    /// of the release statement, whose fields older clients require exactly; its own
+    /// signature and the engine identity it states bind it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub files: Option<DownloadFile>,
+}
+
+impl EngineUpdate {
+    /// Every file of the package, the file list included.
+    pub(crate) fn downloads(&self) -> impl Iterator<Item = &DownloadFile> {
+        std::iter::once(&self.manifest)
+            .chain(&self.parts)
+            .chain(self.files.as_ref())
+    }
+
+    pub(crate) fn file_list(&self) -> AppResult<&DownloadFile> {
+        self.files
+            .as_ref()
+            .ok_or_else(|| invalid("This engine package has no signed file list"))
+    }
 }
 #[derive(Clone, Deserialize, Serialize)]
 pub struct ReleaseContract {
@@ -371,14 +391,16 @@ pub(crate) fn validate_contract_for_backend(
         if engine.parts.len() > 64
             || engine.manifest.size == 0
             || engine.manifest.size > 1024 * 1024
-            || std::iter::once(&engine.manifest)
-                .chain(&engine.parts)
-                .any(|file| {
-                    !safe_file_name(&file.name)
-                        || file.name.ends_with(".partial")
-                        || file.name.ends_with(".part")
-                        || !names.insert(file.name.as_str())
-                })
+            || engine
+                .files
+                .as_ref()
+                .is_some_and(|files| files.size == 0 || files.size > 32 * 1024 * 1024)
+            || engine.downloads().any(|file| {
+                !safe_file_name(&file.name)
+                    || file.name.ends_with(".partial")
+                    || file.name.ends_with(".part")
+                    || !names.insert(file.name.as_str())
+            })
             || engine
                 .parts
                 .iter()
@@ -702,6 +724,8 @@ pub async fn check_update(
     };
     *lock(&state.updates.checked)? = None;
     let catalog_config = config.clone();
+    // The engine catalog this check read from the feed, if it could.
+    let mut catalog_read = None;
     let validated = (|| -> AppResult<()> {
         if let Some(update) = update {
             let contract: ReleaseContract = serde_json::from_value(
@@ -720,7 +744,7 @@ pub async fn check_update(
             if installed.installed_by_package_manager() {
                 // apt installs it: report the signed release, keep the engine catalog
                 // current, and keep nothing to download or install.
-                crate::engine_manager::update_catalog_from_feed(
+                catalog_read = crate::engine_manager::update_catalog_from_feed(
                     &state,
                     &update.raw_json,
                     &config,
@@ -745,7 +769,7 @@ pub async fn check_update(
                 &installed_version,
                 &state.paths,
             )?;
-            crate::engine_manager::update_catalog_from_feed(
+            catalog_read = crate::engine_manager::update_catalog_from_feed(
                 &state,
                 &update.raw_json,
                 &config,
@@ -767,9 +791,7 @@ pub async fn check_update(
                             &resolved_engine.backend,
                         )
                     })
-                    .map_or(0, |e| {
-                        e.manifest.size + e.parts.iter().map(|p| p.size).sum::<u64>()
-                    });
+                    .map_or(0, |e| e.downloads().map(|file| file.size).sum::<u64>());
             status.stage = "available".into();
             status.message = "A compatible signed update is available.".into();
             // The install checks the entry against this file: write it first, so a
@@ -807,7 +829,7 @@ pub async fn check_update(
         if let Ok(feed_json) =
             crate::engine_manager::fetch_feed_json(&catalog_config, &channel).await
         {
-            crate::engine_manager::update_catalog_from_feed(
+            catalog_read = crate::engine_manager::update_catalog_from_feed(
                 &state,
                 &feed_json,
                 &catalog_config,
@@ -817,6 +839,16 @@ pub async fn check_update(
         }
     }
     publish(&state, &app, &mut status);
+    // Installed engines without a signed list take the one their catalog entry names.
+    if let Some(entries) = catalog_read {
+        crate::engine_manager::anchor_from_catalog(
+            state.inner(),
+            Some(&app),
+            &catalog_config,
+            &entries,
+        )
+        .await;
+    }
     Ok(status)
 }
 
@@ -959,6 +991,8 @@ fn stage_verified(
 
 /// Install an engine package from the manifest bytes that were verified; the engine
 /// installer hashes every part against that manifest on the handles it unpacks from.
+/// The package's signed file list must name this engine and host, and the files unpacked
+/// must be exactly the files it lists.
 pub(crate) fn install_engine_package_for(
     directory: &Path,
     engine: &EngineUpdate,
@@ -966,7 +1000,10 @@ pub(crate) fn install_engine_package_for(
     engine_dir: &Path,
     expected_os: &str,
     expected_arch: &str,
-) -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>> {
+) -> AppResult<(
+    Vec<crate::engine_payload::InstalledEngineFile>,
+    crate::engine_files::EngineFileList,
+)> {
     let manifest = read_verified(
         &directory.join(&engine.manifest.name),
         &engine.manifest,
@@ -984,12 +1021,37 @@ pub(crate) fn install_engine_package_for(
             "Engine package manifest metadata does not match this host or update entry",
         ));
     }
+    let list_file = engine.file_list()?;
+    let list = crate::engine_files::EngineFileList::verify(
+        &read_verified(&directory.join(&list_file.name), list_file, public_key)?,
+        &list_file.signature,
+        public_key,
+    )?;
+    if !list.names(&engine.id, expected_os, expected_arch) || !list.describes(&parsed) {
+        return Err(invalid(
+            "The engine file list does not belong to this engine package or host",
+        ));
+    }
     for part in &engine.parts {
         verify_file(&directory.join(&part.name), part, public_key)?;
     }
-    Ok(crate::engine_payload::install_manifest_with_files(
-        &manifest, directory, engine_dir,
-    )?)
+    let files =
+        crate::engine_payload::install_manifest_with_files(&manifest, directory, engine_dir)?;
+    require_listed_files(&files, &list)?;
+    Ok((files, list))
+}
+
+/// The unpacked files must be the signed list's, path for path, size and digest.
+pub(crate) fn require_listed_files(
+    files: &[crate::engine_payload::InstalledEngineFile],
+    list: &crate::engine_files::EngineFileList,
+) -> AppResult<()> {
+    if files != list.files.as_slice() {
+        return Err(invalid(
+            "The unpacked engine differs from its signed file list",
+        ));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1200,7 +1262,7 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
         .filter(|engine| {
             engine_needs_package_for(&state.paths.next_root, &config, &engine.id, &engine_backend)
         })
-        .flat_map(|engine| std::iter::once(&engine.manifest).chain(&engine.parts));
+        .flat_map(EngineUpdate::downloads);
     let present = already_downloaded(&directory, std::iter::once(&file).chain(engine_files));
     let unpacked_need = contract.unpacked_size.max(engine_unpacked_size);
     let needed = status
@@ -1231,17 +1293,10 @@ pub async fn download_update(state: State<'_, Arc<AppState>>, app: AppHandle) ->
         if let Some(engine) = engine_package.filter(|e| {
             engine_needs_package_for(&state.paths.next_root, &config, &e.id, &engine_backend)
         }) {
-            download_file(
-                &engine.manifest,
-                &directory,
-                &config,
-                &state.updates.cancel,
-                &mut progress,
-            )
-            .await?;
-            for part in &engine.parts {
+            engine.file_list()?;
+            for file in engine.downloads() {
                 download_file(
-                    part,
+                    file,
                     &directory,
                     &config,
                     &state.updates.cancel,
@@ -1457,7 +1512,7 @@ pub(crate) fn mark_engine_needs_reinstall(next_root: &Path, id: &str) {
     }
 }
 
-fn valid_engine_file_list(files: &[crate::engine_payload::InstalledEngineFile]) -> bool {
+pub(crate) fn valid_engine_file_list(files: &[crate::engine_payload::InstalledEngineFile]) -> bool {
     if files.is_empty() {
         return false;
     }
@@ -1531,13 +1586,31 @@ fn engine_code_file(relative: &str) -> bool {
     };
     let name = name.to_ascii_lowercase();
     // The worker contains the PYZ archive. The bootloader also imports from
-    // base_library.zip, and the frozen importer can load modules from disk.
+    // base_library.zip, and the frozen importer can load modules from disk. Packages
+    // load the modules their distribution's entry_points.txt names.
     matches!(
         name.as_str(),
-        "localsr-worker" | "localsr-worker.pkg" | "sd-cli" | "python" | "base_library.zip"
+        "localsr-worker"
+            | "localsr-worker.pkg"
+            | "sd-cli"
+            | "python"
+            | "base_library.zip"
+            | "entry_points.txt"
     ) || matches!(
         Path::new(&name).extension().and_then(|ext| ext.to_str()),
-        Some("exe" | "dll" | "pyd" | "so" | "dylib" | "pyz" | "py" | "pyc" | "pth" | "manifest")
+        Some(
+            "exe"
+                | "dll"
+                | "pyd"
+                | "so"
+                | "dylib"
+                | "pyz"
+                | "py"
+                | "pyw"
+                | "pyc"
+                | "pth"
+                | "manifest"
+        )
     ) || name.rsplit_once(".so.").is_some_and(|(_, version)| {
         version
             .split('.')
@@ -1549,6 +1622,20 @@ fn engine_code_file(relative: &str) -> bool {
                 .file_stem()
                 .is_some_and(|stem| stem.eq_ignore_ascii_case(&name))
     })
+}
+
+/// A file a file manager writes into a folder someone looked at, by its exact name:
+/// Finder's `.DS_Store` and its `._` companions on volumes without extended attributes,
+/// Explorer's `Thumbs.db` and `desktop.ini`, Dolphin's `.directory`.
+fn folder_view_file(path: &Path) -> bool {
+    path.file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| {
+            matches!(
+                name,
+                ".DS_Store" | "Thumbs.db" | "desktop.ini" | ".directory"
+            ) || name.starts_with("._")
+        })
 }
 
 /// Whether a file is a program by its permissions or contents: helpers such as
@@ -1600,14 +1687,58 @@ enum EngineCheck {
     Full,
 }
 
+/// The key engine file lists are signed with: the update key this build was compiled
+/// with. Tests use the release tooling's disposable test key, or the one the upgrade
+/// check names.
+pub(crate) fn release_public_key() -> String {
+    #[cfg(test)]
+    {
+        std::env::var("LSR_PROBE_PUBLIC_KEY")
+            .unwrap_or_else(|_| crate::engine_files::test_signing::public_key())
+    }
+    #[cfg(not(test))]
+    {
+        UpdateConfig::load().public_key
+    }
+}
+
+/// The files the engine folder `root` must hold for engine `id`: its release-signed
+/// list. The list in meta.json is not consulted.
+pub(crate) fn signed_engine_files(
+    root: &Path,
+    id: &str,
+    os: &str,
+    arch: &str,
+) -> Option<Vec<crate::engine_payload::InstalledEngineFile>> {
+    match crate::engine_files::installed(root, id, os, arch, &release_public_key()) {
+        crate::engine_files::Installed::Signed(list) => Some(list.files),
+        _ => None,
+    }
+}
+
+/// Whether engine `id` has no file list at all, as an engine installed by a version
+/// before signed lists has; such an engine is kept but not started until its list is
+/// fetched (engine_manager::anchor_installed_engines).
+pub(crate) fn engine_lacks_file_list(next_root: &Path, id: &str) -> bool {
+    engine_install_root(next_root, id).is_ok_and(|root| {
+        matches!(
+            fs::symlink_metadata(root.join(crate::engine_files::SIGNED_LIST_FILE)),
+            Err(error) if error.kind() == io::ErrorKind::NotFound
+        )
+    })
+}
+
 fn check_engine_files(next_root: &Path, id: &str, meta: &EngineMeta, hash_code: bool) -> bool {
-    engine_install_root(next_root, id)
-        .is_ok_and(|root| check_engine_directory_files(&root.join("engine"), meta, hash_code))
+    engine_install_root(next_root, id).is_ok_and(|root| {
+        signed_engine_files(&root, id, &meta.os, &meta.arch).is_some_and(|files| {
+            check_engine_directory_files(&root.join("engine"), &files, hash_code)
+        })
+    })
 }
 
 pub(crate) fn check_engine_directory_files(
     engine_dir: &Path,
-    meta: &EngineMeta,
+    files: &[crate::engine_payload::InstalledEngineFile],
     hash_code: bool,
 ) -> bool {
     let check = if hash_code {
@@ -1615,7 +1746,7 @@ pub(crate) fn check_engine_directory_files(
     } else {
         EngineCheck::Sizes
     };
-    verify_engine_directory(engine_dir, &meta.files, check).is_ok()
+    verify_engine_directory(engine_dir, files, check).is_ok()
 }
 
 pub(crate) fn full_verify_engine_files(
@@ -1624,7 +1755,9 @@ pub(crate) fn full_verify_engine_files(
     meta: &EngineMeta,
 ) -> AppResult<()> {
     let root = engine_install_root(next_root, id)?;
-    verify_engine_directory(&root.join("engine"), &meta.files, EngineCheck::Full)
+    let files = signed_engine_files(&root, id, &meta.os, &meta.arch)
+        .ok_or_else(|| invalid("The engine has no valid signed file list"))?;
+    verify_engine_directory(&root.join("engine"), &files, EngineCheck::Full)
 }
 
 #[cfg(test)]
@@ -1716,6 +1849,18 @@ fn remove_cached_code_key(key: &Option<PathBuf>) {
     }
 }
 
+/// Hash every code file of engine `id` again at its next start, rather than trusting the
+/// stamps recorded when they last passed: after its worker ended in a way LocalSR did not
+/// ask for.
+pub(crate) fn forget_verified_engine_code(next_root: &Path, id: &str) {
+    let Some(engine) = code_cache_key(&next_root.join("engines").join(id).join("engine")) else {
+        return;
+    };
+    if let Ok(mut cache) = ENGINE_CODE_HASH_CACHE.lock() {
+        cache.retain(|path, _| !path.starts_with(&engine));
+    }
+}
+
 fn hash_opened_engine_file(file: &mut fs::File) -> io::Result<(u64, String)> {
     #[cfg(test)]
     record_engine_file_hash();
@@ -1802,17 +1947,18 @@ fn verify_engine_directory(
             .expect("file is inside the engine");
         let relative = crate::engine_payload::canonical_relative_path(relative);
         let code = || engine_code_file(&relative) || executable_content(path, stat);
+        // The signed list names every file of the engine.
         let Some(entry) = expected.remove(relative.as_str()) else {
-            return if code() {
-                if matches!(check, EngineCheck::Code) {
-                    remove_cached_code_key(&code_cache_key(path));
-                }
-                Err(invalid(format!(
-                    "Engine code file has no checksum: {relative}"
-                )))
-            } else {
-                Ok(())
-            };
+            // Never a file that could be code, whatever its name.
+            if folder_view_file(path) && !code() {
+                return Ok(());
+            }
+            if matches!(check, EngineCheck::Code) {
+                remove_cached_code_key(&code_cache_key(path));
+            }
+            return Err(invalid(format!(
+                "Engine file is not on its list: {relative}"
+            )));
         };
         if stat.len() != entry.size {
             if matches!(check, EngineCheck::Code) {
@@ -1850,7 +1996,6 @@ pub(crate) fn engine_meta_valid_for_host(meta: &EngineMeta, os: &str, arch: &str
         && meta.arch == arch
         && meta.protocol_version == PROTOCOL_VERSION
         && safe_id(&meta.id)
-        && valid_engine_file_list(&meta.files)
 }
 
 #[cfg(test)]
@@ -1887,97 +2032,133 @@ pub(crate) fn test_engine_files(
     files
 }
 
-/// The files of an installed engine as its metadata lists them: every regular file, hashed.
-/// Links and other special files are refused, as the payload installer refuses them.
-fn hash_engine_directory(
-    engine: &Path,
-) -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>> {
-    fn walk(
-        root: &Path,
-        dir: &Path,
-        out: &mut Vec<crate::engine_payload::InstalledEngineFile>,
-    ) -> AppResult<()> {
-        real_engine_directory(dir)?;
-        for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
-            let metadata = fs::symlink_metadata(&path)?;
-            if metadata.file_type().is_symlink() {
-                return Err(invalid("An installed engine contains a link"));
+/// Keep the signed list `list` with installed engine `id`, which an earlier version of
+/// LocalSR installed without one, once its files match the list.
+///
+/// An engine with valid host metadata (installed by 0.5.2 to 0.6) gets the list beside it
+/// and metadata that names the listed files. An engine without metadata, which the
+/// updaters of 0.4.0 to 0.5.0 install under the new release's id, is recorded only for the
+/// id this host was built for and only after a handshake. An engine that already has a
+/// list, is being installed, or whose metadata marks it for reinstallation is left alone.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn anchor_installed_engine(
+    next_root: &Path,
+    id: &str,
+    list: &crate::engine_files::EngineFileList,
+    compiled_id: &str,
+    os: &str,
+    arch: &str,
+    handshake: impl FnOnce(&Path) -> bool,
+) -> AppResult<()> {
+    let root = engine_install_root(next_root, id)?;
+    if !list.names(id, os, arch) {
+        return Err(invalid("The engine file list names another engine or host"));
+    }
+    if !engine_lacks_file_list(next_root, id) {
+        return Err(invalid("The engine already has a file list"));
+    }
+    let engine = root.join("engine");
+    let meta = match fs::symlink_metadata(root.join("meta.json")) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Ok(_) => Some(
+            read_engine_meta_in(&root)
+                .filter(|meta| meta.id == id && engine_meta_valid_for_host(meta, os, arch))
+                .ok_or_else(|| invalid("The installed engine needs to be installed again"))?,
+        ),
+        Err(error) => return Err(error.into()),
+    };
+    // Files that differ from the release's list never match it: the engine is marked for
+    // reinstallation, so that it is not checked against the feed again.
+    let check_files = || {
+        verify_engine_directory(&engine, &list.files, EngineCheck::Code).inspect_err(|error| {
+            if files_differ(error) {
+                mark_engine_without_list_for_reinstall(next_root, id, &list.backend, os, arch);
             }
-            if metadata.is_dir() {
-                walk(root, &path, out)?;
-            } else if metadata.is_file() {
-                let (size, sha256) = crate::engine_payload::sha256_file(&path)?;
-                let relative = path
-                    .strip_prefix(root)
-                    .map_err(|_| invalid("An engine file lies outside its engine"))?;
-                out.push(crate::engine_payload::InstalledEngineFile {
-                    path: crate::engine_payload::canonical_relative_path(relative),
-                    size,
-                    sha256,
-                });
-            } else {
-                return Err(invalid("An installed engine contains a special file"));
+        })
+    };
+    let meta = match meta {
+        Some(meta) => {
+            check_files()?;
+            EngineMeta {
+                files: list.files.clone(),
+                ..meta
             }
         }
-        Ok(())
-    }
-    let mut files = Vec::new();
-    walk(engine, engine, &mut files)?;
-    files.sort_by(|a, b| a.path.cmp(&b.path));
-    Ok(files)
+        None => {
+            if id != compiled_id || pending_engine_start(&root).is_some() {
+                return Err(invalid("The installed engine has no metadata"));
+            }
+            let executable = engine_executable_path(next_root, id)
+                .ok_or_else(|| invalid("The installed engine has no worker"))?;
+            check_files()?;
+            if !handshake(&executable) {
+                return Err(invalid("The installed engine did not start"));
+            }
+            EngineMeta {
+                id: id.to_owned(),
+                backend: list.backend.to_ascii_lowercase(),
+                os: os.into(),
+                arch: arch.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: list.version.clone(),
+                files: list.files.clone(),
+            }
+        }
+    };
+    // The list first: until meta.json names these files, older metadata stays as it was.
+    list.write_into(&root)?;
+    write_engine_meta(next_root, &meta)
 }
 
-/// Record an engine that an updater of LocalSR 0.4.0 to 0.5.0 installed.
-///
-/// Those updaters install the new release's engine package under its id, but they predate
-/// `meta.json`, so a newer host would ignore the engine. On an edition without a bundled
-/// engine (Windows CUDA) that leaves no engine at all. The engine whose id this host was
-/// built for, installed from parts the old updater checked against the signed manifest,
-/// is recorded once: its files hashed and a handshake passed, then the usual checks apply.
-/// An engine with metadata, one being installed, or any other id is left alone.
-pub(crate) fn adopt_engine_from_older_updater(
+/// Whether a failed check of an engine folder against a list says that its files differ
+/// from the list (one changed, missing, unlisted or linked), rather than that the folder
+/// could not be read.
+fn files_differ(error: &AppError) -> bool {
+    match error {
+        AppError::Validation(_) => true,
+        AppError::Io(error) => error.kind() == io::ErrorKind::InvalidData,
+        _ => false,
+    }
+}
+
+/// Mark an engine an earlier version installed, which has no signed list and cannot take
+/// one (the feed does not name it, or its files differ from the list), for reinstallation:
+/// it is then neither started nor checked against the feed again. One without metadata
+/// gets metadata that says so.
+pub(crate) fn mark_engine_without_list_for_reinstall(
     next_root: &Path,
-    compiled_id: &str,
+    id: &str,
     backend: &str,
-    announce: impl FnOnce(),
-    handshake: impl FnOnce(&Path) -> bool,
-) -> bool {
-    if compiled_id.is_empty() || !safe_id(compiled_id) {
-        return false;
-    }
-    let Ok(root) = engine_install_root(next_root, compiled_id) else {
-        return false;
+    os: &str,
+    arch: &str,
+) {
+    let Ok(root) = engine_install_root(next_root, id) else {
+        return;
     };
+    if !engine_lacks_file_list(next_root, id) {
+        return;
+    }
     match fs::symlink_metadata(root.join("meta.json")) {
-        Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-        _ => return false,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            let meta = EngineMeta {
+                id: id.to_owned(),
+                backend: backend.to_ascii_lowercase(),
+                os: os.into(),
+                arch: arch.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: false,
+                verified_install: false,
+                version: String::new(),
+                files: Vec::new(),
+            };
+            if let Err(error) = write_engine_meta(next_root, &meta) {
+                eprintln!("LocalSR could not mark engine {id} for reinstallation: {error}");
+            }
+        }
+        _ => mark_engine_needs_reinstall(next_root, id),
     }
-    if pending_engine_start(&root).is_some() {
-        return false;
-    }
-    let Some(executable) = engine_executable_path(next_root, compiled_id) else {
-        return false;
-    };
-    announce();
-    let Ok(files) = hash_engine_directory(&root.join("engine")) else {
-        return false;
-    };
-    if !valid_engine_file_list(&files) || !handshake(&executable) {
-        return false;
-    }
-    let meta = EngineMeta {
-        id: compiled_id.to_owned(),
-        backend: backend.to_owned(),
-        os: std::env::consts::OS.into(),
-        arch: std::env::consts::ARCH.into(),
-        protocol_version: PROTOCOL_VERSION,
-        handshake_passed: true,
-        verified_install: true,
-        version: env!("CARGO_PKG_VERSION").into(),
-        files,
-    };
-    write_engine_meta(next_root, &meta).is_ok()
 }
 
 pub(crate) fn engine_executable_path(next_root: &Path, id: &str) -> Option<PathBuf> {
@@ -2234,6 +2415,10 @@ fn start_engine_candidates(
         let Some(meta) = host_meta() else {
             continue;
         };
+        // Installed by an earlier version: kept as it is until its signed list is fetched.
+        if engine_lacks_file_list(next_root, id) {
+            continue;
+        }
         let root = next_root.join("engines").join(id);
         let verified = engine_update_matches_host(&root)
             && (recovered || check_engine_files(next_root, id, &meta, true));
@@ -2574,8 +2759,9 @@ fn engine_backup_verifies(backup: &Path, id: &str, os: &str, arch: &str) -> bool
         meta.id == id
             && engine_meta_valid_for_host(&meta, os, arch)
             && engine_update_matches_host(backup)
-            && verify_engine_directory(&backup.join("engine"), &meta.files, EngineCheck::Full)
-                .is_ok()
+            && signed_engine_files(backup, id, os, arch).is_some_and(|files| {
+                verify_engine_directory(&backup.join("engine"), &files, EngineCheck::Full).is_ok()
+            })
     })
 }
 
@@ -2648,6 +2834,8 @@ pub(crate) struct StagedEngine {
     staging: PathBuf,
     target: PathBuf,
     pub files: Vec<crate::engine_payload::InstalledEngineFile>,
+    /// Published with the engine; every later check reads it.
+    pub list: crate::engine_files::EngineFileList,
 }
 
 pub(crate) fn remove_engine_tree_if_real(path: &Path) {
@@ -2743,6 +2931,7 @@ impl StagedEngine {
                 _ => return Err(invalid("The installed engine metadata is invalid")),
             }
         }
+        self.list.write_into(&self.staging)?;
         if let Some(meta) = meta {
             update_storage::write_atomic(
                 &self.staging.join("meta.json"),
@@ -2807,10 +2996,17 @@ impl StagedEngine {
     }
 }
 
+/// What unpacking an engine package yields: its files and its signed list, which name
+/// the same files.
+pub(crate) type UnpackedEngine = (
+    Vec<crate::engine_payload::InstalledEngineFile>,
+    crate::engine_files::EngineFileList,
+);
+
 pub(crate) fn stage_engine_with(
     next_root: &Path,
     engine_id: &str,
-    unpack: impl FnOnce(&Path) -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>>,
+    unpack: impl FnOnce(&Path) -> AppResult<UnpackedEngine>,
     handshake: impl FnOnce(&Path) -> AppResult<()>,
 ) -> AppResult<StagedEngine> {
     if !safe_id(engine_id) {
@@ -2828,20 +3024,25 @@ pub(crate) fn stage_engine_with(
     }
     update_storage::sync_dir(next_root)?;
     let staging = root.join(format!(".import-{}", uuid::Uuid::new_v4()));
-    let result = (|| -> AppResult<Vec<crate::engine_payload::InstalledEngineFile>> {
+    let result = (|| -> AppResult<UnpackedEngine> {
         fs::create_dir(&staging)?;
         let engine = staging.join("engine");
-        let files = unpack(&engine)?;
-        verify_engine_directory(&engine, &files, EngineCheck::Code)?;
+        let (files, list) = unpack(&engine)?;
+        if list.engine_id != engine_id {
+            return Err(invalid("The engine file list names another engine"));
+        }
+        require_listed_files(&files, &list)?;
+        verify_engine_directory(&engine, &list.files, EngineCheck::Code)?;
         let executable = engine.join(worker_executable_name());
         handshake(&executable)?;
-        Ok(files)
+        Ok((files, list))
     })();
     match result {
-        Ok(files) => Ok(StagedEngine {
+        Ok((files, list)) => Ok(StagedEngine {
             staging,
             target,
             files,
+            list,
         }),
         Err(error) => {
             remove_engine_tree_if_real(&staging);

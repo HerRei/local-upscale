@@ -38,6 +38,9 @@ pub struct WorkerControl {
     /// engine works, so its stopping later is not a failing start.
     pub finished_job: AtomicBool,
     pub shutting_down: AtomicBool,
+    /// The engine run (its `generation`) LocalSR asked to exit: to quit, to switch
+    /// engines, for a new model folder. 0 for none.
+    pub exit_requested: AtomicU64,
     /// The process ID of an engine that ended on its own with a failure, for its
     /// replacement: the engine then knows which GPU step crashed it.
     pub crashed_engine: AtomicU32,
@@ -63,6 +66,7 @@ impl Default for WorkerControl {
             restart_count: AtomicU32::new(0),
             finished_job: AtomicBool::new(false),
             shutting_down: AtomicBool::new(false),
+            exit_requested: AtomicU64::new(0),
             crashed_engine: AtomicU32::new(0),
             disk_stop: AtomicBool::new(false),
             using_installed_engine: AtomicBool::new(false),
@@ -171,6 +175,7 @@ impl AppState {
             notices.push("Your settings come from a newer LocalSR. This version uses defaults and will not save settings changes.".into());
         }
         let (settings, recipes) = settings::load(&paths);
+        crate::checkpoint_approvals::prepare_at_start(&paths, &settings.trusted_checkpoint_sha256);
         let model_root = effective_model_root(&paths, &settings);
         let catalog = load_catalog_in(&model_root)?;
         let latest_benchmark = settings::load_benchmark(&paths);

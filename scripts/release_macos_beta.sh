@@ -112,10 +112,12 @@ ENGINE_PREFIX="LocalSR-v$VERSION-macOS-arm64.engine.tar.gz"
 ENGINE_MANIFEST="LocalSR-v$VERSION-macOS-arm64.engine-payload.json"
 # The feed names the update form, which every updater since 0.4.0 reads.
 ENGINE_UPDATE="LocalSR-v$VERSION-macOS-arm64.engine-update.json"
+# Every file the engine unpacks; the app checks an installed engine against this signed list.
+ENGINE_FILES="LocalSR-v$VERSION-macOS-arm64.engine-files.json"
 python scripts/prepare_engine_payload.py --target macos-arm64-mps --output "$ENGINE_OUT" \
   --engine "$APP/Contents/Resources/engine" --version "$VERSION" --commit "$COMMIT" \
   --engine-id "$LOCALSR_ENGINE_ID"
-for file in "$ENGINE_OUT/$ENGINE_MANIFEST" "$ENGINE_OUT/$ENGINE_UPDATE" "$ENGINE_OUT"/*.part-*; do
+for file in "$ENGINE_OUT/$ENGINE_MANIFEST" "$ENGINE_OUT/$ENGINE_UPDATE" "$ENGINE_OUT/$ENGINE_FILES" "$ENGINE_OUT"/*.part-*; do
   python scripts/beta_update_signing.py sign "$file"
 done
 
@@ -138,10 +140,10 @@ tar -C "$OUT" -czf "$OUT/LocalSR-v$VERSION-source-and-notices.tar.gz" source
 
 step "checksums and feed entry"
 (cd "$OUT" && shasum -a 256 "LocalSR-v$VERSION-macOS-arm64.dmg" "LocalSR-v$VERSION-macOS-arm64.app.tar.gz" "LocalSR-v$VERSION-source-and-notices.tar.gz" > SHA256SUMS)
-(cd "$ENGINE_OUT" && shasum -a 256 "$ENGINE_MANIFEST" "$ENGINE_UPDATE" *.part-* >> "$OUT/SHA256SUMS")
-python3 - "$OUT" "$VERSION" "$COMMIT" "$LOCALSR_ENGINE_ID" "$HOST_BASE" "$ENGINE_MANIFEST" "$ENGINE_UPDATE" <<'PY'
+(cd "$ENGINE_OUT" && shasum -a 256 "$ENGINE_MANIFEST" "$ENGINE_UPDATE" "$ENGINE_FILES" *.part-* >> "$OUT/SHA256SUMS")
+python3 - "$OUT" "$VERSION" "$COMMIT" "$LOCALSR_ENGINE_ID" "$HOST_BASE" "$ENGINE_MANIFEST" "$ENGINE_UPDATE" "$ENGINE_FILES" <<'PY'
 import datetime, hashlib, json, os, sys, tarfile
-out, version, commit, engine_id, host, manifest_name, update_name = sys.argv[1:]
+out, version, commit, engine_id, host, manifest_name, update_name, files_name = sys.argv[1:]
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -178,6 +180,7 @@ contract = {
         "id": engine_id,
         "manifest": download_file(f"{out}/engine/{update_name}", update_name),
         "parts": parts,
+        "files": download_file(f"{out}/engine/{files_name}", files_name),
     },
 }
 feed = {

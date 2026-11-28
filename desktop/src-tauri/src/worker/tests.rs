@@ -815,6 +815,38 @@ fn only_a_native_fault_counts_as_a_crash() {
 }
 
 #[test]
+fn an_engine_that_ended_unasked_is_hashed_again_before_its_restart() {
+    let state = idle_state();
+    let run = 3;
+    state.worker.generation.store(run, Ordering::SeqCst);
+    // It ended by itself, whatever its exit code: another program can end it with 0.
+    assert!(engine_exit_unexpected(&state.worker, run, false));
+    // LocalSR stopped it (Stop, a late restart).
+    assert!(!engine_exit_unexpected(&state.worker, run, true));
+
+    // LocalSR asked it to exit for a new model folder: that run, and no later one.
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    restart_for_model_directory(&state);
+    assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+    assert!(!engine_exit_unexpected(&state.worker, run, false));
+    assert!(engine_exit_unexpected(&state.worker, run + 2, false));
+
+    // Quitting or switching engines asks it to exit too, also once an engine switch has
+    // cleared the stop.
+    let quitting = idle_state();
+    quitting.worker.generation.store(run, Ordering::SeqCst);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&quitting.worker.sender).unwrap() = Some(sender);
+    shutdown(&quitting);
+    assert!(receiver.try_recv().unwrap().contains("shutdown_request"));
+    quitting.worker.shutting_down.store(false, Ordering::SeqCst);
+    assert!(!engine_exit_unexpected(&quitting.worker, run, false));
+    assert!(engine_exit_unexpected(&quitting.worker, run + 2, false));
+}
+
+#[test]
 fn counters_at_the_largest_value_do_not_overflow() {
     for (kind, data) in [
         (
@@ -1201,6 +1233,241 @@ fn a_dispatched_batch_shows_its_first_photo_and_keeps_the_others_queued() {
     // Nothing else is dispatched while the batch runs.
     assert!(!begin_dispatch(&state, true).unwrap());
     lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_queued_job_naming_an_unapproved_checkpoint_fails_and_the_next_runs_without_the_permission() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    let output = directory.path().join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    let db = lock(&state.database).unwrap();
+    // Requests as the queue file holds them.
+    for (id, approved) in [("a", Some("1".repeat(64))), ("b", None)] {
+        let mut job = photo_job(id);
+        job["data"]["output_path"] = json!(output.join(format!("{id}.png")));
+        job["data"]["model_path"] = json!("/models/own.pth");
+        job["data"]["approved_checkpoint_sha256"] = json!(approved);
+        job["data"]["allow_unverified_checkpoint"] = json!(true);
+        db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+            .unwrap();
+        db.insert_job(id, id, &job.to_string()).unwrap();
+    }
+    drop(db);
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    assert!(begin_dispatch(&state, false).unwrap());
+    assert_eq!(status(&state, "a"), "failed");
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["data"]["job_id"], "b");
+    assert_eq!(sent["data"]["allow_unverified_checkpoint"], json!(false));
+    assert!(receiver.try_recv().is_err());
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn a_queued_photo_with_a_jobs_field_is_checked_and_sent_as_one_job() {
+    let directory = tempfile::tempdir().unwrap();
+    let state =
+        Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap());
+    let output = directory.path().join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    let db = lock(&state.database).unwrap();
+    for (id, approved) in [("a", Some("1".repeat(64))), ("b", None)] {
+        let mut job = photo_job(id);
+        job["data"]["output_path"] = json!(output.join(format!("{id}.png")));
+        job["data"]["model_path"] = json!("/models/own.pth");
+        job["data"]["approved_checkpoint_sha256"] = json!(approved);
+        job["data"]["allow_unverified_checkpoint"] = json!(true);
+        job["data"]["jobs"] = json!([]);
+        db.insert_media(id, &format!("/in/{id}.png"), id, "image")
+            .unwrap();
+        db.insert_job(id, id, &job.to_string()).unwrap();
+    }
+    drop(db);
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+
+    assert!(begin_dispatch(&state, false).unwrap());
+    assert_eq!(status(&state, "a"), "failed");
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["type"], "job_request");
+    assert_eq!(sent["data"]["job_id"], "b");
+    assert_eq!(sent["data"]["allow_unverified_checkpoint"], json!(false));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+/// A state with the queued request `request` (job "q") and an engine ready for it.
+fn queued(directory: &std::path::Path, mut request: Value) -> Arc<AppState> {
+    let state = Arc::new(AppState::from_paths(crate::paths::AppPaths::under(directory)).unwrap());
+    let output = directory.join("out");
+    std::fs::create_dir_all(&output).unwrap();
+    request["data"]["job_id"] = json!("q");
+    let key = if request["type"] == "video_job_request" {
+        "output_video_path"
+    } else {
+        "output_path"
+    };
+    request["data"][key] = json!(output.join("q.out"));
+    let db = lock(&state.database).unwrap();
+    db.insert_media("q", "/in/q.png", "q", "image").unwrap();
+    db.insert_job("q", "q", &request.to_string()).unwrap();
+    drop(db);
+    ready_for_batches(&state);
+    state
+}
+
+#[test]
+fn a_queued_edit_runs_the_editing_runtime_the_host_resolves_when_it_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let program = |name: &str| {
+        let path = directory.path().join(name).join("sd-cli");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"program").unwrap();
+        std::fs::canonicalize(path).unwrap()
+    };
+    let (found, other, chosen) = (program("engine"), program("other"), program("chosen"));
+    let edit = |runtime: &std::path::Path| {
+        json!({"type": "edit_job_request", "data": {
+            "image_path": "/in/q.png", "runtime_path": runtime.to_string_lossy()
+        }})
+    };
+    let dispatch = |state: &Arc<AppState>| -> Option<Value> {
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        begin_dispatch(state, false).unwrap();
+        let sent = receiver
+            .try_recv()
+            .ok()
+            .map(|line| serde_json::from_str(&line).unwrap());
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+        sent
+    };
+
+    // The queue file names another program: the runtime the host found is sent.
+    let state = queued(&directory.path().join("a"), edit(&other));
+    *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+    let sent = dispatch(&state).unwrap();
+    assert_eq!(sent["type"], "edit_job_request");
+    assert_eq!(sent["data"]["runtime_path"], json!(found.to_string_lossy()));
+
+    // One the user chose in LocalSR's file dialog stays.
+    let state = queued(&directory.path().join("b"), edit(&chosen));
+    *lock(&state.edit_runtime).unwrap() = found.to_string_lossy().into_owned();
+    state.edit_programs.grant(&chosen.to_string_lossy());
+    let sent = dispatch(&state).unwrap();
+    assert_eq!(
+        sent["data"]["runtime_path"],
+        json!(chosen.to_string_lossy())
+    );
+
+    // Without a runtime of its own the host sends nothing, and the job fails.
+    let state = queued(&directory.path().join("c"), edit(&other));
+    assert!(dispatch(&state).is_none());
+    assert_eq!(status(&state, "q"), "failed");
+}
+
+#[test]
+fn a_queued_video_runs_the_ffmpeg_the_settings_name_when_it_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, setting) in ["/opt/tools/ffmpeg", ""].into_iter().enumerate() {
+        let request = json!({"type": "video_job_request", "data": {
+            "video_path": "/in/q.mov", "external_ffmpeg": "/opt/other/ffmpeg"
+        }});
+        let state = queued(&directory.path().join(index.to_string()), request);
+        lock(&state.settings).unwrap().external_ffmpeg_path = setting.into();
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap());
+        let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(sent["type"], "video_job_request");
+        if setting.is_empty() {
+            assert!(sent["data"].get("external_ffmpeg").is_none(), "{sent}");
+        } else {
+            assert_eq!(sent["data"]["external_ffmpeg"], json!(setting));
+        }
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+}
+
+#[test]
+fn a_queued_request_of_a_kind_the_queue_never_holds_fails_unsent() {
+    let directory = tempfile::tempdir().unwrap();
+    for (index, kind) in [
+        "media_probe_request",
+        "benchmark_request",
+        "image_batch_request",
+        "shutdown_request",
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let request = json!({"type": kind, "data": {
+            "media_path": "/in/q.mov", "external_ffmpeg": "/opt/other/ffmpeg", "jobs": []
+        }});
+        let state = queued(&directory.path().join(index.to_string()), request);
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        assert!(begin_dispatch(&state, false).unwrap(), "{kind}");
+        assert!(receiver.try_recv().is_err(), "{kind}");
+        assert_eq!(status(&state, "q"), "failed", "{kind}");
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+    }
+}
+
+#[test]
+fn a_first_job_changed_in_the_queue_file_after_its_check_is_not_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let state = batch_state(directory.path());
+    ready_for_batches(&state);
+    let (sender, receiver) = mpsc::channel();
+    *lock(&state.worker.sender).unwrap() = Some(sender);
+    // Another program rewrites the first job between the two reads of the queue: it now
+    // names an own checkpoint the user never approved.
+    let mut changed = photo_job("a");
+    changed["data"]["output_path"] = json!(directory.path().join("out/a.png"));
+    changed["data"]["model_path"] = json!("/models/own.pth");
+    changed["data"]["approved_checkpoint_sha256"] = json!("1".repeat(64));
+    changed["data"]["allow_unverified_checkpoint"] = json!(true);
+    let queue = state.paths.database.clone();
+    BETWEEN_QUEUE_READS.set(Some(Box::new(move || {
+        rusqlite::Connection::open(queue)
+            .unwrap()
+            .execute(
+                "UPDATE jobs SET request_json=?1 WHERE id='a'",
+                [changed.to_string()],
+            )
+            .unwrap();
+    })));
+
+    assert!(begin_dispatch(&state, true).unwrap());
+    assert_eq!(status(&state, "a"), "failed");
+    let sent: Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+    assert_eq!(sent["type"], "image_batch_request");
+    let jobs = sent["data"]["jobs"].as_array().unwrap();
+    assert_eq!(
+        jobs.iter()
+            .map(|job| string(job, "job_id"))
+            .collect::<Vec<_>>(),
+        ["b", "c"]
+    );
+    assert!(jobs
+        .iter()
+        .all(|job| job["allow_unverified_checkpoint"] != json!(true)));
+    lock(&state.worker.cancellation).unwrap().finish().unwrap();
+}
+
+#[test]
+fn engine_processes_never_take_the_pickle_permission_from_the_environment() {
+    let mut command = Command::new("engine");
+    set_helper_overrides(&mut command).unwrap();
+    assert!(command
+        .get_envs()
+        .any(|(name, value)| name == "LOCALSR_ALLOW_UNVERIFIED_CHECKPOINTS" && value.is_none()));
 }
 
 #[test]
@@ -2489,6 +2756,7 @@ fn write_installed_engine(
         files: crate::updates::test_engine_files(next_root, id),
     };
     crate::updates::write_engine_meta(next_root, &meta).unwrap();
+    crate::engine_files::test_signing::write_list_for_installed(next_root, id);
     meta
 }
 
@@ -2511,7 +2779,8 @@ fn codec_helper_reuses_the_verified_worker_run_and_never_changes_engine_state() 
                 destination.join(crate::updates::worker_executable_name()),
                 b"new",
             )?;
-            Ok(files)
+            let list = crate::engine_files::test_signing::list_of(id, &files);
+            Ok((files, list))
         },
         |_| Ok(()),
     )

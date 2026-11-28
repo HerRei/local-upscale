@@ -373,7 +373,7 @@ jobs:
               files+=("$installer" "$installer.sha256")
             fi
           done
-          files+=(assets/*.engine.tar.gz.part-* assets/*.engine-payload.json assets/*.engine-update.json \
+          files+=(assets/*.engine.tar.gz.part-* assets/*.engine-payload.json assets/*.engine-update.json assets/*.engine-files.json \
             assets/*-source-and-notices.tar.gz)
           test "${#files[@]}" -gt 0
           gh release upload "$RELEASE_TAG" "${files[@]}" --repo "$GITHUB_REPOSITORY" --clobber

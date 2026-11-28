@@ -239,7 +239,8 @@ who do need that engine:
   "manifest": { "name": "worker.engine-update.json", "url": "…", "size": 1234, "sha256": "…", "signature": "…" },
   "parts": [
     { "name": "worker.engine.tar.gz.part-0001", "url": "…", "size": 123456, "sha256": "…", "signature": "…" }
-  ]
+  ],
+  "files": { "name": "worker.engine-files.json", "url": "…", "size": 4567, "sha256": "…", "signature": "…" }
 }
 ```
 
@@ -280,6 +281,39 @@ checks, signing and feed verification independently calculate the same id. The
 feed's `engine_id`, `engine.id`, and signed statement carry it. Compatibility
 continues to depend on worker protocol versions; different engine ids select
 payloads and do not imply incompatible protocols.
+
+Each engine package also has a file list, `<package>.engine-files.json`, signed with the
+updater key like the other files and named by the feed's `engine.files`. It states
+`schema_version` 1, the `engine_id`, `version`, `os`, `arch`, `backend` and
+`protocol_version`, the package's `parts`, and for every file the archive unpacks its
+`path`, `size` and `sha256`. `prepare_engine_payload.py` writes it from the files it
+archives (or, with `--reuse`, reads it from the archive); the signer and
+`verify_prepared_release.py` read the archive again and require exactly that list. The
+release statement does not cover the list, because the clients that require the
+statement's exact fields predate it; the list's own signature and the identity it
+states bind it to one engine and host.
+
+An installation (an app update, the engine manager or an offline import) refuses a
+package without a list, a list that names another engine, host or package, and a package
+whose unpacked files differ from the list in any path, size or digest. The engine's
+folder keeps the list and its signature (`engine-files.signed.json`) beside
+`meta.json`. Every later check of that engine (at worker start, **Verify**, recovery,
+backups and the engine listing) checks the list's signature with the key compiled into
+the host and compares the engine's files with the list; the file list in `meta.json` is
+still written, for older versions after a downgrade, but no check reads it.
+
+An engine installed by an earlier version has no list. It stays installed and selected
+but is not started until it has one; until then the bundled engine runs. LocalSR fetches
+the list that the feed names for that engine id and keeps it once the engine's files
+match it: at start, before an engine is chosen, when the launch check is allowed or the
+engine was installed by the update that just ran, and whenever the feed is read (update
+checks and the engine catalog). While the launch check is off, a notice at start asks
+for one **Check for Updates…** and a restart. An engine whose files do not match its
+release's list, or whose id the feed that was read does not name, is marked **Needs
+reinstall**: LocalSR no longer checks it against the feed or names it in that notice. A
+list that cannot be downloaded leaves the engine waiting for the next read. An engine an
+updater of 0.4.0 to 0.5.0 left without metadata is recorded the same way, for the id the
+host was built for, after a handshake.
 
 The Windows and Linux workflows write the separate payload next to the app with
 `scripts/prepare_engine_payload.py --target <target>`, using the bundled engine
@@ -420,13 +454,13 @@ or AppImage:
 - **On-demand install and offline import.** `install_engine` downloads the signed
   engine manifest and parts into `LocalSR/next/updates/engine-cache/<id>` using
   HTTP Range `.part` files so interrupted or cancelled downloads resume across
-  restarts. `import_engine` installs a downloaded `*.engine-payload.json` and its
-  parts from disk using companion `.sig` files (or matching verified catalog
-  signatures). Both verify minisign signatures and SHA-256 digests, unpack the
-  engine and run its protocol handshake in a staging folder. Under the job lock,
-  LocalSR renames the payload and its `meta.json` together and activates the
-  engine through `active-engine.txt`. The metadata records every extracted file's
-  relative path, size and SHA-256 digest. For a same-ID replacement, LocalSR keeps
+  restarts. `import_engine` installs a downloaded `*.engine-payload.json`, its
+  `*.engine-files.json` list and its parts from disk using companion `.sig` files
+  (or matching verified catalog signatures). Both verify minisign signatures and
+  SHA-256 digests, unpack the engine, compare it with its signed file list and run
+  its protocol handshake in a staging folder. Under the job lock, LocalSR renames
+  the payload, its signed file list and its `meta.json` together and activates the
+  engine through `active-engine.txt`. For a same-ID replacement, LocalSR keeps
   the previous payload and metadata until the replacement completes its first
   normal worker handshake. A start that finds an incomplete or invalid replacement
   can restore the previous copy after verifying it. An app-update rollback also
@@ -449,20 +483,27 @@ or AppImage:
   removing engines require real directories under `engines/`. LocalSR refuses
   symbolic links and Windows reparse points, including junctions. At every worker
   start, LocalSR checks file sizes and hashes the worker executable, native
-  libraries, Python code and archives such as `base_library.zip`, and the native
-  editing helper. It rejects code files missing from the recorded file list.
+  libraries, Python code and archives such as `base_library.zip`, the packages'
+  `entry_points.txt` and the native editing helper. It rejects every file the signed
+  file list does not name, except the `.DS_Store` and `._` files Finder leaves in
+  folders, Explorer's `Thumbs.db` and `desktop.ini` and Dolphin's `.directory`, unless
+  such a file is code by its name, permissions or contents; empty folders do not count.
+  Nothing the engine runs writes into its folder (caches go to the user's cache folders,
+  and the frozen worker writes no bytecode). After an engine stopped in a way LocalSR did
+  not ask for (anything but Stop, quitting, an engine switch, a new model folder or a
+  restart LocalSR forced), whatever its exit code, its next start hashes every code file
+  again.
   Startup verification runs in the background with the bundled engine available
   as fallback. The **Verify** button runs a full SHA-256 check of every recorded
-  file. If verification fails and no previous copy can be recovered at startup,
+  listed file. If verification fails and no previous copy can be recovered at startup,
   LocalSR marks the engine **Needs reinstall**, clears its active selection and
   falls back to the bundled engine. Failed installed engines are excluded until
   the user selects Use or reimports them. App updates keep the user's chosen backend
   and update that backend's engine alongside the host.
 
-  The publisher signs the payload manifest and archive parts. LocalSR derives the
-  per-file hashes during verified extraction and saves them in app data. Later
-  checks compare the engine files with that local record. Authenticating the record
-  independently would require a signed file list or a trust anchor outside app data.
+  The publisher signs the payload manifest, the archive parts and the engine's file
+  list. Later checks compare the engine files with that signed list, whose signature
+  they check each time ([Engine payloads](#engine-payloads)).
 - **Interface.** After the first-launch setup screen's Continue, if the recommended
   GPU engine is not installed, LocalSR offers one dismissable card to download it
   (remembered via `gpu_download_notice_dismissed`). The same engines, progress,

@@ -105,7 +105,12 @@ boundaries, read [video support](../video-support.md).
 Supported `.safetensors` checkpoints can be imported. Unverified pickle or
 TorchScript files are blocked by default. For files whose publisher you trust,
 tick **Allow this pickle-based checkpoint** in the app. Approval is remembered by SHA-256,
-so a changed file needs approval again. A compatible up-to-date engine is required for
+so a changed file needs approval again. LocalSR honours only approvals given in the app:
+each one is sealed with a key the system keeps for LocalSR (the Keychain on macOS, Windows
+data protection, the desktop keyring or a private file on Linux), and an approval without
+a valid seal is asked again; approvals given before 0.7.0 are sealed once at its first
+start. A queued job that names an own checkpoint runs only while its approval holds.
+A compatible up-to-date engine is required for
 pickle-based checkpoints. Safetensors files need no tick. Your checkpoints
 appear in **Your own file** in the model library, where you can rename and select them.
 On the command line, set

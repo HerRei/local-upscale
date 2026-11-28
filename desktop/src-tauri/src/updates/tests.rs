@@ -17,6 +17,7 @@ fn write_test_engine_meta(next_root: &Path, id: &str) {
         },
     )
     .unwrap();
+    crate::engine_files::test_signing::write_list_for_installed(next_root, id);
 }
 
 fn arbitrary_json() -> impl Strategy<Value = serde_json::Value> {
@@ -201,6 +202,14 @@ fn installed_engine_requires_valid_handshake_metadata_for_every_host() {
         },
     )
     .unwrap();
+    // meta.json alone does not vouch for the files: the release-signed list does.
+    for bundled_id in ["macos-arm64-mps-new", id, ""] {
+        assert_eq!(
+            active_engine_for_distribution(&paths, false, bundled_id),
+            None
+        );
+    }
+    crate::engine_files::test_signing::write_list_for_installed(&paths.next_root, id);
     for bundled_id in ["macos-arm64-mps-new", id, ""] {
         assert_eq!(
             active_engine_for_distribution(&paths, false, bundled_id),
@@ -824,6 +833,12 @@ fn engine_fixture_from(
             signature: part["signature"].as_str().unwrap().into(),
         });
     }
+    let files = Some(crate::engine_files::test_signing::package_list(
+        directory,
+        manifest.as_bytes(),
+        id,
+        "engine-files.json",
+    ));
     let update = EngineUpdate {
         id: id.into(),
         manifest: DownloadFile {
@@ -834,6 +849,7 @@ fn engine_fixture_from(
             signature: engine["manifest_signature"].as_str().unwrap().into(),
         },
         parts,
+        files,
     };
     (update, value["public_key"].as_str().unwrap().into())
 }
@@ -872,6 +888,89 @@ fn an_engine_package_is_installed_from_the_manifest_bytes_that_were_verified() {
     fs::create_dir_all(destination.parent().unwrap()).unwrap();
     assert!(install_engine_package(root.path(), &engine, &public_key, &destination).is_err());
     assert!(!destination.exists());
+}
+
+#[test]
+fn an_engine_package_installs_only_with_its_signed_file_list_and_keeps_it() {
+    use crate::engine_files::test_signing;
+    let install = |engine: &EngineUpdate, directory: &Path, public_key: &str| {
+        let next_root = directory.join("next");
+        fs::create_dir_all(&next_root).unwrap();
+        stage_verified_engine(
+            &next_root,
+            &engine.id,
+            directory,
+            engine,
+            public_key,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+            |_| Ok(()),
+        )
+        .map(|staged| {
+            let swap = staged.publish(None, None).unwrap();
+            drop(swap);
+            next_root.join("engines").join(&engine.id)
+        })
+    };
+
+    // Installed with its list, which later checks read.
+    let root = tempfile::tempdir().unwrap();
+    let (engine, public_key) = engine_fixture(root.path());
+    let installed = install(&engine, root.path(), &public_key).unwrap();
+    let os = std::env::consts::OS;
+    let arch = std::env::consts::ARCH;
+    assert!(matches!(
+        crate::engine_files::installed(&installed, &engine.id, os, arch, &public_key),
+        crate::engine_files::Installed::Signed(_)
+    ));
+    assert!(signed_engine_files(&installed, &engine.id, os, arch).is_some());
+
+    // No list in the entry.
+    let root = tempfile::tempdir().unwrap();
+    let (mut engine, public_key) = engine_fixture(root.path());
+    engine.files = None;
+    let error = install(&engine, root.path(), &public_key).err().unwrap();
+    assert!(error.to_string().contains("no signed file list"), "{error}");
+
+    // A list signed by another key, even with the digest the entry states.
+    let root = tempfile::tempdir().unwrap();
+    let (mut engine, public_key) = engine_fixture(root.path());
+    let listed = engine.files.as_mut().unwrap();
+    let bytes = fs::read(root.path().join(&listed.name)).unwrap();
+    listed.signature = test_signing::sign_with_another_key(&bytes);
+    assert!(install(&engine, root.path(), &public_key).is_err());
+
+    // A signed list for this package that names other file contents.
+    let root = tempfile::tempdir().unwrap();
+    let (mut engine, public_key) = engine_fixture(root.path());
+    let listed = engine.files.as_mut().unwrap();
+    let path = root.path().join(&listed.name);
+    let mut document: serde_json::Value =
+        serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    document["files"][0]["sha256"] = serde_json::json!("0".repeat(64));
+    let bytes = serde_json::to_vec(&document).unwrap();
+    fs::write(&path, &bytes).unwrap();
+    listed.size = bytes.len() as u64;
+    listed.sha256 = Sha256::digest(&bytes)
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    listed.signature = test_signing::sign(&bytes);
+    let error = install(&engine, root.path(), &public_key).err().unwrap();
+    assert!(error.to_string().contains("signed file list"), "{error}");
+    assert!(!root.path().join("next/engines").join(&engine.id).exists());
+
+    // A signed list of another engine id.
+    let root = tempfile::tempdir().unwrap();
+    let (mut engine, public_key) = engine_fixture(root.path());
+    let manifest = fs::read(root.path().join(&engine.manifest.name)).unwrap();
+    engine.files = Some(test_signing::package_list(
+        root.path(),
+        &manifest,
+        "linux-x86_64-rocm-another",
+        "engine-files.json",
+    ));
+    assert!(install(&engine, root.path(), &public_key).is_err());
 }
 
 // a planted link at a temporary name never redirects a write.
@@ -1822,6 +1921,7 @@ fn round3_engine_file_names_are_safe_distinct_and_never_the_application_file() {
             id: "abc".into(),
             manifest: part(manifest, 100),
             parts: parts.iter().map(|name| part(name, 10)).collect(),
+            files: None,
         }),
     };
     let valid = |manifest: &str, parts: &[&str]| {
@@ -1833,6 +1933,18 @@ fn round3_engine_file_names_are_safe_distinct_and_never_the_application_file() {
     ));
     assert!(!valid("m.engine-payload.json", &[APPLICATION_FILE]));
     assert!(!valid(APPLICATION_FILE, &["m.part-0001"]));
+    // The file list is one more file in the same folder, under a name of its own.
+    let with_list = |list: &str, size: u64| {
+        let mut contract = contract("m.engine-payload.json", &["m.part-0001"]);
+        contract.engine.as_mut().unwrap().files = Some(part(list, size));
+        validate_contract(&config, "beta", "0.0.13-beta.1", &contract).is_ok()
+    };
+    assert!(with_list("m.engine-files.json", 100));
+    assert!(!with_list("m.part-0001", 100));
+    assert!(!with_list("m.engine-payload.json", 100));
+    assert!(!with_list(APPLICATION_FILE, 100));
+    assert!(!with_list("../m.engine-files.json", 100));
+    assert!(!with_list("m.engine-files.json", 33 * 1024 * 1024));
     assert!(!valid(
         "m.engine-payload.json",
         &["m.part-0001", "m.part-0001"]
@@ -2082,6 +2194,8 @@ fn every_engine_start_rejects_same_size_changes_to_code_files() {
         "_internal/PYZ-00.pyz",
         "_internal/module.py",
         "_internal/module.pyc",
+        "_internal/script.PYW",
+        "_internal/torch-2.14.0.dist-info/entry_points.txt",
         "_internal/edit/sd-cli",
     ] {
         let root = tempfile::tempdir().unwrap();
@@ -2089,6 +2203,7 @@ fn every_engine_start_rejects_same_size_changes_to_code_files() {
         let id = "gpu";
         let engine = paths.next_root.join("engines/gpu/engine");
         fs::create_dir_all(engine.join("_internal/edit")).unwrap();
+        fs::create_dir_all(engine.join(name).parent().unwrap()).unwrap();
         fs::write(engine.join(worker_executable_name()), b"good").unwrap();
         fs::write(engine.join(name), b"good").unwrap();
         fs::write(engine.join("model.safetensors"), b"good").unwrap();
@@ -2117,6 +2232,31 @@ fn every_engine_start_rejects_same_size_changes_to_code_files() {
 }
 
 #[test]
+fn an_engine_whose_files_and_recorded_list_were_both_changed_is_not_started() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "gpu";
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    write_test_engine_meta(&paths.next_root, id);
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+
+    // Other code in the folder, and meta.json rewritten to list it.
+    fs::write(engine.join(worker_executable_name()), b"other!").unwrap();
+    let mut meta = read_engine_meta(&paths.next_root, id).unwrap();
+    meta.files = test_engine_files(&paths.next_root, id);
+    write_engine_meta(&paths.next_root, &meta).unwrap();
+
+    assert!(full_verify_engine_files(&paths.next_root, id, &meta).is_err());
+    let mut failed = HashSet::new();
+    assert_eq!(
+        verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+        Some(id)
+    );
+}
+
+#[test]
 fn engine_start_rejects_code_without_an_installed_checksum() {
     let root = tempfile::tempdir().unwrap();
     let paths = crate::paths::AppPaths::under(root.path());
@@ -2133,6 +2273,96 @@ fn engine_start_rejects_code_without_an_installed_checksum() {
         verify_active_engine_at_start(&paths, &mut failed).as_deref(),
         Some(id)
     );
+}
+
+#[test]
+fn engine_start_refuses_every_file_its_list_does_not_name() {
+    let install = |root: &Path| {
+        let paths = crate::paths::AppPaths::under(root);
+        let engine = paths.next_root.join("engines/gpu/engine");
+        fs::create_dir_all(engine.join("_internal")).unwrap();
+        fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+        write_test_engine_meta(&paths.next_root, "gpu");
+        fs::write(paths.next_root.join("active-engine.txt"), "gpu").unwrap();
+        (paths, engine)
+    };
+    for name in [
+        "_internal/script.pyw",
+        "_internal/torch-2.14.0.dist-info/entry_points.txt",
+        "_internal/notes.txt",
+        "_internal/.ds_store",
+        "_internal/.Directory",
+        "_internal/.nfs000000000000001a00000001",
+        // A name of the kind a file manager leaves is still refused when it is code.
+        "_internal/._library.dylib",
+        "_internal/._script.py",
+        "_internal/cache/index.json",
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (paths, engine) = install(root.path());
+        let path = engine.join(name);
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"extra").unwrap();
+
+        // Reported as an engine whose files changed.
+        assert!(
+            !installed_engine_looks_intact(&paths.next_root, "gpu"),
+            "{name}"
+        );
+        let mut failed = HashSet::new();
+        assert_eq!(
+            verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+            Some("gpu"),
+            "{name}"
+        );
+        assert!(
+            !read_engine_meta(&paths.next_root, "gpu")
+                .unwrap()
+                .verified_install
+        );
+        assert!(!paths.next_root.join("active-engine.txt").exists());
+    }
+
+    // What file managers leave in a folder that was opened, and empty folders, do not count.
+    let root = tempfile::tempdir().unwrap();
+    let (paths, engine) = install(root.path());
+    fs::write(engine.join(".DS_Store"), b"finder").unwrap();
+    fs::write(engine.join("_internal/Thumbs.db"), b"explorer").unwrap();
+    fs::write(engine.join("_internal/desktop.ini"), b"explorer").unwrap();
+    fs::write(engine.join(".directory"), b"[Desktop Entry]").unwrap();
+    fs::write(
+        engine.join("_internal/._model.safetensors"),
+        b"\x00\x05\x16\x07apple double",
+    )
+    .unwrap();
+    fs::create_dir_all(engine.join("_internal/empty")).unwrap();
+    assert!(installed_engine_looks_intact(&paths.next_root, "gpu"));
+    let mut failed = HashSet::new();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+
+    // Such a name with a program's permissions or contents counts.
+    for (name, contents) in [
+        ("_internal/._helper", b"\x7fELF-helper".as_slice()),
+        ("._Thumbs", b"MZ-program".as_slice()),
+    ] {
+        let root = tempfile::tempdir().unwrap();
+        let (paths, engine) = install(root.path());
+        fs::write(engine.join(name), contents).unwrap();
+        assert!(
+            !installed_engine_looks_intact(&paths.next_root, "gpu"),
+            "{name}"
+        );
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempfile::tempdir().unwrap();
+        let (paths, engine) = install(root.path());
+        let helper = engine.join("._tool");
+        fs::write(&helper, b"#!/bin/sh").unwrap();
+        fs::set_permissions(&helper, fs::Permissions::from_mode(0o755)).unwrap();
+        assert!(!installed_engine_looks_intact(&paths.next_root, "gpu"));
+    }
 }
 
 fn setup_cached_check_engine(root: &Path, id: &str) -> (crate::paths::AppPaths, PathBuf) {
@@ -2220,6 +2450,29 @@ fn replacing_code_file_by_rename_hashes_again() {
 }
 
 #[test]
+fn a_forgotten_engine_is_hashed_again_and_other_engines_keep_their_checks() {
+    let root = tempfile::tempdir().unwrap();
+    let other_root = tempfile::tempdir().unwrap();
+    let id = "gpu";
+    let (paths, _engine) = setup_cached_check_engine(root.path(), id);
+    let (other, _other_engine) = setup_cached_check_engine(other_root.path(), id);
+    let mut failed = HashSet::new();
+    for paths in [&paths, &other] {
+        reset_engine_file_hash_count();
+        assert_eq!(verify_active_engine_at_start(paths, &mut failed), None);
+        assert_eq!(engine_file_hash_count(), 2);
+    }
+
+    forget_verified_engine_code(&paths.next_root, id);
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 2);
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&other, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 0);
+}
+
+#[test]
 fn full_check_after_cached_code_check_still_hashes_everything() {
     let root = tempfile::tempdir().unwrap();
     let id = "gpu";
@@ -2257,15 +2510,27 @@ fn changed_expected_sha256_in_metadata_does_not_reuse_cache_entry() {
     assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
     assert_eq!(engine_file_hash_count(), 2);
 
-    let mut next_meta = original_meta.clone();
-    let lib_entry = next_meta
-        .files
+    let mut changed = original_meta.files.clone();
+    let lib_entry = changed
         .iter_mut()
         .find(|entry| entry.path == "_internal/library.dylib")
         .unwrap();
     lib_entry.sha256 = "0".repeat(64);
-    write_engine_meta(&paths.next_root, &next_meta).unwrap();
+    // meta.json is not what the start checks: a changed digest there changes nothing.
+    write_engine_meta(
+        &paths.next_root,
+        &EngineMeta {
+            files: changed.clone(),
+            ..original_meta.clone()
+        },
+    )
+    .unwrap();
+    reset_engine_file_hash_count();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(engine_file_hash_count(), 0);
 
+    // A signed list with another digest does not reuse the cached result.
+    crate::engine_files::test_signing::write_list(&paths.next_root, id, &changed);
     reset_engine_file_hash_count();
     assert_eq!(
         verify_active_engine_at_start(&paths, &mut failed).as_deref(),
@@ -2273,9 +2538,10 @@ fn changed_expected_sha256_in_metadata_does_not_reuse_cache_entry() {
     );
     assert_eq!(engine_file_hash_count(), 1);
 
-    // The mismatch removed the entry, so verifying against the original metadata re-hashes it.
+    // The mismatch removed the entry, so verifying against the original list re-hashes it.
     failed.clear();
     write_engine_meta(&paths.next_root, &original_meta).unwrap();
+    crate::engine_files::test_signing::write_list(&paths.next_root, id, &original_meta.files);
     fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
 
     reset_engine_file_hash_count();
@@ -2543,6 +2809,48 @@ fn engine_from_older_updater(next_root: &Path, id: &str) -> PathBuf {
     engine
 }
 
+/// The signed list a release publishes for the files now in engine `id`'s folder.
+fn release_list_for(
+    next_root: &Path,
+    id: &str,
+    backend: &str,
+) -> crate::engine_files::EngineFileList {
+    use crate::engine_files::test_signing;
+    let part = crate::engine_payload::ManifestPart {
+        filename: "engine.tar.gz.part-0001".into(),
+        size: 1,
+        sha256: "0".repeat(64),
+    };
+    let (bytes, signature) = test_signing::signed_list(
+        id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        backend,
+        &[part],
+        &test_engine_files(next_root, id),
+    );
+    crate::engine_files::EngineFileList::verify(&bytes, &signature, &test_signing::public_key())
+        .unwrap()
+}
+
+fn anchor(
+    next_root: &Path,
+    id: &str,
+    list: &crate::engine_files::EngineFileList,
+    compiled: &str,
+    handshake: bool,
+) -> AppResult<()> {
+    anchor_installed_engine(
+        next_root,
+        id,
+        list,
+        compiled,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        |_| handshake,
+    )
+}
+
 #[test]
 fn an_engine_installed_by_an_older_updater_is_recorded_after_a_handshake_and_then_used() {
     let root = tempfile::tempdir().unwrap();
@@ -2551,37 +2859,33 @@ fn an_engine_installed_by_an_older_updater_is_recorded_after_a_handshake_and_the
     let engine = engine_from_older_updater(&paths.next_root, id);
     // Without metadata a host ignores it: with no bundled engine, nothing would run.
     assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
 
-    let mut announced = false;
     let mut checked = None;
-    assert!(adopt_engine_from_older_updater(
+    anchor_installed_engine(
         &paths.next_root,
         id,
-        "cuda",
-        || announced = true,
+        &list,
+        id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
         |executable| {
             checked = Some(executable.to_path_buf());
             true
         },
-    ));
-    assert!(announced);
+    )
+    .unwrap();
     assert_eq!(checked, Some(engine.join(worker_executable_name())));
     let meta = read_engine_meta(&paths.next_root, id).unwrap();
     assert!(meta.handshake_passed && meta.verified_install);
     assert_eq!(meta.backend, "cuda");
-    assert_eq!(meta.files, test_engine_files(&paths.next_root, id));
+    assert_eq!(meta.files, list.files);
     assert_eq!(
         active_engine_for_distribution(&paths, false, id),
         Some(engine.join(worker_executable_name()))
     );
-    // Once recorded it is not adopted again.
-    assert!(!adopt_engine_from_older_updater(
-        &paths.next_root,
-        id,
-        "cuda",
-        || {},
-        |_| true
-    ));
+    // Once it has a list it is not recorded again.
+    assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
 }
 
 #[test]
@@ -2590,45 +2894,44 @@ fn adoption_leaves_alone_what_it_cannot_vouch_for() {
     let paths = crate::paths::AppPaths::under(root.path());
     let id = "windows-x86_64-cuda-new";
     engine_from_older_updater(&paths.next_root, id);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
+    let unlisted = || {
+        read_engine_meta(&paths.next_root, id).is_none()
+            && engine_lacks_file_list(&paths.next_root, id)
+    };
 
     // A failed handshake records nothing.
-    assert!(!adopt_engine_from_older_updater(
+    assert!(anchor(&paths.next_root, id, &list, id, false).is_err());
+    assert!(unlisted());
+    // Another id than the one this host was built for, or a host without one.
+    assert!(anchor(
         &paths.next_root,
         id,
-        "cuda",
-        || {},
-        |_| false
-    ));
-    assert!(read_engine_meta(&paths.next_root, id).is_none());
-    // Another id than the one this host was built for.
-    assert!(!adopt_engine_from_older_updater(
-        &paths.next_root,
+        &list,
         "windows-x86_64-cuda-other",
-        "cuda",
-        || {},
-        |_| true
-    ));
-    // A host without an engine id (a development build).
-    assert!(!adopt_engine_from_older_updater(
-        &paths.next_root,
-        "",
-        "cuda",
-        || {},
-        |_| true
-    ));
-    // An engine with metadata, even invalid, goes through the usual checks instead.
+        true
+    )
+    .is_err());
+    assert!(anchor(&paths.next_root, id, &list, "", true).is_err());
+    assert!(unlisted());
+    // A list of another engine.
+    let other = release_list_for(&paths.next_root, id, "CUDA");
+    let foreign = {
+        let other_id = "windows-x86_64-cuda-other";
+        let mut moved = other.clone();
+        moved.engine_id = other_id.into();
+        moved
+    };
+    assert!(anchor(&paths.next_root, id, &foreign, id, true).is_err());
+    assert!(unlisted());
+    // An engine with metadata, even invalid, is not recorded anew.
     fs::write(
         paths.next_root.join("engines").join(id).join("meta.json"),
         b"{}",
     )
     .unwrap();
-    assert!(!adopt_engine_from_older_updater(
-        &paths.next_root,
-        id,
-        "cuda",
-        || {},
-        |_| true
-    ));
+    assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
+    assert!(engine_lacks_file_list(&paths.next_root, id));
 }
 
 #[cfg(unix)]
@@ -2638,33 +2941,265 @@ fn adoption_refuses_an_engine_with_a_link() {
     let paths = crate::paths::AppPaths::under(root.path());
     let id = "linux-x86_64-cuda-new";
     let engine = engine_from_older_updater(&paths.next_root, id);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
     std::os::unix::fs::symlink("/etc/passwd", engine.join("_internal/linked")).unwrap();
-    assert!(!adopt_engine_from_older_updater(
+    assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
+    // Its files cannot match a list: it is marked for reinstallation, not recorded.
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(!meta.verified_install && !meta.handshake_passed);
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+}
+
+#[test]
+fn an_engine_whose_files_differ_from_its_signed_list_is_marked_for_reinstallation() {
+    let offered = |paths: &crate::paths::AppPaths, compiled: &str| {
+        crate::engine_manager::engines_without_file_list(
+            &paths.next_root,
+            compiled,
+            std::env::consts::OS,
+            std::env::consts::ARCH,
+        )
+    };
+    // Without metadata, as an updater of 0.4.0 to 0.5.0 left it.
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "windows-x86_64-cuda-new";
+    let engine = engine_from_older_updater(&paths.next_root, id);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
+    fs::write(engine.join("_internal/torch_cuda.dll"), b"changed").unwrap();
+    assert_eq!(offered(&paths, id), vec![id.to_owned()]);
+    assert!(anchor_installed_engine(
         &paths.next_root,
         id,
-        "cuda",
-        || {},
-        |_| true
-    ));
-    assert!(read_engine_meta(&paths.next_root, id).is_none());
+        &list,
+        id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        |_| panic!("an engine whose files differ is not started"),
+    )
+    .is_err());
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(!meta.verified_install && !meta.handshake_passed);
+    assert_eq!((meta.id.as_str(), meta.backend.as_str()), (id, "cuda"));
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert!(offered(&paths, id).is_empty());
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+    // Its files put back, it stays marked until it is installed again.
+    fs::write(engine.join("_internal/torch_cuda.dll"), b"library").unwrap();
+    assert!(anchor(&paths.next_root, id, &list, id, true).is_err());
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+
+    // With metadata, as 0.5.2 to 0.6 wrote it: a file of the list is missing.
+    let recorded = |next_root: &Path, id: &str| {
+        write_engine_meta(
+            next_root,
+            &EngineMeta {
+                id: id.into(),
+                backend: "cuda".into(),
+                os: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(),
+                protocol_version: PROTOCOL_VERSION,
+                handshake_passed: true,
+                verified_install: true,
+                version: "0.6.3-beta".into(),
+                files: test_engine_files(next_root, id),
+            },
+        )
+        .unwrap();
+    };
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "gpu";
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    fs::write(engine.join("_internal/library.dll"), b"library").unwrap();
+    recorded(&paths.next_root, id);
+    let list = release_list_for(&paths.next_root, id, "CUDA");
+    fs::remove_file(engine.join("_internal/library.dll")).unwrap();
+    assert_eq!(offered(&paths, "other"), vec![id.to_owned()]);
+    assert!(anchor(&paths.next_root, id, &list, "other", true).is_err());
+    let meta = read_engine_meta(&paths.next_root, id).unwrap();
+    assert!(!meta.verified_install);
+    assert_eq!(meta.backend, "cuda");
+    assert!(engine_lacks_file_list(&paths.next_root, id));
+    assert!(offered(&paths, "other").is_empty());
+
+    // A list that names another engine says nothing about these files: it waits.
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    recorded(&paths.next_root, id);
+    let mut foreign = release_list_for(&paths.next_root, id, "CUDA");
+    foreign.engine_id = "other".into();
+    assert!(anchor(&paths.next_root, id, &foreign, "other", true).is_err());
+    assert!(
+        read_engine_meta(&paths.next_root, id)
+            .unwrap()
+            .verified_install
+    );
+    assert_eq!(offered(&paths, "other"), vec![id.to_owned()]);
+}
+
+#[test]
+fn an_engine_recorded_by_an_earlier_version_waits_for_its_signed_list_and_is_then_started() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "gpu";
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(engine.join("_internal")).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    fs::write(engine.join("_internal/library.dll"), b"library").unwrap();
+    // meta.json as 0.5.2 to 0.6 write it, and no list.
+    write_engine_meta(
+        &paths.next_root,
+        &EngineMeta {
+            id: id.into(),
+            backend: "cuda".into(),
+            os: std::env::consts::OS.into(),
+            arch: std::env::consts::ARCH.into(),
+            protocol_version: PROTOCOL_VERSION,
+            handshake_passed: true,
+            verified_install: true,
+            version: "0.6.3-beta".into(),
+            files: test_engine_files(&paths.next_root, id),
+        },
+    )
+    .unwrap();
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+
+    // Not started, and neither marked for reinstallation nor deactivated.
+    let mut failed = HashSet::new();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert!(failed.is_empty());
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
+    assert!(
+        read_engine_meta(&paths.next_root, id)
+            .unwrap()
+            .verified_install
+    );
+    assert!(paths.next_root.join("active-engine.txt").exists());
+
+    // With the files the list names it is recorded, and started from then on.
+    let list = release_list_for(&paths.next_root, id, "CUDA");
+    anchor(&paths.next_root, id, &list, "other", false).unwrap();
+    assert!(!engine_lacks_file_list(&paths.next_root, id));
+    assert_eq!(
+        read_engine_meta(&paths.next_root, id).unwrap().files,
+        list.files
+    );
+    assert_eq!(
+        active_engine_for_distribution(&paths, false, id),
+        Some(engine.join(worker_executable_name()))
+    );
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert!(full_verify_engine_files(
+        &paths.next_root,
+        id,
+        &read_engine_meta(&paths.next_root, id).unwrap()
+    )
+    .is_ok());
+}
+
+#[test]
+fn a_removed_or_replaced_list_does_not_make_a_changed_engine_start() {
+    let root = tempfile::tempdir().unwrap();
+    let paths = crate::paths::AppPaths::under(root.path());
+    let id = "gpu";
+    let engine = paths.next_root.join("engines/gpu/engine");
+    fs::create_dir_all(&engine).unwrap();
+    fs::write(engine.join(worker_executable_name()), b"worker").unwrap();
+    write_test_engine_meta(&paths.next_root, id);
+    fs::write(paths.next_root.join("active-engine.txt"), id).unwrap();
+    let list_path = paths
+        .next_root
+        .join("engines/gpu")
+        .join(crate::engine_files::SIGNED_LIST_FILE);
+
+    // A list for these files signed by another key.
+    fs::write(engine.join(worker_executable_name()), b"other!").unwrap();
+    let mut meta = read_engine_meta(&paths.next_root, id).unwrap();
+    meta.files = test_engine_files(&paths.next_root, id);
+    write_engine_meta(&paths.next_root, &meta).unwrap();
+    let (bytes, _) = crate::engine_files::test_signing::signed_list(
+        id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
+        "CPU",
+        &[crate::engine_payload::ManifestPart {
+            filename: "engine.tar.gz.part-0001".into(),
+            size: 1,
+            sha256: "0".repeat(64),
+        }],
+        &meta.files,
+    );
+    fs::write(
+        &list_path,
+        serde_json::to_vec(&serde_json::json!({
+            "document": String::from_utf8(bytes.clone()).unwrap(),
+            "signature": crate::engine_files::test_signing::sign_with_another_key(&bytes),
+        }))
+        .unwrap(),
+    )
+    .unwrap();
+    assert!(full_verify_engine_files(&paths.next_root, id, &meta).is_err());
+    let mut failed = HashSet::new();
+    assert_eq!(
+        verify_active_engine_at_start(&paths, &mut failed).as_deref(),
+        Some(id)
+    );
+
+    // Without its list a recorded engine is not started either, and a later list from the
+    // release does not match the changed file.
+    fs::remove_file(&list_path).unwrap();
+    let mut failed = HashSet::new();
+    assert_eq!(verify_active_engine_at_start(&paths, &mut failed), None);
+    assert_eq!(active_engine_for_distribution(&paths, false, id), None);
 }
 
 /// The new host's half of `scripts/upgrade_check.py`: after an older release's own updater
-/// installed this release's engine under `LSR_PROBE_ROOT`, the host must record that
-/// engine, start it (a real handshake) and choose it.
+/// installed this release's engine under `LSR_PROBE_ROOT`, the host must check it against
+/// the signed file list the feed names (which that updater ignored), record it, start it
+/// (a real handshake) and choose it.
 #[test]
 #[ignore = "run by scripts/upgrade_check.py on an engine an older updater installed"]
 fn upgrade_check_the_new_host_records_and_starts_the_engine_an_older_updater_installed() {
     let setting = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("{name} is not set"));
     let paths = crate::paths::AppPaths::under(Path::new(&setting("LSR_PROBE_ROOT")));
     let id = setting("LSR_PROBE_ENGINE_ID");
+    let public_key = setting("LSR_PROBE_PUBLIC_KEY");
+    let feed: serde_json::Value =
+        serde_json::from_slice(&fs::read(setting("LSR_PROBE_FEED")).unwrap()).unwrap();
+    let contract: ReleaseContract =
+        serde_json::from_value(feed["platforms"][setting("LSR_PROBE_KEY")]["localsr"].clone())
+            .unwrap_or_else(|error| panic!("PROBE FAILED: the feed entry: {error}"));
+    let file = contract
+        .engine
+        .as_ref()
+        .and_then(|engine| engine.files.clone())
+        .unwrap_or_else(|| panic!("PROBE FAILED: the feed names no engine file list"));
+    let list = read_verified(
+        &Path::new(&setting("LSR_PROBE_FILES")).join(&file.name),
+        &file,
+        &public_key,
+    )
+    .and_then(|bytes| {
+        crate::engine_files::EngineFileList::verify(&bytes, &file.signature, &public_key)
+    })
+    .unwrap_or_else(|error| panic!("PROBE FAILED: the engine file list: {error}"));
     let work = tempfile::tempdir().unwrap();
     let mut handshake = String::from("not run");
-    let recorded = adopt_engine_from_older_updater(
+    let recorded = anchor_installed_engine(
         &paths.next_root,
         &id,
-        &setting("LSR_PROBE_BACKEND"),
-        || {},
+        &list,
+        &id,
+        std::env::consts::OS,
+        std::env::consts::ARCH,
         |executable| {
             let result = crate::headless_smoke::run_worker_handshake(
                 executable,
@@ -2680,8 +3215,8 @@ fn upgrade_check_the_new_host_records_and_starts_the_engine_an_older_updater_ins
         },
     );
     assert!(
-        recorded,
-        "PROBE FAILED: the host did not record the engine; handshake {handshake}"
+        recorded.is_ok(),
+        "PROBE FAILED: the host did not record the engine ({recorded:?}); handshake {handshake}"
     );
     let chosen = active_engine_for_distribution(&paths, false, &id);
     assert_eq!(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import re
@@ -898,6 +899,36 @@ def test_protocol_has_a_distinct_edit_request():
     assert payload["data"]["max_dimension"] == 512
 
 
+def guard_arguments(folder, spec):
+    payload = json.dumps(spec).encode("utf-8")
+    path = folder / "guard.json"
+    path.write_bytes(payload)
+    return [hashlib.sha256(payload).hexdigest(), str(path)]
+
+
+def test_guard_runs_nothing_when_its_plan_differs_from_the_digest(monkeypatch, tmp_path):
+    monkeypatch.setattr(edit_guard, "read_host_memory", lambda _: EditMemory(64 * GIB, 60 * GIB))
+    started = []
+    monkeypatch.setattr(edit_guard.subprocess, "Popen", lambda *a, **k: started.append(a))
+    spec = {
+        "command": [sys.executable, "-c", "pass"],
+        "plan": {
+            "required_ram": GIB,
+            "reserve_ram": 4 * GIB,
+            "gpu_budget": 4 * GIB,
+            "max_dimension": 512,
+            "process_limit": GIB,
+        },
+        "unified": False,
+        "swap_used": 0,
+    }
+    digest, path = guard_arguments(tmp_path, spec)
+    changed = dict(spec, command=[sys.executable, "-c", "print('other')"])
+    Path(path).write_text(json.dumps(changed))
+    assert edit_guard.main([digest, path]) == 2
+    assert started == []
+
+
 def test_guard_terminates_native_child_when_pressure_rises(monkeypatch, tmp_path):
     blocker = threading.Event()
     monkeypatch.setattr(
@@ -933,10 +964,9 @@ def test_guard_terminates_native_child_when_pressure_rises(monkeypatch, tmp_path
         "unified": False,
         "swap_used": 0,
     }
-    path = tmp_path / "guard.json"
-    path.write_text(json.dumps(spec))
+    arguments = guard_arguments(tmp_path, spec)
     try:
-        assert edit_guard.main([str(path)]) == 75
+        assert edit_guard.main(arguments) == 75
         assert children and children[0].poll() is not None
     finally:
         blocker.set()
@@ -957,9 +987,8 @@ def test_guard_treats_worker_pipe_eof_as_cancellation(monkeypatch, tmp_path):
         "unified": False,
         "swap_used": 0,
     }
-    path = tmp_path / "guard.json"
-    path.write_text(json.dumps(spec))
-    assert edit_guard.main([str(path)]) == 130
+    arguments = guard_arguments(tmp_path, spec)
+    assert edit_guard.main(arguments) == 130
 
 
 def run_guard(monkeypatch, tmp_path, samples, child_seconds):
@@ -996,10 +1025,9 @@ def run_guard(monkeypatch, tmp_path, samples, child_seconds):
         "unified": False,
         "swap_used": 0,
     }
-    path = tmp_path / "guard.json"
-    path.write_text(json.dumps(spec))
+    arguments = guard_arguments(tmp_path, spec)
     try:
-        return edit_guard.main([str(path)])
+        return edit_guard.main(arguments)
     finally:
         blocker.set()
 

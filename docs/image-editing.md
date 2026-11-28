@@ -119,6 +119,9 @@ you put them.
 
 ## Memory and lifecycle
 
+- A queued edit runs the editing runtime LocalSR resolves when the edit starts: one
+  chosen in LocalSR's file dialog since it started, otherwise the one that comes with its
+  engine. Without either, the edit fails.
 - Cached restoration models are released before an edit is admitted; the queue runs
   one inference job at a time.
 - Free host memory is checked before any runtime starts, after bundle

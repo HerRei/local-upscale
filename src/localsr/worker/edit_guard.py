@@ -5,6 +5,7 @@ This entry point deliberately never imports torch or the inference server.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import subprocess
@@ -88,7 +89,13 @@ def main(args=None) -> int:
     import psutil
 
     args = sys.argv[1:] if args is None else args
-    spec = json.loads(Path(args[0]).read_text(encoding="utf-8"))
+    digest, path = args
+    payload = Path(path).read_bytes()
+    # The worker passes the plan's digest, so the guard runs exactly the plan it wrote.
+    if hashlib.sha256(payload).hexdigest() != digest:
+        print("The editing plan changed after it was written.", file=sys.stderr, flush=True)
+        return 2
+    spec = json.loads(payload)
     plan = EditPlan(**spec["plan"])
     cancelled = threading.Event()
 
