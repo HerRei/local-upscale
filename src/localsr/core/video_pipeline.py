@@ -191,6 +191,9 @@ class VideoJobConfig:
     # "fps60" or "fps120", run before or after the upscale.
     interpolation: str = "off"
     interpolation_order: str = "after_upscale"
+    # With "x2" or "x4": play the added frames over that many times the length, at the
+    # source's own rate. The result has no audio or subtitles.
+    slow_motion: bool = False
     # Optional speech audio cleanup via DeepFilterNet3 ONNX.
     audio_denoise: bool = False
     audio_denoise_bundle_dir: str | None = None
@@ -262,6 +265,10 @@ def run_video_job(
             model_path="",
             model_info=None,
         )
+
+    if config.slow_motion and config.audio_denoise:
+        # There is no sound to clean, so no cleaned copy is made either.
+        config = replace(config, audio_denoise=False)
 
     if config.video_codec == "auto":
         config = replace(
@@ -698,8 +705,15 @@ def _run_video_frames(
         deinterlace=deinterlace,
     )
     output_frames = run_video_chain(decoded, ctx, stages=stages)
-    if interpolation is not None:
+    if interpolation is not None and not config.slow_motion:
         fps = interpolation.output_fps(fps)
+    # Like a rate override, slow motion changes the length, so sound and subtitles that
+    # would no longer line up are left out.
+    keep_streams = rate_unchanged and not config.slow_motion
+    if config.slow_motion and probe.has_audio:
+        add_note = getattr(engine, "add_note", None)
+        if callable(add_note):
+            add_note("Slow motion · saved without sound")
 
     # The encoder consumes the generator directly so frames never accumulate
     # in memory beyond what PyAV's internal buffers hold. Compatible audio and
@@ -721,8 +735,8 @@ def _run_video_frames(
         crf=config.crf,
         width=output_width,
         height=output_height,
-        audio_source=effective_audio_source if rate_unchanged else None,
-        subtitle_source=raw_audio_source if rate_unchanged and reencode_audio else None,
+        audio_source=effective_audio_source if keep_streams else None,
+        subtitle_source=raw_audio_source if keep_streams and reencode_audio else None,
         reencode_audio=reencode_audio,
         preserve_timing=rate_unchanged,
         cancel_event=cancel_event,
@@ -776,6 +790,8 @@ def _interpolation_target(
 ) -> InterpolationTarget | None:
     """Validate the interpolation request before any model loads."""
     target = InterpolationTarget.parse(config.interpolation)
+    if config.slow_motion and (target is None or not target.multiplier):
+        raise ValueError("Slow motion needs 2× or 4× added frames.")
     if target is None:
         return None
     if config.interpolation_order not in ORDERS:

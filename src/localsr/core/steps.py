@@ -338,6 +338,7 @@ STEPS: tuple[StepDefinition, ...] = (
                 default="after_upscale",
                 choices=("after_upscale", "before_upscale"),
             ),
+            StepParameter(name="slow_motion", kind="bool", default=False),
         ),
     ),
     StepDefinition(

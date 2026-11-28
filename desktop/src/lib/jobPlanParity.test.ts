@@ -484,6 +484,27 @@ function buildCorpus(): ParityCase[] {
     }
   }
 
+  // Slow motion counts for x2 and x4 only, and leaves the Clean audio stage out with it
+  for (const target of ['x2', 'x4', 'fps60'] as const) {
+    for (const hasAudio of [true, null] as const) {
+      push(`video-slow-${target}-aud_${hasAudio}`, {
+        settingsPatch: {
+          task: 'video',
+          video_task: 'upscale',
+          selected_video_model_id: 'frame_by_frame',
+          selected_model_id: 'span_photo_x4',
+          output_scale: 2,
+          video_interpolation: target,
+          video_interpolation_order: 'after_upscale',
+          video_slow_motion: true,
+          video_clean_audio: true,
+        },
+        installedIds: ['span_photo_x4', 'rife_4_26', 'deepfilternet3'],
+        hasAudio,
+      });
+    }
+  }
+
   // 6. Video temporal (SeedVR2 / FlashVSR): target_resolution, fixes ignored, interp ignored, audio kept (24 cases)
   for (const videoModelId of ['flashvsr_v11', 'seedvr2_3b']) {
     for (const targetRes of [0, 720]) {

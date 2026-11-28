@@ -563,6 +563,20 @@
           "ui_default": null,
           "ui_maximum": null,
           "ui_minimum": null
+        },
+        {
+          "choices": [],
+          "default": false,
+          "int_choices": [],
+          "kind": "bool",
+          "maximum": null,
+          "minimum": null,
+          "name": "slow_motion",
+          "nullable": false,
+          "required": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
         }
       ],
       "phase": "temporal",

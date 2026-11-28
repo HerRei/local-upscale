@@ -283,6 +283,60 @@
       "audio_denoise_bundle_dir": "/models/deepfilternet3"
     }
   },
+  "video_slow_motion": {
+    "type": "video_job_request",
+    "data": {
+      "job_id": "sample-video-slow",
+      "video_path": "/input/clip.mp4",
+      "hdr_mode": "tone_map",
+      "model_path": "/models/span.safetensors",
+      "output_video_path": "/out/clip_video_4x_slow.mp4",
+      "container": "mp4",
+      "video_codec": "av1",
+      "external_ffmpeg": "",
+      "crf": 18,
+      "fps": null,
+      "device": "cpu",
+      "tile_size": 256,
+      "halo": 32,
+      "precision": "fp32",
+      "safe_memory": false,
+      "neural_engine": true,
+      "keyframe_interval": null,
+      "start_frame": null,
+      "end_frame": null,
+      "face_model_path": null,
+      "face_fidelity": 0.7,
+      "deflicker": false,
+      "deflicker_window": 3,
+      "model_kind": "spandrel_image",
+      "bundle_dir": null,
+      "temporal_window": 0,
+      "temporal_overlap": 0,
+      "target_resolution": 0,
+      "output_scale": 4,
+      "stages": [
+        {
+          "kind": "upscale",
+          "role": "primary",
+          "model_id": "span_photo_x4",
+          "model_path": "/models/span.safetensors"
+        }
+      ],
+      "allow_unverified_checkpoint": false,
+      "preview_enabled": true,
+      "preview_max_fps": 2.0,
+      "preview_max_dimension": 320,
+      "interpolation": "x2",
+      "interpolation_order": "after_upscale",
+      "slow_motion": true,
+      "interpolation_model_id": "rife_4_26",
+      "interpolation_bundle_dir": "/models/rife_4_26",
+      "audio_denoise": false,
+      "audio_denoise_model_id": null,
+      "audio_denoise_bundle_dir": null
+    }
+  },
   "video_temporal_model": {
     "type": "video_job_request",
     "data": {

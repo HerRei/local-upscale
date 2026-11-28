@@ -393,6 +393,7 @@
                     "output_scale": { "type": ["integer", "null"], "minimum": 1, "maximum": 8 },
                     "interpolation": { "enum": ["off", "x2", "x4", "fps60", "fps120"], "default": "off" },
                     "interpolation_order": { "enum": ["after_upscale", "before_upscale"], "default": "after_upscale" },
+                    "slow_motion": { "type": "boolean", "default": false },
                     "interpolation_model_id": { "type": ["string", "null"] },
                     "interpolation_bundle_dir": { "type": ["string", "null"] },
                     "audio_denoise": { "type": "boolean", "default": false },
