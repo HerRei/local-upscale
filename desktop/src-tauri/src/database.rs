@@ -917,6 +917,15 @@ impl Database {
         Ok(active)
     }
 
+    pub fn job_media_id(&self, id: &str) -> AppResult<Option<String>> {
+        Ok(self
+            .connection
+            .query_row("SELECT media_id FROM jobs WHERE id=?1", [id], |row| {
+                row.get(0)
+            })
+            .optional()?)
+    }
+
     pub fn job_media_name(&self, id: &str) -> AppResult<Option<String>> {
         Ok(self
             .connection

@@ -4,11 +4,14 @@ from __future__ import annotations
 
 import base64
 import io
+import os
+import shutil
 import sys
 import threading
 import time
 import traceback
 from collections.abc import Callable, Mapping
+from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import ExitStack
 from dataclasses import dataclass
 from typing import Any
@@ -89,6 +92,90 @@ class _SaveTask:
     discard_signal: DiscardOnStop
     emit: Callable[[WorkerMessage], None]
     log: Callable[[str], None]
+
+
+class StepFiles:
+    """Full-size pictures of the steps before the main model, written one PNG per step on a
+    background thread so the next step starts at once (the idea of ``SavePipeline``)."""
+
+    def __init__(self, directory: str, log: Callable[[str], None]) -> None:
+        self._directory = directory
+        self._log = log
+        self._pool: ThreadPoolExecutor | None = None
+        self._futures: list[Future[None]] = []
+        self._usable: bool | None = None
+        self._finished = False
+
+    @property
+    def finished(self) -> bool:
+        return self._finished
+
+    def path_of(self, index: int) -> str:
+        return os.path.join(self._directory, f"{index}.png")
+
+    def _prepare(self) -> bool:
+        if self._usable is None:
+            try:
+                os.makedirs(self._directory, exist_ok=True)
+                probe = os.path.join(self._directory, ".probe")
+                with open(probe, "wb"):
+                    pass
+                os.remove(probe)
+                self._pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="localsr-steps")
+                self._usable = True
+            except OSError as error:
+                self._log(f"The step pictures cannot be kept: {error}")
+                self._usable = False
+        return self._usable
+
+    def submit(self, index: int, pixels: np.ndarray, alpha: Any = None) -> str:
+        """Queue the step's picture; returns its path, or "" when no file can be written."""
+        if not self._prepare() or self._pool is None:
+            return ""
+        self._futures.append(self._pool.submit(self._write, index, pixels, alpha))
+        return self.path_of(index)
+
+    def _write(self, index: int, pixels: np.ndarray, alpha: Any) -> None:
+        path = self.path_of(index)
+        partial = path + ".part"
+        try:
+            array = np.asarray(pixels)
+            if array.shape[0] == 1:
+                array = np.repeat(array, 3, axis=0)
+            picture = Image.fromarray(np.ascontiguousarray(array[:3].transpose(1, 2, 0)))
+            if alpha is not None:
+                plane = alpha.convert("L") if getattr(alpha, "mode", "L") != "L" else alpha
+                if plane.size != picture.size:
+                    plane = plane.resize(picture.size, Image.Resampling.BILINEAR)
+                picture.putalpha(plane)
+            picture.save(partial, format="PNG", compress_level=1)
+            os.replace(partial, path)
+        except Exception as error:  # noqa: BLE001 - a missing step file must not stop the job
+            self._log(f"The picture after step {index + 1} could not be kept: {error}")
+            for leftover in (partial, path):
+                try:
+                    os.remove(leftover)
+                except OSError:
+                    pass
+
+    def finish(self) -> None:
+        """Wait for every file; the job's last message must find them complete."""
+        for future in self._futures:
+            future.result()
+        self._futures.clear()
+        if self._pool is not None:
+            self._pool.shutdown(wait=True)
+            self._pool = None
+        self._finished = True
+
+    def discard(self) -> None:
+        """A cancelled or failed job keeps nothing."""
+        if self._pool is not None:
+            self._pool.shutdown(wait=True, cancel_futures=True)
+            self._pool = None
+        self._futures.clear()
+        if self._usable:
+            shutil.rmtree(self._directory, ignore_errors=True)
 
 
 class SavePipeline:
@@ -581,6 +668,7 @@ class ImageJobRunner:
         if scratch:
             cleanup_stale_work_files(scratch)
 
+        step_files: StepFiles | None = None
         try:
             # Ownership begins before image decoding: corrupt media must also
             # release an encoder, and failed writes must release every memmap.
@@ -627,6 +715,12 @@ class ImageJobRunner:
                 if pipeline.preprocess_stages and self.save_pipeline is not None:
                     self.save_pipeline.drain()
                 picture_limit = data.get("stage_picture_max_dimension")
+                if (
+                    picture_limit
+                    and data.get("stage_results_directory")
+                    and (pipeline.preprocess_stages)
+                ):
+                    step_files = StepFiles(str(data["stage_results_directory"]), self._log)
                 for index, stage in enumerate(pipeline.preprocess_stages):
                     working_image = self._run_stage(
                         working_image,
@@ -636,6 +730,7 @@ class ImageJobRunner:
                         progress,
                         notes,
                         picture_limit=int(picture_limit) if picture_limit else None,
+                        step_files=step_files,
                     )
                     if not working_image.get("grayscale", True):
                         manager.grayscale = False
@@ -729,6 +824,8 @@ class ImageJobRunner:
                 emit_save_status(self.emit, job_id, writer, info, data)
                 notes.extend(self._save(manager, writer, image, info, data))
                 notes.extend(self._take_engine_notes())
+            if step_files is not None:
+                step_files.finish()
             completed_at = time.monotonic()
             self.emit(
                 JobCompleted(
@@ -746,6 +843,9 @@ class ImageJobRunner:
             )
         except InterruptedError:
             self.emit(JobCancelled(job_id=job_id))
+        finally:
+            if step_files is not None and not step_files.finished:
+                step_files.discard()
 
     def _take_engine_notes(self) -> list[str]:
         """What the engine's backends said about the route they took, once per job."""
@@ -762,6 +862,7 @@ class ImageJobRunner:
         notes: list[str],
         *,
         picture_limit: int | None = None,
+        step_files: StepFiles | None = None,
     ) -> dict[str, Any]:
         self._check_cancelled()
         progress.start(index, stage)
@@ -821,7 +922,14 @@ class ImageJobRunner:
             if picture_limit is not None:
                 self.emit(
                     self._stage_result(
-                        progress, index, stage, output_image, pixels, skipped_note, picture_limit
+                        progress,
+                        index,
+                        stage,
+                        output_image,
+                        pixels,
+                        skipped_note,
+                        picture_limit,
+                        step_files,
                     )
                 )
             progress.complete(index, stage)
@@ -842,6 +950,7 @@ class ImageJobRunner:
         pixels: np.ndarray | None,
         skipped_note: str | None,
         picture_limit: int,
+        step_files: StepFiles | None = None,
     ) -> StageResult:
         """The 320 px live preview is too small to stand in for the photo between steps, so
         the viewer gets the step's picture at its own size limit."""
@@ -865,6 +974,8 @@ class ImageJobRunner:
             self._log(f"The picture after step {index + 1} could not be made: {error}")
             return result
         result.width, result.height = int(width), int(height)
+        if step_files is not None:
+            result.image_path = step_files.submit(index, pixels, image.get("alpha_image"))
         result.jpeg_base64 = encoded
         result.preview_width, result.preview_height = preview_width, preview_height
         return result

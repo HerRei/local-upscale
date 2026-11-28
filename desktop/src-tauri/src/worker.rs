@@ -23,7 +23,7 @@ use crate::{
     state::{emit_state_changed, lock, AppState},
     types::{
         BenchmarkResult, CapabilityInfo, DeviceInfo, EngineInfo, JobStep, RuntimeStatus,
-        WorkerEnvelope, PROTOCOL_VERSION,
+        StepFilesRun, WorkerEnvelope, PROTOCOL_VERSION,
     },
 };
 
@@ -585,6 +585,9 @@ pub fn start_worker(state: Arc<AppState>, app: AppHandle) -> AppResult<()> {
             // The killed or crashed engine's job ends here, its route note with it.
             let active = runtime.take_active_job();
             stale_steps = runtime.take_job_steps();
+            if let Some(run) = runtime.step_files_run.take() {
+                let _ = std::fs::remove_dir_all(run.directory);
+            }
             // A batch's unfinished photos, or the one active job.
             let mut active_ids = std::mem::take(&mut runtime.active_batch_job_ids);
             if active_ids.is_empty() && !active.is_empty() {
@@ -985,7 +988,8 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         _ => vec![first.clone()],
     };
     let (job_steps, job_step_names) = job_steps_for(&message);
-    offer_stage_pictures(state, &mut message, !job_steps.is_empty())?;
+    let offered = offer_stage_pictures(state, &mut message, !job_steps.is_empty())?;
+    let step_files_run = offer_step_files(state, &mut message, offered, &first, ids.len())?;
     {
         let can_keep_partial = job_can_keep_partial(state, &message);
         let mut runtime = lock(&state.runtime)?;
@@ -1005,6 +1009,13 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         runtime.job_steps = job_steps;
         runtime.job_step_names = job_step_names;
         stale.push(std::mem::take(&mut runtime.result_preview_data_url));
+        // The earlier job's step pictures end here, a new job having started.
+        stale.extend(crate::step_results::release_locked(
+            &mut runtime,
+            None,
+            true,
+        ));
+        runtime.step_files_run = step_files_run;
         drop(runtime);
         cleanup_stale_previews(state, stale)?;
     }
@@ -1019,6 +1030,7 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
         runtime.take_active_job();
         // Nothing ran, so no step has a picture yet.
         runtime.take_job_steps();
+        runtime.step_files_run = None;
         runtime.active_batch_job_ids.clear();
         return Err(error);
     }
@@ -1027,13 +1039,14 @@ fn dispatch_once(state: &Arc<AppState>, batches: bool) -> AppResult<Dispatch> {
 
 /// Asks the engine for each step's picture at the size of a finished result's preview,
 /// when the job has steps and the engine sends them; an older engine refuses the field.
-fn offer_stage_pictures(state: &AppState, message: &mut Value, has_steps: bool) -> AppResult<()> {
+fn offer_stage_pictures(state: &AppState, message: &mut Value, has_steps: bool) -> AppResult<bool> {
     let photo = message["type"] == "job_request";
     let supported = lock(&state.engine)?
         .as_ref()
         .is_some_and(|engine| engine.features.iter().any(|f| f == "stage_results"));
+    let offered = photo && has_steps && supported;
     if let Some(data) = message["data"].as_object_mut().filter(|_| photo) {
-        if has_steps && supported {
+        if offered {
             data.insert(
                 "stage_picture_max_dimension".into(),
                 json!(RESULT_PREVIEW_MAX_DIMENSION),
@@ -1042,7 +1055,43 @@ fn offer_stage_pictures(state: &AppState, message: &mut Value, has_steps: bool) 
             data.remove("stage_picture_max_dimension");
         }
     }
-    Ok(())
+    Ok(offered)
+}
+
+/// A photo job that is alone (not one of a batch, nothing else queued) keeps each step's
+/// full-size picture in a folder of its own; any other job gets no folder, and a request
+/// queued for another engine loses the field.
+fn offer_step_files(
+    state: &AppState,
+    message: &mut Value,
+    offered: bool,
+    job_id: &str,
+    jobs_sent: usize,
+) -> AppResult<Option<StepFilesRun>> {
+    let lone = offered
+        && message["type"] == "job_request"
+        && jobs_sent == 1
+        && lock(&state.database)?.queued_job_count()? <= 1;
+    let Some(data) = message["data"].as_object_mut() else {
+        return Ok(None);
+    };
+    if !lone {
+        data.remove("stage_results_directory");
+        return Ok(None);
+    }
+    let directory = crate::step_results::folder_of(&state.paths.work_root, job_id);
+    data.insert(
+        "stage_results_directory".into(),
+        json!(directory.to_string_lossy()),
+    );
+    let media_id = lock(&state.database)?
+        .job_media_id(job_id)?
+        .unwrap_or_default();
+    Ok(Some(StepFilesRun {
+        job_id: job_id.to_owned(),
+        media_id,
+        directory,
+    }))
 }
 
 /// The status line after a stop that kept the finished part.
@@ -2045,10 +2094,12 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     let crate::types::RuntimeStatus {
                         comparison_pair,
                         preview_original,
+                        last_steps,
                         ..
                     } = &mut *runtime;
                     crate::compare::apply_pair_region(
                         &database,
+                        last_steps.as_ref(),
                         comparison_pair,
                         preview_original,
                         data,
@@ -2231,6 +2282,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             let stale = {
                 let mut runtime = lock(&state.runtime)?;
                 if job_step_index(&runtime, data) == Some(at) {
+                    let has_run = runtime.step_files_run.is_some();
                     let step = &mut runtime.job_steps[at];
                     if skipped {
                         step.state = "skipped".into();
@@ -2238,6 +2290,8 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                     } else if matches!(step.state.as_str(), "waiting" | "running") {
                         step.state = "done".into();
                     }
+                    // The engine names the file it wrote; the host builds the path itself.
+                    step.kept = !skipped && !string(data, "image_path").is_empty() && has_run;
                     if preview_url.is_empty() || preview_url == step.preview_url {
                         String::new()
                     } else {
@@ -2707,9 +2761,16 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
             if partial {
                 lock(&state.database)?.record_partial(&id, &partial_record(data))?;
             }
-            let stale = {
+            let (stale, unkept) = {
                 let mut runtime = lock(&state.runtime)?;
                 runtime.take_active_job();
+                // The steps become `last_steps` before they are cleared; a stop that kept
+                // only the finished part keeps no step pictures.
+                let unkept = if partial {
+                    runtime.step_files_run.take().map(|run| run.directory)
+                } else {
+                    crate::step_results::keep_run(&mut runtime, &id)
+                };
                 let mut stale = runtime.take_job_steps();
                 // A video frame thumbnail is a live preview, not a completed
                 // before/after result. The full-output request issued by the host
@@ -2726,8 +2787,9 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.elapsed_seconds =
                     seconds(data, "inference_seconds").max(seconds(data, "elapsed_seconds"));
                 runtime.estimated_remaining_seconds = 0.0;
-                stale
+                (stale, unkept)
             };
+            crate::step_results::remove_kept_folder(unkept);
             cleanup_stale_previews(state, stale)?;
         }
         "job_cancelled" => {
@@ -2744,6 +2806,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 runtime.estimated_remaining_seconds = 0.0;
                 runtime.take_job_steps()
             };
+            crate::step_results::drop_run(state)?;
             cleanup_stale_previews(state, stale)?;
         }
         "job_failed" => {
@@ -2759,6 +2822,7 @@ fn apply_job_envelope(state: &Arc<AppState>, envelope: &WorkerEnvelope) -> AppRe
                 hold_until_restart(&mut runtime, data);
                 runtime.take_job_steps()
             };
+            crate::step_results::drop_run(state)?;
             cleanup_stale_previews(state, stale)?;
         }
         "protocol_error" => {

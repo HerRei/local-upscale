@@ -80,6 +80,8 @@ class JobRequest:
     output_bit_depth: int = 8
     # Each step before the main model sends its picture at this size (stage_results).
     stage_picture_max_dimension: int | None = None
+    # A folder for each step's full-size picture, as <stage_index>.png (stage_results).
+    stage_results_directory: str | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "job_request", "data": asdict(self)})

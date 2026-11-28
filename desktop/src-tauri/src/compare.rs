@@ -514,8 +514,25 @@ pub fn apply_region(
     Ok(())
 }
 
+/// The file a side of the comparison pair shows: `"original"` has none here (the caller
+/// uses the media's own), `<job_id>#<index>` is a step file of the last lone job, any other
+/// id a completed result of this media. One place for the three lookups of a pair's side.
+pub fn resolve_pair_target(
+    db: &Database,
+    last_steps: Option<&crate::types::LastSteps>,
+    media_id: &str,
+    target: &str,
+) -> AppResult<String> {
+    if crate::step_results::is_step_target(target) {
+        let last = last_steps.filter(|last| last.media_id == media_id);
+        return crate::step_results::step_file(last, target);
+    }
+    db.media_result_output(media_id, target)
+}
+
 fn resolve_pair_slot(
     db: &Database,
+    last_steps: Option<&crate::types::LastSteps>,
     media: &crate::types::MediaItem,
     slot: &ComparisonSlot,
 ) -> AppResult<(String, FileIdentity, u32, u32)> {
@@ -525,7 +542,7 @@ fn resolve_pair_slot(
     let (path, width, height) = if slot.target_id == "original" {
         (media.path.clone(), media.width, media.height)
     } else {
-        let path = db.media_result_output(&media.id, &slot.target_id)?;
+        let path = resolve_pair_target(db, last_steps, &media.id, &slot.target_id)?;
         if path != slot.output_path
             || slot.preview_data_url.is_empty()
             || slot.width == 0
@@ -543,6 +560,7 @@ fn resolve_pair_slot(
 /// Replace the desired regions for the main preview atomically. Only owned, unchanged files are read.
 pub fn plan_pair_regions(
     db: &Database,
+    last_steps: Option<&crate::types::LastSteps>,
     pair: &mut ComparisonPair,
     original: &mut PreviewOriginalRegion,
     media_id: &str,
@@ -578,7 +596,7 @@ pub fn plan_pair_regions(
     };
 
     let showing_resolved = if let Some(r) = regions.showing {
-        let (path, id, width, height) = resolve_pair_slot(db, &media, &pair.showing)?;
+        let (path, id, width, height) = resolve_pair_slot(db, last_steps, &media, &pair.showing)?;
         validate_region(r, width, height)?;
         Some((path, id))
     } else {
@@ -586,7 +604,7 @@ pub fn plan_pair_regions(
     };
 
     let against_resolved = if let Some(r) = regions.against {
-        let (path, id, width, height) = resolve_pair_slot(db, &media, &pair.against)?;
+        let (path, id, width, height) = resolve_pair_slot(db, last_steps, &media, &pair.against)?;
         validate_region(r, width, height)?;
         Some((path, id))
     } else {
@@ -664,6 +682,7 @@ pub fn plan_pair_regions(
 
 pub fn apply_pair_region(
     db: &Database,
+    last_steps: Option<&crate::types::LastSteps>,
     pair: &mut ComparisonPair,
     original: &mut PreviewOriginalRegion,
     data: &Value,
@@ -718,7 +737,7 @@ pub fn apply_pair_region(
                     .filter(|m| m.kind == "image")
                     .map(|m| m.path)
             } else if !slot.target_id.is_empty() {
-                match db.media_result_output(&pair.media_id, &slot.target_id) {
+                match resolve_pair_target(db, last_steps, &pair.media_id, &slot.target_id) {
                     Ok(path) if path == slot.output_path => Some(path),
                     Ok(_) | Err(AppError::Validation(_)) => None,
                     Err(error) => return Err(error),
@@ -1373,6 +1392,7 @@ mod tests {
 
         let requests = plan_pair_regions(
             &db,
+            None,
             &mut pair,
             &mut original,
             "m1",
@@ -1406,7 +1426,7 @@ mod tests {
             let mut stale = requests[slot_idx]["data"].clone();
             stale[key] = bad_val;
             stale["png_base64"] = json!("stale");
-            apply_pair_region(&db, &mut pair, &mut original, &stale, false).unwrap();
+            apply_pair_region(&db, None, &mut pair, &mut original, &stale, false).unwrap();
         }
         assert!(original.region.is_none());
         assert!(pair.showing.region.is_none());
@@ -1416,7 +1436,7 @@ mod tests {
         for (idx, tag) in ["orig", "show", "against"].iter().enumerate() {
             let mut ok = requests[idx]["data"].clone();
             ok["png_base64"] = json!(tag);
-            apply_pair_region(&db, &mut pair, &mut original, &ok, false).unwrap();
+            apply_pair_region(&db, None, &mut pair, &mut original, &ok, false).unwrap();
         }
         assert_eq!(
             original.region.as_ref().unwrap().data_url,
@@ -1434,6 +1454,7 @@ mod tests {
         // Coalescing: a newer plan drops prior answers and falls back cleanly on failure.
         let newer = plan_pair_regions(
             &db,
+            None,
             &mut pair,
             &mut original,
             "m1",
@@ -1451,10 +1472,10 @@ mod tests {
 
         let mut old_show = requests[1]["data"].clone();
         old_show["png_base64"] = json!("old");
-        apply_pair_region(&db, &mut pair, &mut original, &old_show, false).unwrap();
+        apply_pair_region(&db, None, &mut pair, &mut original, &old_show, false).unwrap();
         assert!(pair.showing.region.is_none());
 
-        apply_pair_region(&db, &mut pair, &mut original, &newer[1]["data"], true).unwrap();
+        apply_pair_region(&db, None, &mut pair, &mut original, &newer[1]["data"], true).unwrap();
         assert!(pair.showing.region.is_none());
         assert_eq!(pair.showing.preview_data_url, "asset://b");
 
@@ -1463,6 +1484,7 @@ mod tests {
         std::fs::write(&output_b, "tampered").unwrap();
         let newer2 = plan_pair_regions(
             &db,
+            None,
             &mut pair,
             &mut original,
             "m1",
@@ -1476,7 +1498,7 @@ mod tests {
         .unwrap();
         let mut orig_ok = newer2[0]["data"].clone();
         orig_ok["png_base64"] = json!("fresh");
-        apply_pair_region(&db, &mut pair, &mut original, &orig_ok, false).unwrap();
+        apply_pair_region(&db, None, &mut pair, &mut original, &orig_ok, false).unwrap();
         assert_eq!(
             original.region.as_ref().unwrap().data_url,
             "data:image/png;base64,fresh"
