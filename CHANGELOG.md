@@ -2,54 +2,6 @@
 
 ## [0.7.0-beta] - Unreleased
 
-- **Dust & scratches on photos.** A photo gets a Dust & scratches row, first in the Fix
-  list. Its value, `Paint…` or the number of marks, opens a paint bar in the viewer: paint
-  over each speck, scratch or spot (Paint and Erase, a brush size, Undo, Clear, Done), and
-  LocalSR fills the painted places from the picture around them before the other fixes and
-  the upscale (OpenCV inpainting, no model). Each photo keeps its own marks; the host keeps
-  the strokes, draws the mask and gives it only to that photo's job, and a photo without
-  marks is left as it is. With nothing else ticked at Same size, only painted photos are
-  started and the file ends in `_repaired`. The preview patch shows the repair on its
-  region. It works for small marks on even areas; large areas or marks across fine detail
-  come out smeared. Marks are not saved in recipes.
-- **Stabilise shaky video (Labs).** A video on the frame-by-frame engine gets a Stabilise
-  row, first in the Fix list. It follows how the camera moves from frame to frame, evens
-  that path out over 0.5 s (Light), 1 s (Medium) or 2 s (Strong), and enlarges the picture
-  by the amount that keeps the edges that move in and out hidden: 3, 5 or 8 % is cut off
-  each edge. The video keeps its size, length, frame times and sound. While the row's
-  choice is open, the viewer dims the band the crop removes. Stabilise runs after Scan and
-  before the other fixes, so they work on the steadied picture. It is not available while
-  HDR is kept, is not saved in recipes, and is left out of the preview patch. Wobble from
-  a rolling shutter and blur that the shake left in single frames stay.
-- **Slow motion for video.** Under Result, the Frames select has a new group, Slow motion
-  (no sound), with 2× slower and 4× slower and the length your clip then has. It adds the
-  same frames as 2× and 4× after upscaling, but plays them at the clip's own rate, so
-  the video becomes two or four times as long. It is saved without sound and subtitles:
-  the Output line says no sound, Clean up audio is off while it is chosen, and the file
-  name ends in `_slow`. A slow-motion result opens in Enhanced only, because it cannot
-  play on one clock with the original.
-- **Fix strength.** A ticked Blur, JPEG artifacts (Compression on a video) or Noise row
-  now shows how strongly its fix is applied: Full, Medium or Light. Click the value to
-  choose. Light and Medium mix the fixed picture with the picture before the fix, so
-  more of its grain and texture stays. Full, the default, is the whole fix and changes
-  nothing for existing recipes and workflows. The plan line names it (`Noise (light)`),
-  recipes keep it, and the preview patch mixes again without running the model. The
-  model you use is in the same popover, under the three choices.
-- **Remove a photo's background.** Under Result, the new Backgr. row has Keep and Remove.
-  Remove makes everything behind the main subject transparent, using BiRefNet, which
-  downloads (444 MB) the first time you start. The subject is found on the original
-  picture, before the fixes and the upscale, and its outline is enlarged with the
-  picture. The result is a PNG (TIFF and WebP keep transparency too); a JPEG or HEIC
-  choice is saved as PNG, and the Output line says so. With Same size and nothing
-  ticked, the cut-out is the whole job and the file ends in `_cutout`. In the preview
-  patch the Background chip is struck through, because the patch cannot show
-  transparency.
-- **Deinterlace old camcorder, TV and DVD video.** A video whose file says it is
-  interlaced, or does not say, gets a Scan row between Content and Fix. Automatic keeps
-  the frame rate; Double rate makes a frame from every half-picture, so 25 fps becomes
-  50 and motion is as smooth as on a TV (twice the frames to process). When stripes
-  remain, or motion jumps back and forth, set the field order by hand. Scan is not
-  saved in recipes and is left out of the preview patch.
 - **Preview on your photo.** Under the viewer's header, Preview shows what the ticked
   fixes and the upscale will do on a square of the open photo, before you start. The
   square sits over the photo with a tab above it: one chip for Original and one for each
@@ -63,6 +15,55 @@
   on the same square: the tab shows A and B, X flips between them, and Use B takes the
   second one over. For a video with a frame-by-frame engine, the same preview works on
   the first frame (This frame), without de-flicker, added frames or audio.
+- **Remove a photo's background.** Under Result, the new Backgr. row has Keep and
+  Remove. Remove makes everything behind the main subject transparent, using BiRefNet,
+  which downloads (444 MB) the first time you start. The subject is found on the
+  original picture, before the fixes and the upscale, and its outline is enlarged with
+  the picture. The result is a PNG (TIFF and WebP keep transparency too); a JPEG or HEIC
+  choice is saved as PNG, and the Output line says so. With Same size and nothing
+  ticked, the cut-out is the whole job and the file ends in `_cutout`. In the preview
+  patch the Background chip is struck through, because the patch cannot show
+  transparency.
+- **Dust & scratches on photos.** A photo gets a Dust & scratches row, first in the Fix
+  list. Its value, `Paint…` or the number of marks, opens a paint bar in the viewer:
+  paint over each speck, scratch or spot (Paint and Erase, a brush size, Undo, Clear,
+  Done), and LocalSR fills the painted places from the picture around them before the
+  other fixes and the upscale (OpenCV inpainting, no model). Each photo keeps its own
+  marks; the host keeps the strokes, draws the mask and gives it only to that photo's
+  job, and a photo without marks is left as it is. With nothing else ticked at Same
+  size, only painted photos are started and the file ends in `_repaired`. The preview
+  patch shows the repair on its region. It works for small marks on even areas; large
+  areas or marks across fine detail come out smeared. Marks are not saved in recipes.
+- **Fix strength.** A ticked Blur, JPEG artifacts (Compression on a video) or Noise row
+  now shows how strongly its fix is applied: Full, Medium or Light. Click the value to
+  choose. Light and Medium mix the fixed picture with the picture before the fix, so
+  more of its grain and texture stays. Full, the default, is the whole fix and changes
+  nothing for existing recipes and workflows. The plan line names it (`Noise (light)`),
+  recipes keep it, and the preview patch mixes again without running the model. The
+  model you use is in the same popover, under the three choices.
+- **Deinterlace old camcorder, TV and DVD video.** A video whose file says it is
+  interlaced, or does not say, gets a Scan row between Content and Fix. Automatic keeps
+  the frame rate; Double rate makes a frame from every half-picture, so 25 fps becomes
+  50 and motion is as smooth as on a TV (twice the frames to process). When stripes
+  remain, or motion jumps back and forth, set the field order by hand. Scan is not saved
+  in recipes and is left out of the preview patch.
+- **Stabilise shaky video (Labs).** A video on the frame-by-frame engine gets a
+  Stabilise row, first in the Fix list. It follows how the camera moves from frame to
+  frame, evens that path out over 0.5 s (Light), 1 s (Medium) or 2 s (Strong), and
+  enlarges the picture by the amount that keeps the edges that move in and out hidden:
+  3, 5 or 8 % is cut off each edge. The video keeps its size, length, frame times and
+  sound. While the row's choice is open, the viewer dims the band the crop removes.
+  Stabilise runs after Scan and before the other fixes, so they work on the steadied
+  picture. It is not available while HDR is kept, is not saved in recipes, and is left
+  out of the preview patch. Wobble from a rolling shutter and blur that the shake left
+  in single frames stay.
+- **Slow motion for video.** Under Result, the Frames select has a new group, Slow
+  motion (no sound), with 2× slower and 4× slower and the length your clip then has. It
+  adds the same frames as 2× and 4× after upscaling, but plays them at the clip's own
+  rate, so the video becomes two or four times as long. It is saved without sound and
+  subtitles: the Output line says no sound, Clean up audio is off while it is chosen,
+  and the file name ends in `_slow`. A slow-motion result opens in Enhanced only,
+  because it cannot play on one clock with the original.
 - **Every step is visible while a job runs and after it.** A job with several steps no
   longer drops to a small, soft picture between steps. The viewer keeps the sharp photo
   until the next step's picture is ready, labels it Step 2 of 4 · Colour, and the status
@@ -90,9 +91,9 @@
   beside What to change offers the prompts that passed our tests on them; today that is
   Colour. Choosing one replaces your text, and ⌘Z brings it back.
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a
-  glance, and open settings where you need them. Once the same kind of job has run twice,
-  the panel shows about how long Start will take. The new blue accent follows your Mac’s
-  accent colour, and the colour-blind palette is easier to distinguish.
+  glance, and open settings where you need them. Once the same kind of job has run
+  twice, the panel shows about how long Start will take. The new blue accent follows
+  your Mac’s accent colour, and the colour-blind palette is easier to distinguish.
 - **Downloads show in one place, with size and time left.** Model downloads live in the
   status bar (and the library’s tray) with how much has arrived and how long is left,
   without repeating percentages across the panel. Interrupted downloads stay in the
@@ -130,7 +131,8 @@
   line, `localsr process` with the DDColor model keeps its colour on a black-and-white
   picture. On Linux and Windows, Edit no longer stops with "the system swapped 0.5 GiB"
   while plenty of memory is free; it stops when memory really runs short or the system
-  stalls on it, and a stopped edit says why instead of "Not enough memory for this size".
+  stalls on it, and a stopped edit says why instead of "Not enough memory for this
+  size".
 
 ## [0.6.3-beta] - 2026-11-27
 
