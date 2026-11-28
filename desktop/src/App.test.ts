@@ -10490,7 +10490,10 @@ describe('Enhance panel foot', () => {
     api.estimateStart.mockResolvedValue(40);
     await mountWith(snapshot);
     const foot = document.querySelector('.panel-foot') as HTMLElement;
-    await waitFor(() => expect(within(foot).getByText('about 40 s')).toBeTruthy());
+    // The estimate waits for the plan and a 400 ms debounce on real timers.
+    await waitFor(() => expect(within(foot).getByText('about 40 s')).toBeTruthy(), {
+      timeout: 4000,
+    });
     expect(foot.querySelector('.foot-cost-download')).toBeNull();
     const [mediaIds, input] = api.estimateStart.mock.calls[0];
     expect(mediaIds).toEqual(['photo']);
@@ -10502,7 +10505,7 @@ describe('Enhance panel foot', () => {
     Object.assign(snapshot.settings, { task: 'upscale', quality: 'quick', fixes: ['noise'] });
     api.estimateStart.mockResolvedValue(null);
     await mountWith(snapshot);
-    await waitFor(() => expect(api.estimateStart).toHaveBeenCalled());
+    await waitFor(() => expect(api.estimateStart).toHaveBeenCalled(), { timeout: 4000 });
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(document.querySelector('.panel-foot')?.textContent).not.toContain('about');
     expect(document.querySelector('.foot-cost')).toBeNull();
