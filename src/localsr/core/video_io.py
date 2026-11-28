@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import glob
 import heapq
+import itertools
 import logging
 import os
 import tempfile
@@ -42,7 +43,13 @@ from .media_codecs import (
 from .output_publish import DiscardOnStop, OutputExistsError, owned_temporary, publish_output
 from .pixel_budget import MAX_INPUT_PIXELS, require_pixel_budget
 from .video_audio import add_converted_audio_stream, needs_audio_transcode, opus_packets
-from .video_normalization import display_frames, square_pixel_width
+from .video_normalization import (
+    Deinterlace,
+    display_frames,
+    flagged_field_order,
+    square_pixel_width,
+    stream_field_order,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -70,6 +77,8 @@ class TimedVideoFrame:
     timestamp: Fraction
     duration: Fraction
     time_base: Fraction
+    # Decoding already ran the job's deinterlace step on this frame.
+    deinterlaced_by_step: bool = False
 
     def with_pixels(self, rgb: np.ndarray) -> TimedVideoFrame:
         return replace(self, rgb=rgb)
@@ -172,7 +181,12 @@ def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int 
             stream.codec_context.flush_buffers()
 
 
-def _video_probe(container, stream, first: av.VideoFrame | None, converter: str = "") -> VideoProbe:
+def _video_probe(
+    container, stream, first: av.VideoFrame | None, converter: str = "", flagged: str = ""
+) -> VideoProbe:
+    """``flagged`` is the order the first decoded frame is flagged with, "" for none. It
+    outweighs the stream's value: the ffmpeg tool stores top-first frames as ``tb``,
+    which FFmpeg documents as bottom first."""
     fps = float(stream.average_rate) if stream.average_rate else 0.0
     duration = float(container.duration) / 1_000_000.0 if container.duration else 0.0
     count = int(stream.frames or 0) or (int(round(duration * fps)) if fps else 0)
@@ -192,10 +206,19 @@ def _video_probe(container, stream, first: av.VideoFrame | None, converter: str 
         {16: "PQ", 18: "HLG"}.get(transfer, ""),
         _audio_compatibility_warning(container, converter=converter),
         any(item.type == "audio" for item in container.streams),
-        {1: "progressive", 2: "tff", 3: "bff", 4: "bff", 5: "tff"}.get(
-            int(getattr(stream.codec_context, "field_order", 0)), "unknown"
-        ),
+        flagged or stream_field_order(stream),
     )
+
+
+def _first_display_frame(container, stream) -> tuple[av.VideoFrame | None, str]:
+    """The first frame as decoding shows it, and the field order it was flagged with."""
+    decoded = container.decode(stream)
+    first = next(decoded, None)
+    if first is None:
+        return None, ""
+    flagged = flagged_field_order(first)
+    frames = display_frames(container, stream, decoded=itertools.chain((first,), decoded))
+    return next(frames, None), flagged
 
 
 def _audio_stream_usable(stream, container_format: str) -> bool:
@@ -250,7 +273,8 @@ def probe_video(
     if external_ffmpeg is not None and not _source_decodable(path):
         return probe_video_preview(path, 64, None, external_ffmpeg, temporary_directory)[0]
     with _video_decoder(path) as (container, stream):
-        return _video_probe(container, stream, next(display_frames(container, stream), None))
+        first, flagged = _first_display_frame(container, stream)
+        return _video_probe(container, stream, first, flagged=flagged)
 
 
 def _frame_rgb(stream, frame: av.VideoFrame, hdr_mode: str) -> np.ndarray:
@@ -375,11 +399,15 @@ def probe_video_preview(
         )
     with _video_decoder(path) as (container, stream):
         report("decoding_video")
-        first = next(display_frames(container, stream), None)
+        first, flagged = _first_display_frame(container, stream)
         if first is None:
             raise ValueError("This video contains no decodable picture frames.")
         probe = _video_probe(
-            container, stream, first, _converter_label(external_ffmpeg, path, audio_only=True)
+            container,
+            stream,
+            first,
+            _converter_label(external_ffmpeg, path, audio_only=True),
+            flagged,
         )
         if probe.hdr_format:
             report("converting_hdr")
@@ -398,8 +426,13 @@ def decode_timed_frames(
     *,
     hdr_mode: str = "reject",
     decoder_threads: int = 0,
+    deinterlace: Deinterlace | None = None,
 ):
-    """Decode oriented SDR frames with exact source times and one-frame lookahead."""
+    """Decode oriented SDR frames with exact source times and one-frame lookahead.
+
+    ``deinterlace`` runs a job's deinterlace step on the decoder's frames. In field mode
+    both frames of a source frame keep its index, so trims still count source frames.
+    """
     if hdr_mode not in {"reject", "tone_map", "preserve"}:
         raise ValueError("HDR mode must be reject, tone_map or preserve.")
     start = max(0, int(start_frame or 0))
@@ -412,8 +445,12 @@ def decode_timed_frames(
         origin: Fraction | None = None
         base_time_base: Fraction | None = None
         retimed_count = 0
+        per_source = deinterlace.frames_per_source_frame if deinterlace is not None else 1
         try:
-            for index, frame in enumerate(display_frames(container, stream, cancel_event)):
+            for number, frame in enumerate(
+                display_frames(container, stream, cancel_event, deinterlace)
+            ):
+                index = number // per_source
                 if cancel_event is not None and cancel_event.is_set():
                     raise InterruptedError("video job cancelled")
                 if index < start:
@@ -447,10 +484,17 @@ def decode_timed_frames(
                 rgb = _frame_rgb(stream, frame, hdr_mode)
                 duration = getattr(frame, "duration", 0) or 0
                 interval = (
-                    duration * frame.time_base if duration > 0 else 1 / (stream.average_rate or 25)
+                    duration * frame.time_base
+                    if duration > 0
+                    else 1 / (stream.average_rate or 25) / per_source
                 )
                 pending = TimedVideoFrame(
-                    index, rgb, timestamp, Fraction(interval), frame.time_base
+                    index,
+                    rgb,
+                    timestamp,
+                    Fraction(interval),
+                    frame.time_base,
+                    deinterlaced_by_step=deinterlace is not None,
                 )
             if pending is not None:
                 yield pending

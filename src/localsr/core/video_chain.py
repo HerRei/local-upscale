@@ -357,6 +357,11 @@ def _build_deinterlace_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -
 
         for item in frames:
             ctx.check_cancelled()
+            if item.frame.deinterlaced_by_step:
+                # Decoding ran this step where the field flags are; splitting its
+                # frames again would pair up two copies of the same moment.
+                yield item
+                continue
             rgb = item.frame.rgb
             is_float = rgb.dtype == np.float32
             high_depth = rgb.dtype == np.uint16 or is_float
