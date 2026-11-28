@@ -1,1 +1,1 @@
-upscale,upscaler,enhance,sharpen,photo,resolution,jpeg,blurry,pixelated,offline,private,zoom,4x
+upscale,enhance,sharpen,unblur,blurry,resolution,quality,hd,4k,increase,pixelated,jpeg,picture,fix
