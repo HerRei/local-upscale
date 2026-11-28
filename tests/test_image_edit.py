@@ -12,7 +12,14 @@ from pathlib import Path
 import pytest
 
 from localsr.core import image_edit
-from localsr.core.edit_memory import GIB, EditMemory, EditPlan, check_edit_pressure, plan_edit
+from localsr.core.edit_memory import (
+    GIB,
+    EditMemory,
+    EditPlan,
+    check_edit_pressure,
+    plan_edit,
+    reserve_for,
+)
 from localsr.protocol.messages import EditJobRequest
 from localsr.worker import edit_guard
 
@@ -263,13 +270,128 @@ def test_host_memory_reads_system_disk_room(monkeypatch):
 
 @pytest.mark.parametrize(
     "change",
-    [{"available_ram": 2 * GIB}, {"swap_used": GIB}, {"pressure": "warning"}],
+    [{"available_ram": 2 * GIB}, {"pressure": "warning"}],
 )
 def test_gpu_host_supervisor_keeps_its_reserve(change):
     initial = EditMemory(64 * GIB, 60 * GIB, gpu_total=16 * GIB, gpu_free=12 * GIB)
     plan = EditPlan(16 * GIB, 4 * GIB, 10 * GIB, 512, 16 * GIB)
     with pytest.raises(MemoryError, match="protect system memory"):
         check_edit_pressure(replace(initial, **change), plan, 0, 0)
+
+
+# Two stops on a Linux PC (Fedora 44, 8 GB zram at swappiness 60, 16 GB RX 9060 XT,
+# Qwen Image Edit 2511 Q4_K_M at 512 px, sd-cli RSS 17.7 GiB, mostly mapped weights):
+# "the system swapped 0.5 GiB" while 18 GiB and more was still available, after a cold
+# page cache and beside an app using 9-10 GB. The same edit then finished in 27 s.
+GPU_HOST = EditMemory(64 * GIB, 18 * GIB, 0, gpu_total=16 * GIB, gpu_free=12 * GIB)
+GPU_PLAN = EditPlan(16 * GIB, reserve_for(64 * GIB), 10 * GIB, 512, 22 * GIB)
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"swap_used": int(0.6 * GIB), "compressed_swap": int(0.6 * GIB)},
+        {"swap_used": int(0.6 * GIB)},
+        {"swap_used": 3 * GIB},
+    ],
+    ids=["zram", "disk", "disk-3-gib"],
+)
+def test_gpu_host_lets_the_system_swap_cold_pages_while_memory_is_available(change):
+    check_edit_pressure(replace(GPU_HOST, **change), GPU_PLAN, 0, int(17.7 * GIB))
+
+
+@pytest.mark.parametrize(
+    "change,tight_swap",
+    [
+        # Within two reserves of the stop line, but the swap that grew is compressed RAM.
+        ({"available_ram": 10 * GIB, "swap_used": 3 * GIB, "compressed_swap": 3 * GIB}, 0),
+        # Only 0.4 GiB went to disk since memory became tight.
+        ({"available_ram": 10 * GIB, "swap_used": 3 * GIB}, int(2.6 * GIB)),
+        # Not tight: the swap that grew earlier does not count.
+        ({"available_ram": 13 * GIB, "swap_used": 3 * GIB}, None),
+    ],
+)
+def test_gpu_host_counts_only_disk_swap_while_memory_is_tight(change, tight_swap):
+    check_edit_pressure(replace(GPU_HOST, **change), GPU_PLAN, 0, 0, tight_swap=tight_swap)
+
+
+def test_gpu_host_stops_when_it_swaps_to_disk_with_little_memory_available():
+    memory = replace(GPU_HOST, available_ram=10 * GIB, swap_used=int(1.5 * GIB))
+    with pytest.raises(
+        MemoryError,
+        match=r"swapped 1\.0 GiB to disk while only 10\.0 GiB of memory was available",
+    ):
+        check_edit_pressure(memory, GPU_PLAN, 0, 0, tight_swap=GIB // 2)
+
+
+@pytest.mark.parametrize(
+    "stall,seconds,stops",
+    [(35.0, 12.0, True), (35.0, 4.0, False), (15.0, 60.0, False), (None, 60.0, False)],
+)
+def test_gpu_host_stops_when_linux_reports_a_sustained_memory_stall(stall, seconds, stops):
+    memory = replace(GPU_HOST, memory_stall=stall)
+    if not stops:
+        check_edit_pressure(memory, GPU_PLAN, 0, 0, stall_seconds=seconds)
+        return
+    with pytest.raises(MemoryError, match="waited for memory 35% of the time for 12 s"):
+        check_edit_pressure(memory, GPU_PLAN, 0, 0, stall_seconds=seconds)
+
+
+def test_windows_host_stops_on_low_available_memory_and_page_file_growth_only_when_tight():
+    # psutil on Windows: available is free and standby RAM, swap is page file use; Windows
+    # reports neither zram nor PSI.
+    windows = EditMemory(32 * GIB, 20 * GIB, int(1.2 * GIB), gpu_total=16 * GIB, gpu_free=12 * GIB)
+    plan = EditPlan(8 * GIB, reserve_for(32 * GIB), 10 * GIB, 512, 16 * GIB)
+    with pytest.raises(MemoryError, match=r"only 3\.0 GiB of memory was left"):
+        check_edit_pressure(replace(windows, available_ram=3 * GIB), plan, int(1.2 * GIB), 0)
+    check_edit_pressure(replace(windows, swap_used=3 * GIB), plan, int(1.2 * GIB), 0)
+    with pytest.raises(MemoryError, match=r"swapped 1\.0 GiB to disk while only 6\.0 GiB"):
+        check_edit_pressure(
+            replace(windows, available_ram=6 * GIB, swap_used=int(2.2 * GIB)),
+            plan,
+            int(1.2 * GIB),
+            0,
+            tight_swap=int(1.2 * GIB),
+        )
+
+
+PROC_SWAPS = (
+    "Filename\t\t\t\tType\t\tSize\t\tUsed\t\tPriority\n"
+    "/dev/zram0                              partition\t8388604\t\t614400\t\t100\n"
+    "/var/swap\\040file                       file\t\t4194300\t\t2048\t\t-2\n"
+)
+PROC_PRESSURE = (
+    "some avg10=3.10 avg60=1.00 avg300=0.20 total=123456\n"
+    "full avg10=1.25 avg60=0.50 avg300=0.10 total=45678\n"
+)
+
+
+def test_linux_snapshot_reads_zram_swap_and_the_memory_stall(monkeypatch, tmp_path):
+    from localsr.core import edit_memory
+
+    swaps, pressure = tmp_path / "swaps", tmp_path / "memory"
+    swaps.write_text(PROC_SWAPS)
+    pressure.write_text(PROC_PRESSURE)
+    monkeypatch.setattr(edit_memory, "PROC_SWAPS", swaps)
+    monkeypatch.setattr(edit_memory, "PROC_MEMORY_PRESSURE", pressure)
+    monkeypatch.setattr(edit_memory.sys, "platform", "linux")
+    memory = edit_memory.read_host_memory(unified=False)
+    assert memory.compressed_swap == 614400 * 1024
+    assert memory.memory_stall == 1.25
+    # Kernels without PSI (or booted with psi=0) have no pressure file.
+    swaps.unlink()
+    pressure.unlink()
+    memory = edit_memory.read_host_memory(unified=False)
+    assert memory.compressed_swap == 0 and memory.memory_stall is None
+
+
+@pytest.mark.skipif(not sys.platform.startswith("linux"), reason="Linux /proc")
+def test_linux_snapshot_reads_the_real_kernel_files():
+    from localsr.core import edit_memory
+
+    memory = edit_memory.read_host_memory(unified=False)
+    assert 0 <= memory.compressed_swap
+    assert memory.memory_stall is None or 0.0 <= memory.memory_stall <= 100.0
 
 
 def test_mac_admission_accepts_warning_pressure_but_not_critical():
@@ -838,6 +960,79 @@ def test_guard_treats_worker_pipe_eof_as_cancellation(monkeypatch, tmp_path):
     path = tmp_path / "guard.json"
     path.write_text(json.dumps(spec))
     assert edit_guard.main([str(path)]) == 130
+
+
+def run_guard(monkeypatch, tmp_path, samples, child_seconds):
+    """The guard's exit code for a child that sleeps, with ``samples`` as the snapshots.
+
+    The first sample is the check before the child starts; the last one repeats.
+    """
+    blocker = threading.Event()
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        type(
+            "Input",
+            (),
+            {"buffer": type("Buffer", (), {"read": lambda self, _: blocker.wait(30)})()},
+        )(),
+    )
+    feed, last = iter(samples), [samples[0]]
+
+    def sample(_unified):
+        last[0] = next(feed, last[0])
+        return last[0]
+
+    monkeypatch.setattr(edit_guard, "read_host_memory", sample)
+    spec = {
+        "command": [sys.executable, "-c", f"import time; time.sleep({child_seconds})"],
+        "plan": {
+            "required_ram": GIB,
+            "reserve_ram": GPU_PLAN.reserve_ram,
+            "gpu_budget": 4 * GIB,
+            "max_dimension": 512,
+            "process_limit": 2 * GIB,
+        },
+        "unified": False,
+        "swap_used": 0,
+    }
+    path = tmp_path / "guard.json"
+    path.write_text(json.dumps(spec))
+    try:
+        return edit_guard.main([str(path)])
+    finally:
+        blocker.set()
+
+
+@pytest.mark.parametrize("compressed", [True, False], ids=["zram", "disk"])
+def test_guard_lets_an_edit_finish_while_cold_pages_go_to_swap(monkeypatch, tmp_path, compressed):
+    swapped = int(0.6 * GIB)
+    grown = replace(GPU_HOST, swap_used=swapped)
+    if compressed:
+        grown = replace(grown, compressed_swap=swapped)
+    assert run_guard(monkeypatch, tmp_path, [GPU_HOST, grown], 1.5) == 0
+
+
+def test_guard_ignores_swap_that_grew_before_memory_became_tight(monkeypatch, tmp_path):
+    early = replace(GPU_HOST, swap_used=GIB)
+    tight = replace(early, available_ram=10 * GIB)
+    assert run_guard(monkeypatch, tmp_path, [GPU_HOST, early, tight], 1.5) == 0
+
+
+def test_guard_stops_when_the_system_swaps_to_disk_while_memory_is_tight(monkeypatch, tmp_path):
+    tight = replace(GPU_HOST, available_ram=10 * GIB)
+    swapping = replace(tight, swap_used=GIB)
+    assert run_guard(monkeypatch, tmp_path, [GPU_HOST, tight, swapping], 20) == 75
+
+
+def test_guard_stops_on_a_sustained_memory_stall_but_not_on_one_spike(monkeypatch, tmp_path):
+    from localsr.core import edit_memory
+
+    monkeypatch.setattr(edit_memory, "MEMORY_STALL_SECONDS", 0.5)
+    stalled = replace(GPU_HOST, memory_stall=40.0)
+    calm = replace(GPU_HOST, memory_stall=0.5)
+    assert run_guard(monkeypatch, tmp_path, [GPU_HOST, stalled, calm], 1.5) == 0
+    assert run_guard(monkeypatch, tmp_path, [GPU_HOST, stalled], 20) == 75
 
 
 # The phase markers of a real FLUX.2 klein 4B run (sd-cli 3f8527a, 512 px).
@@ -1582,17 +1777,15 @@ def test_allow_any_size_keeps_requested_size_and_unified_plans_stay_identical():
     )
 
 
-@pytest.mark.parametrize(
-    "returncode,output",
-    [
-        (1, b"ggml_vulkan: Error OutOfDeviceMemory\n"),
-        (1, b"CUDA error: out of memory\n"),
-        (75, b"Editing stopped to protect system memory: only 1.0 GiB of memory was left.\n"),
-    ],
+EDIT_OUT_OF_MEMORY = (
+    "Not enough memory for this size. Choose a smaller size or let LocalSR "
+    "place the models automatically."
 )
-def test_run_edit_job_surfaces_oom_from_sd_cli_and_supervisor(
-    monkeypatch, tmp_path, returncode, output
-):
+
+
+def fail_edit(monkeypatch, tmp_path, returncode, output):
+    """The error a CUDA edit raises when its guard exits with ``returncode`` after
+    ``output``, and the job's ``error_message`` for it."""
     from PIL import Image
 
     from localsr.core.disk_space import failure_fields
@@ -1635,14 +1828,91 @@ def test_run_edit_job_surfaces_oom_from_sd_cli_and_supervisor(
     mem_8g = EditMemory(64 * GIB, 60 * GIB, gpu_total=8 * GIB, gpu_free=8 * GIB)
     with pytest.raises(DeviceOutOfMemoryError) as caught:
         image_edit.run_edit_job(req, threading.Event(), lambda _: None, sampler=lambda _: mem_8g)
-    expected = (
-        "Not enough memory for this size. Choose a smaller size or let LocalSR "
-        "place the models automatically."
-    )
-    assert str(caught.value) == expected
-    assert failure_fields(caught.value, req["output_path"], edit_request=req) == {
-        "error_message": expected
-    }
+    fields = failure_fields(caught.value, req["output_path"], edit_request=req)
+    assert set(fields) == {"error_message"}
+    return caught.value, fields["error_message"]
+
+
+SUPERVISOR_LOW_MEMORY = "Editing stopped to protect system memory: only 1.0 GiB of memory was left."
+
+
+@pytest.mark.parametrize(
+    "returncode,output,expected",
+    [
+        (1, b"ggml_vulkan: Error OutOfDeviceMemory\n", EDIT_OUT_OF_MEMORY),
+        (1, b"CUDA error: out of memory\n", EDIT_OUT_OF_MEMORY),
+        (75, SUPERVISOR_LOW_MEMORY.encode() + b"\n", SUPERVISOR_LOW_MEMORY),
+        # The guard's own admission check: this size no longer fits.
+        (
+            75,
+            b"Available memory changed before loading. Close apps and retry.\n",
+            EDIT_OUT_OF_MEMORY,
+        ),
+    ],
+)
+def test_run_edit_job_surfaces_oom_from_sd_cli_and_supervisor(
+    monkeypatch, tmp_path, returncode, output, expected
+):
+    error, message = fail_edit(monkeypatch, tmp_path, returncode, output)
+    assert str(error) == expected
+    assert message == expected
+
+
+def supervisor_stop(memory, plan=GPU_PLAN, used=0, **signals):
+    with pytest.raises(MemoryError) as caught:
+        check_edit_pressure(memory, plan, 0, used, **signals)
+    return str(caught.value)
+
+
+@pytest.mark.parametrize(
+    "stop,says",
+    [
+        (
+            lambda: supervisor_stop(replace(GPU_HOST, available_ram=3 * GIB)),
+            "only 3.0 GiB of memory",
+        ),
+        (
+            lambda: supervisor_stop(
+                replace(GPU_HOST, available_ram=10 * GIB, swap_used=int(1.5 * GIB)),
+                tight_swap=GIB // 2,
+            ),
+            "swapped 1.0 GiB to disk while only 10.0 GiB of memory was available",
+        ),
+        (
+            lambda: supervisor_stop(replace(GPU_HOST, memory_stall=35.0), stall_seconds=12.0),
+            "waited for memory 35% of the time for 12 s",
+        ),
+        (
+            lambda: supervisor_stop(GPU_HOST, used=23 * GIB),
+            "the editor used 23.0 GiB, more than its 22.0 GiB limit. Choose a smaller size",
+        ),
+        (
+            lambda: supervisor_stop(
+                replace(MAC_RUNNING, pressure="critical"), MAC_PLAN, critical_samples=2
+            ),
+            "macOS reported critical memory pressure",
+        ),
+        (
+            lambda: supervisor_stop(
+                replace(
+                    MAC_RUNNING, swap_used=3 * GIB, disk_free=6 * 10**9, disk_reserve=8 * 10**9
+                ),
+                MAC_PLAN,
+            ),
+            "Free up disk space",
+        ),
+    ],
+    ids=["low-memory", "disk-swap", "memory-stall", "process-limit", "mac-critical", "mac-disk"],
+)
+def test_each_supervisor_stop_tells_the_user_what_happened(monkeypatch, tmp_path, stop, says):
+    from localsr.core.memory_errors import DeviceOutOfMemoryError
+
+    line = stop()
+    error, message = fail_edit(monkeypatch, tmp_path, 75, f"sd-cli log\n{line}\n".encode())
+    assert isinstance(error, DeviceOutOfMemoryError)
+    assert message == line
+    assert says in message
+    assert "for this size" not in message
 
 
 def test_run_edit_job_emits_log_note_when_vram_limit_ignored_on_unified(monkeypatch, tmp_path):

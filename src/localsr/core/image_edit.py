@@ -34,6 +34,7 @@ from localsr.core.image_io import open_photo
 from localsr.core.memory_errors import (
     EDIT_OUT_OF_MEMORY_MESSAGE,
     DeviceOutOfMemoryError,
+    EditMemoryStop,
     is_edit_out_of_memory,
 )
 from localsr.core.output_publish import publish_output, require_output_name
@@ -687,11 +688,18 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                 raise InterruptedError("Editing cancelled.")
             if process.returncode != 0:
                 detail = "\n".join(logs)
-                # The guard uses exit 75 when memory runs short; rewrite both guard and
-                # sd-cli out-of-memory failures into the user-facing edit size/placement advice.
+                # The guard uses exit 75 when memory runs short. A stop while the editor ran
+                # says what the guard saw; sd-cli's own out-of-memory failures, and the
+                # guard's check before loading, get the edit size/placement advice.
                 guard = [line for line in logs if line.startswith("Editing stopped")]
+                if process.returncode == 75 and guard:
+                    raise EditMemoryStop(
+                        guard[-1],
+                        device_type="cpu" if initial.unified else "cuda",
+                        step="edit",
+                    )
                 if process.returncode == 75:
-                    cause = MemoryError(guard[-1] if guard else detail)
+                    cause = MemoryError(detail)
                     raise DeviceOutOfMemoryError(
                         EDIT_OUT_OF_MEMORY_MESSAGE,
                         device_type="cpu" if initial.unified else "cuda",

@@ -14,7 +14,13 @@ import time
 from pathlib import Path
 
 from localsr.core.child_processes import native_environment, stop_process
-from localsr.core.edit_memory import EditPlan, check_edit_pressure, read_host_memory
+from localsr.core.edit_memory import (
+    EditPlan,
+    check_edit_pressure,
+    memory_stalled,
+    memory_tight,
+    read_host_memory,
+)
 
 
 def process_memory(process) -> int:
@@ -123,6 +129,8 @@ def main(args=None) -> int:
         warning_since = None
         warning_swap = 0
         critical_samples = 0
+        stall_since = None
+        tight_swap = None
         while process.poll() is None:
             if cancelled.wait(0.25):
                 return 130
@@ -137,6 +145,11 @@ def main(args=None) -> int:
                 warning_swap = memory.swap_used
             warning_since = (warning_since or now) if raised else None
             critical_samples = critical_samples + 1 if memory.pressure == "critical" else 0
+            stall_since = (stall_since or now) if memory_stalled(memory) else None
+            if not memory_tight(memory, plan):
+                tight_swap = None
+            elif tight_swap is None:
+                tight_swap = memory.disk_swap
             check_edit_pressure(
                 memory,
                 plan,
@@ -145,6 +158,8 @@ def main(args=None) -> int:
                 warning_seconds=now - warning_since if warning_since else 0.0,
                 critical_samples=critical_samples,
                 warning_swap=warning_swap,
+                stall_seconds=now - stall_since if stall_since else 0.0,
+                tight_swap=tight_swap,
             )
         return process.wait()
     except MemoryError as error:
