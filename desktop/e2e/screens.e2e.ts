@@ -262,4 +262,56 @@ test.describe('screens @visual', () => {
     await sheet.locator('.row').filter({ hasText: 'Web image (JPEG)' }).click();
     await shoot(page, 'recipes-workflow-card');
   });
+  const stepsScenario = {
+    ...ready,
+    photos: 1,
+    pairs: true,
+    settings: {
+      ...ready.settings,
+      output_scale: 4,
+      fix_stages: [
+        { fix: 'jpeg', model_id: 'fbcnn_color' },
+        { fix: 'colour', model_id: 'ddcolor_modelscope' },
+        { fix: 'noise', model_id: 'scunet_color_real_gan' },
+      ],
+    },
+  };
+  const stepKinds = [
+    { kind: 'restore', fix: 'jpeg', model_id: 'fbcnn_color' },
+    { kind: 'restore', fix: 'colour', model_id: 'ddcolor_modelscope' },
+    { kind: 'restore', fix: 'noise', model_id: 'scunet_color_real_gan' },
+    { kind: 'upscale', model_id: 'span_photo_x4' },
+  ];
+
+  test('the viewer during step 2 of 4, with the plan line marked', async ({ page }) => {
+    await openApp(page, {
+      ...stepsScenario,
+      running: true,
+      jobSteps: stepKinds.map((step, index) => ({
+        ...step,
+        state: index === 0 ? 'done' : index === 1 ? 'running' : 'waiting',
+      })),
+    });
+    await expect(page.locator('.status-bar strong')).toContainText('Step 2 of 4 · Colour');
+    await showPane(page, 'preview');
+    await expect(page.locator('.canvas-well .step-label')).toHaveText('Step 2 of 4 · Colour');
+    await shoot(page, 'steps-running');
+  });
+
+  test('the step chips above a finished result', async ({ page }) => {
+    await openApp(page, {
+      ...stepsScenario,
+      finished: true,
+      outputs: { 1: [{ id: 'job-steps', label: 'SPAN ×4', quality: 'Quick', seconds: 40 }] },
+      lastSteps: {
+        job_id: 'job-steps',
+        media_id: 'photo-1',
+        steps: stepKinds.map((step, index) => ({ ...step, state: 'done', kept: index < 3 })),
+      },
+    });
+    await showPane(page, 'preview');
+    const chips = page.getByRole('group', { name: 'Result after each step' });
+    await expect(chips.getByRole('button')).toHaveText(['JPEG', 'Colour', 'Noise', '4×']);
+    await shoot(page, 'steps-chips');
+  });
 });
