@@ -31,6 +31,9 @@
   export let activeDevice: DeviceInfo | undefined;
   export let openLibrary: EnhancePanelActions['openLibrary'];
   export let toggleFix: EnhancePanelActions['toggleFix'];
+  export let seeFixOnPhoto: EnhancePanelActions['seeFixOnPhoto'];
+  /** The preview patch is on offer: `photo` when a photo is open, `example` otherwise, empty when off. */
+  export let patchLink: 'photo' | 'example' | '' = '';
   export let updateSettings: EnhancePanelActions['updateSettings'];
   export let moreOpen = false;
 
@@ -171,6 +174,30 @@
                 ? "Adds colour to black-and-white videos. Colours are the model's guess and are carried between frames so they stay steady."
                 : "Adds colour to black-and-white photos. The colours are the model's guess. A photo that already has colour is recoloured too."}
             </p>{/if}
+          {#if patchLink}
+            <div class="fix-pop-change">
+              {#if model && stage?.installed && patchLink === 'photo'}
+                <button
+                  class="link-button"
+                  type="button"
+                  on:click={() => seeFixOnPhoto(row.id as FixKind)}>See it on this photo</button
+                >
+              {:else}
+                <button
+                  class="link-button"
+                  type="button"
+                  on:click={() =>
+                    row.id === 'colour'
+                      ? openLibrary('browse', undefined, model?.model_id)
+                      : openLibrary(
+                          stage?.role === 'primary' ? 'primary' : 'fix',
+                          row.id as FixStageKind,
+                          model?.model_id,
+                        )}>See an example</button
+                >
+              {/if}
+            </div>
+          {/if}
           {#if row.id !== 'colour'}
             <div class="fix-pop-change">
               <button

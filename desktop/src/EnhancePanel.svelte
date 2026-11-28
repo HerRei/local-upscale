@@ -62,6 +62,7 @@
     setContent,
     radioGroupKeydown,
     toggleFix,
+    seeFixOnPhoto,
     setSize,
     openLibrary,
     moveFix,
@@ -138,6 +139,7 @@
     lastFailure,
     acceleratorFailure,
     interpolationSupported,
+    patchLink,
   } = view);
 
   $: if (!recipesOpen) {
@@ -564,6 +566,8 @@
                 {activeDevice}
                 {openLibrary}
                 {toggleFix}
+                {seeFixOnPhoto}
+                {patchLink}
                 {updateSettings}
                 bind:moreOpen={moreFixesOpen}
               />

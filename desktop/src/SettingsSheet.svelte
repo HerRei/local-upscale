@@ -47,6 +47,7 @@
       | UiSettings['interface_scale']
       | NonNullable<UiSettings['contrast']>
       | NonNullable<UiSettings['viewer_background']>
+      | NonNullable<UiSettings['preview_patch']>
       | NonNullable<UiSettings['accent']>
       | NonNullable<UiSettings['stopped_job_result']>,
   ) => void;
@@ -350,6 +351,36 @@
               on:change={(event) =>
                 updateSettings({ enable_live_preview: event.currentTarget.checked })}
             />
+          </div>
+
+          <div class="setting-row">
+            <div class="setting-copy">
+              <label class="setting-label" for="settings-preview-patch"
+                >Preview fixes on your photo</label
+              >
+              <p class="setting-desc" id="settings-preview-patch-desc">
+                Shows what the ticked fixes do on a part of the open photo before you start.
+                Automatic updates the preview by itself when that takes about 5 seconds or less on
+                this computer, and waits for a click when it takes longer.
+              </p>
+            </div>
+            <div class="setting-control">
+              <select
+                id="settings-preview-patch"
+                aria-describedby="settings-preview-patch-desc"
+                value={settings.preview_patch ?? 'auto'}
+                on:change={(event) =>
+                  setPreference(
+                    'preview_patch',
+                    event.currentTarget.value as NonNullable<UiSettings['preview_patch']>,
+                  )}
+              >
+                <option value="auto">Automatic</option>
+                <option value="live">Always update by itself</option>
+                <option value="manual">Update when I click</option>
+                <option value="off">Off</option>
+              </select>
+            </div>
           </div>
 
           <div class="setting-row">

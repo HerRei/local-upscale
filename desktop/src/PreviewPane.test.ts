@@ -2062,6 +2062,44 @@ describe('Patch', () => {
       vi.useRealTimers();
     }
   });
+
+  it('11. shows the original in the patch while M is held', async () => {
+    const view = await open({ patch: patchState('ready', stepsOf(['done', 'done', 'done'])) });
+    expect(frame(view.container)?.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://step2.png',
+    );
+    await fireEvent.keyDown(window, { key: 'm' });
+    expect(frame(view.container)?.querySelector('img')).toBeNull();
+    await fireEvent.keyUp(window, { key: 'm' });
+    expect(frame(view.container)?.querySelector('img')?.getAttribute('src')).toBe(
+      'asset://step2.png',
+    );
+  });
+
+  it('13. the popover link presses that fix chip and turns the patch on', async () => {
+    const view = await open({
+      patchShown: false,
+      patch: patchState('ready', stepsOf(['done', 'done', 'done'])),
+    });
+    (view.component as unknown as { showPatchStep: (key: string) => void }).showPatchStep('noise');
+    expect(view.setPatchShown).toHaveBeenCalledWith(true);
+    await view.rerender({ patchShown: true });
+    const group = screen.getByRole('group', { name: 'Preview steps' });
+    expect(within(group, 'Noise').getAttribute('aria-pressed')).toBe('true');
+    expect(within(group, '4×').getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('12. hides the patch in Split and brings it back with Original', async () => {
+    const view = await open({
+      patch: patchState('ready', stepsOf(['done', 'done', 'done'])),
+      resultPreview: 'data:image/png;base64,result',
+      patchShown: true,
+    });
+    await fireEvent.click(screen.getByRole('radio', { name: 'Split' }));
+    expect(frame(view.container)).toBeNull();
+    await fireEvent.click(screen.getByRole('radio', { name: 'Original' }));
+    expect(frame(view.container)).not.toBeNull();
+  });
 });
 
 function within(group: HTMLElement, name: string): HTMLElement {

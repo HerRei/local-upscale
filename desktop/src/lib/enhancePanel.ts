@@ -178,6 +178,8 @@ export interface EnhancePanelView {
   lastFailure: string;
   acceleratorFailure: boolean;
   interpolationSupported: boolean;
+  /** What the fix popover offers for the preview patch; empty when there is none. */
+  patchLink: 'photo' | 'example' | '';
 }
 
 export interface EnhancePanelActions {
@@ -196,6 +198,8 @@ export interface EnhancePanelActions {
   setContent: (content: UiSettings['content']) => void;
   radioGroupKeydown: (event: KeyboardEvent) => void;
   toggleFix: (fix: FixKind) => void;
+  /** Turns the preview patch on with this fix's chip pressed. */
+  seeFixOnPhoto: (fix: FixKind) => void;
   setSize: (scale: 1 | 2 | 3 | 4) => void;
   openLibrary: (
     slot: 'primary' | 'fix' | 'face' | 'browse' | 'edit' | 'try',

@@ -117,6 +117,7 @@
   import { plainEngineError, recommendedEngineOffer } from './lib/engines';
   import { videoAvailability } from './lib/videoEngines';
   import { buildStartInput } from './lib/startInput';
+  import { patchPlanEntries, patchRequestKey } from './lib/previewPatch';
   import { demoSnapshot } from './lib/demo';
   import { modal } from './lib/modal';
   import {
@@ -144,6 +145,7 @@
     MediaItem,
     MediaResults,
     ModelDownloadStatus,
+    PatchRegion,
     ModelMoveProgress,
     PairChoice,
     Quality,
@@ -1885,6 +1887,7 @@
       if (runtimePulseTimer) clearTimeout(runtimePulseTimer);
       if (skippedStepTimer) clearTimeout(skippedStepTimer);
       if (autoStartTimer) clearTimeout(autoStartTimer);
+      if (patchTimer) clearTimeout(patchTimer);
       if (etaTimer) clearInterval(etaTimer);
       for (const unlisten of unlisteners) unlisten();
     };
@@ -2896,6 +2899,7 @@
       | UiSettings['interface_scale']
       | NonNullable<UiSettings['contrast']>
       | NonNullable<UiSettings['viewer_background']>
+      | NonNullable<UiSettings['preview_patch']>
       | NonNullable<UiSettings['accent']>
       | NonNullable<UiSettings['stopped_job_result']>,
   ): Promise<void> {
@@ -3782,6 +3786,128 @@
       hasAudio: audioHasSource,
       recipeName: snapshot.recipes.find((recipe) => activeRecipeIds.has(recipe.id))?.name ?? '',
     });
+  }
+
+  // The preview patch (spec section 3). The pane owns where the frame is and reports moves;
+  // here the plan and the settings turn into requests for the host, which decides whether to run.
+  let patchRegions: Record<string, PatchRegion> = {};
+  let patchKey = '';
+  let patchPlace = '';
+  let patchTimer: ReturnType<typeof setTimeout> | undefined;
+  let patchLatest: PatchWanted | null = null;
+  // Set by Download and preview: the request that follows the install must run, not wait.
+  let patchForceNext = false;
+  type PatchWanted = {
+    mediaId: string;
+    slot: 'a';
+    region: PatchRegion;
+    input: StartBatchInput;
+  };
+  $: patchSetting = snapshot.settings.preview_patch ?? 'auto';
+  $: patchShown = snapshot.settings.preview_patch_shown ?? false;
+  $: patchAvailable =
+    Boolean(snapshot.engine?.features.includes('patch_preview')) &&
+    patchSetting !== 'off' &&
+    (settings.task === 'upscale' || settings.task === 'denoise');
+  $: patchJobBusy =
+    Boolean(snapshot.runtime.active_job_id) ||
+    startingJob ||
+    snapshot.jobs.some((job) => job.status === 'queued' || job.status === 'starting');
+  $: patchPlan = patchPlanEntries(plan, settings);
+  $: patchMissingStage = plan.find((stage) => stage.model && !stage.installed && stage.canDownload);
+  $: patchDownloadSize =
+    patchMissingStage && patchMissingStage.sizeBytes > 0
+      ? formatBytes(patchMissingStage.sizeBytes)
+      : '';
+  $: patchRegion = selectedImage ? (patchRegions[selectedImage.id] ?? null) : null;
+  $: patchActive =
+    patchAvailable &&
+    patchShown &&
+    !patchJobBusy &&
+    selectedImage?.probe_status === 'ready' &&
+    patchPlan.length > 0 &&
+    patchRegion !== null &&
+    $planState.status === 'ready';
+  $: patchInput =
+    patchActive && selectedImage
+      ? buildStartInput(settings, {
+          mediaIds: [selectedImage.id],
+          task: settings.task as TaskKind,
+          batchMode: false,
+          hasAudio: audioHasSource,
+        })
+      : null;
+  // While the plan is worked out again nothing changes: the picture on screen stays and no
+  // request goes out for a plan that is about to be replaced.
+  $: if ($planState.status !== 'loading') {
+    syncPatch(
+      patchInput && selectedImage && patchRegion
+        ? { mediaId: selectedImage.id, slot: 'a', region: patchRegion, input: patchInput }
+        : null,
+      plan.map((stage) => (stage.installed ? '1' : '0')).join(''),
+    );
+  }
+  let patchLinkOffer: 'photo' | 'example' | '';
+  $: patchLinkOffer = patchAvailable ? (selectedImage ? 'photo' : 'example') : '';
+
+  function sendPatch(request: PatchWanted, force: boolean): void {
+    if (patchTimer) clearTimeout(patchTimer);
+    patchTimer = undefined;
+    if (!api.isTauri()) return;
+    const forced = force || patchForceNext;
+    patchForceNext = false;
+    api
+      .requestPatchPreview({
+        mediaId: request.mediaId,
+        slot: request.slot,
+        region: request.region,
+        input: request.input,
+        force: forced,
+      })
+      .catch((error) => console.error('Could not ask for the preview patch', error));
+  }
+
+  function syncPatch(request: PatchWanted | null, installed: string): void {
+    patchLatest = request;
+    if (!request) {
+      if (patchTimer) clearTimeout(patchTimer);
+      patchTimer = undefined;
+      if (patchKey && api.isTauri()) {
+        void api.cancelPatchPreview('a').catch(() => undefined);
+      }
+      patchKey = '';
+      patchPlace = '';
+      return;
+    }
+    const key = `${patchRequestKey(request)}|${installed}`;
+    if (key === patchKey) return;
+    patchKey = key;
+    const place = `${request.mediaId}|${request.region.x}|${request.region.y}`;
+    if (patchTimer) clearTimeout(patchTimer);
+    if (place !== patchPlace) {
+      // A new file or position was already waited for by the pane.
+      patchPlace = place;
+      sendPatch(request, false);
+    } else {
+      patchTimer = setTimeout(() => sendPatch(request, false), 400);
+    }
+  }
+
+  function updatePatch(): void {
+    if (patchLatest) sendPatch(patchLatest, true);
+  }
+
+  async function downloadPatchModel(): Promise<void> {
+    const target = patchMissingStage?.model;
+    if (!target) return;
+    patchForceNext = true;
+    await runDownload(target);
+    if (!findDownloadModel(target.model_id)?.installed) patchForceNext = false;
+  }
+
+  function seeFixOnPhoto(fix: FixKind): void {
+    page = 'preview';
+    previewPane?.showPatchStep(fix);
   }
 
   async function start(mediaIds?: string[]): Promise<void> {
@@ -4761,6 +4887,7 @@
     setContent,
     radioGroupKeydown,
     toggleFix,
+    seeFixOnPhoto,
     setSize,
     openLibrary,
     moveFix,
@@ -4851,6 +4978,7 @@
     lastFailure,
     acceleratorFailure,
     interpolationSupported,
+    patchLink: patchLinkOffer,
   };
 </script>
 
@@ -5073,6 +5201,16 @@
           compactHidden={page !== 'preview'}
           addFiles={() => void addFiles()}
           dropping={filesDragging}
+          {patchAvailable}
+          {patchShown}
+          setPatchShown={(shown) => void setPreference('preview_patch_shown', shown)}
+          {patchJobBusy}
+          patch={snapshot.runtime.patches?.a ?? null}
+          {patchPlan}
+          {patchDownloadSize}
+          patchMoved={(mediaId, region) => (patchRegions = { ...patchRegions, [mediaId]: region })}
+          {updatePatch}
+          downloadPatchModel={() => void downloadPatchModel()}
         />
       {/if}
     </div>
