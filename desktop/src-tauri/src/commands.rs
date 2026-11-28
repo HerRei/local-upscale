@@ -882,6 +882,18 @@ fn apply_preference(state: &AppState, name: &str, value: &Value) -> AppResult<()
                     .ok_or_else(|| AppError::Validation("unknown stopped job result".into()))?;
                 settings.stopped_job_result = choice.into();
             }
+            "preview_patch" => {
+                let choice = value
+                    .as_str()
+                    .filter(|s| matches!(*s, "auto" | "live" | "manual" | "off"))
+                    .ok_or_else(|| AppError::Validation("unknown preview patch setting".into()))?;
+                settings.preview_patch = choice.into();
+            }
+            "preview_patch_shown" => {
+                settings.preview_patch_shown = value.as_bool().ok_or_else(|| {
+                    AppError::Validation("preview_patch_shown must be true or false".into())
+                })?;
+            }
             "appearance" => {
                 let appearance = value
                     .as_str()
@@ -4323,6 +4335,12 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
     let limits = steps.limits();
     validate_fix_selections(&settings.fix_stages)?;
     validate_step_stages(&settings.step_stages, None)?;
+    if !matches!(
+        settings.preview_patch.as_str(),
+        "auto" | "live" | "manual" | "off"
+    ) {
+        return Err(AppError::Validation("unknown preview patch setting".into()));
+    }
     if !matches!(settings.interface_scale, 100 | 110 | 125) {
         return Err(AppError::Validation(
             "interface scale must be 100, 110, or 125 percent".into(),

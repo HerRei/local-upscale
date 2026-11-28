@@ -499,6 +499,19 @@ mod tests {
     }
 
     #[test]
+    fn preview_patch_settings_default_for_older_files_and_refuse_unknown_values() {
+        let older: UiSettings = serde_json::from_str("{}").unwrap();
+        assert_eq!(older.preview_patch, "auto");
+        assert!(!older.preview_patch_shown);
+        let unknown: UiSettings = serde_json::from_str(r#"{"preview_patch":"sometimes"}"#).unwrap();
+        assert_eq!(unknown.preview_patch, "auto");
+        let chosen: UiSettings =
+            serde_json::from_str(r#"{"preview_patch":"off","preview_patch_shown":true}"#).unwrap();
+        assert_eq!(chosen.preview_patch, "off");
+        assert!(chosen.preview_patch_shown);
+    }
+
+    #[test]
     fn edit_expert_settings_default_load_from_older_files_and_round_trip() {
         let defaults: UiSettings = serde_json::from_str("{}").unwrap();
         assert_eq!(defaults.edit_text_encoder, "auto");

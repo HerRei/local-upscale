@@ -550,6 +550,15 @@ pub struct UiSettings {
     // Applied recipe and workflow ids, newest first.
     #[serde(default)]
     pub recipe_recent: Vec<String>,
+    /// How the preview patch updates: `auto`, `live`, `manual` or `off` (Settings, General).
+    #[serde(
+        default = "default_preview_patch",
+        deserialize_with = "deserialize_preview_patch"
+    )]
+    pub preview_patch: String,
+    /// The preview patch was turned on once, so it stays on.
+    #[serde(default)]
+    pub preview_patch_shown: bool,
 }
 
 pub const MAX_RECIPES: usize = 100;
@@ -675,6 +684,23 @@ fn deserialize_viewer_background<'de, D: serde::Deserializer<'de>>(
     )
 }
 
+fn default_preview_patch() -> String {
+    "auto".into()
+}
+
+fn deserialize_preview_patch<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<String, D::Error> {
+    let value = String::deserialize(deserializer)?;
+    Ok(
+        if matches!(value.as_str(), "auto" | "live" | "manual" | "off") {
+            value
+        } else {
+            default_preview_patch()
+        },
+    )
+}
+
 fn deserialize_accent<'de, D: serde::Deserializer<'de>>(
     deserializer: D,
 ) -> Result<String, D::Error> {
@@ -767,6 +793,8 @@ impl Default for UiSettings {
             stopped_job_result: default_stopped_job_result(),
             recipe_pins: Vec::new(),
             recipe_recent: Vec::new(),
+            preview_patch: default_preview_patch(),
+            preview_patch_shown: false,
         }
     }
 }
@@ -814,6 +842,52 @@ pub struct LastSteps {
     pub job_id: String,
     pub media_id: String,
     pub steps: Vec<JobStep>,
+}
+
+/// A square of the source picture for the preview patch, in source pixels.
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct PatchRegion {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+/// One step of a preview patch run (`docs/design/previews-and-recipes.md`, section 3).
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
+pub struct PatchStep {
+    pub kind: String,
+    pub fix: String,
+    pub model_id: String,
+    /// `waiting`, `running`, `done`, `skipped` or `missing`.
+    pub state: String,
+    /// The picture's address in the preview folder; empty until the step is done.
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+    pub seconds: f64,
+    /// The engine's reason for a skipped step.
+    pub note: String,
+}
+
+/// One preview patch variant; the host fills it once the patch commands exist (task P2).
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct PatchState {
+    /// `idle`, `running`, `ready`, `stale`, `busy` or `failed`.
+    pub state: String,
+    pub media_id: String,
+    pub region: Option<PatchRegion>,
+    /// 0 when unknown.
+    pub estimate_seconds: f64,
+    pub error: String,
+    pub steps: Vec<PatchStep>,
+}
+
+/// Variant A is the plan as it stands; B swaps one slot's model for comparison.
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct Patches {
+    pub a: PatchState,
+    pub b: PatchState,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -888,6 +962,9 @@ pub struct RuntimeStatus {
     /// Set when a lone photo job with step results ends (S6 keeps its full-size files).
     #[serde(default)]
     pub last_steps: Option<LastSteps>,
+    /// The preview patch's two variants; absent until the host runs patches (task P2).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub patches: Option<Patches>,
     /// The plan line's name of each of `job_steps`, for the status title.
     #[serde(skip)]
     pub job_step_names: Vec<String>,
@@ -1179,6 +1256,7 @@ impl Default for RuntimeStatus {
             tiles_total: 0,
             job_steps: Vec::new(),
             last_steps: None,
+            patches: None,
             job_step_names: Vec::new(),
         }
     }
