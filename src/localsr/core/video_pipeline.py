@@ -41,6 +41,7 @@ from .video_io import (
     selected_frame_count,
     validate_hdr_encoder,
 )
+from .video_normalization import Deinterlace
 
 
 def _prefetch(items, depth: int):
@@ -364,7 +365,14 @@ def _run_video_job(
         add_note = getattr(engine, "add_note", None)
         if callable(add_note):
             add_note("Already progressive · kept as it is")
-    field_mode = deinterlace_active and deinterlace.params.get("mode", "frame") == "field"
+    scan = (
+        Deinterlace(
+            deinterlace.params.get("mode", "frame"), deinterlace.params.get("parity", "auto")
+        )
+        if deinterlace is not None and deinterlace_active
+        else None
+    )
+    field_mode = scan is not None and scan.mode == "field"
     if field_mode:
         fps *= 2
     interpolation = _interpolation_target(config, fps, preserve_hdr, synthesizer)
@@ -483,6 +491,7 @@ def _run_video_job(
             stage_cb=stage_cb,
             synthesizer=synthesizer,
             keep_partial=keep_partial,
+            deinterlace=scan,
         )
 
 
@@ -550,6 +559,7 @@ def _run_video_frames(
     stage_cb,
     synthesizer=None,
     keep_partial: bool | Callable[[], bool] | None = None,
+    deinterlace: Deinterlace | None = None,
 ) -> VideoJobResult:
     # A frame pair that does not fit next to the fix and upscaling models may park them
     # in system memory; the engine brings them back before its next frame.
@@ -685,6 +695,7 @@ def _run_video_frames(
         end_frame=config.end_frame,
         cancel_event=cancel_event,
         hdr_mode=config.hdr_mode,
+        deinterlace=deinterlace,
     )
     output_frames = run_video_chain(decoded, ctx, stages=stages)
     if interpolation is not None:
