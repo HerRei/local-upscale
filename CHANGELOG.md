@@ -34,6 +34,10 @@
   with the models your Quality choice picks, and starts nothing. Pin one to keep it in
   the menu, or Duplicate it to My recipes. The empty start screen links to them with "or
   start from a workflow…".
+- **Example pictures in the Model library.** The fix models and the photo and
+  illustration upscalers show a before and after picture, made with the model itself
+  from a CC0 or public-domain source; Before and After switch between them. The
+  recommended workflows show theirs on their card.
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a
   glance, and open settings where you need them. The new blue accent follows your Mac’s
   accent colour, and the colour-blind palette is easier to distinguish.
@@ -70,7 +74,9 @@
   without its result list is no longer labelled Original. The hardware line shows no
   memory meter when there is no reading. Models can be chosen while Start waits for a
   download; only the model folder stays locked. On Windows, the engine no longer waits
-  on a blocked input pipe when it loads a library for the first time.
+  on a blocked input pipe when it loads a library for the first time. On the command
+  line, `localsr process` with the DDColor model keeps its colour on a black-and-white
+  picture.
 
 ## [0.6.3-beta] - 2026-11-27
 
