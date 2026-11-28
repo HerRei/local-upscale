@@ -25,6 +25,7 @@ input_width
 interpolation_bundle_dir
 interpolation_model_id
 keyframe_interval
+lightning_lora_path  # EditJobRequest field, read by run_edit_job from the request dict
 measured_frame_count
 media_kind
 median_inference_ms

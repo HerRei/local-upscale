@@ -44,7 +44,7 @@
     "attribution_required": true,
     "terms_acceptance_required": false,
     "automated_download_allowed": true,
-    "min_unified_memory_gb": 24,
+    "min_unified_memory_gb": 16,
     "min_vram_gb": 8
   },
   {
@@ -416,5 +416,32 @@
     "automated_download_allowed": true,
     "min_unified_memory_gb": 16,
     "min_vram_gb": 8
+  },
+  {
+    "model_id": "qwen_edit_2511_lightning_4step",
+    "kind": "speed_addon",
+    "speed": "lightning",
+    "name": "Qwen Image Edit 2511 \u00b7 Lightning 4-step",
+    "family": "qwen-image-edit-2511",
+    "quantization": "BF16",
+    "files": [
+      {
+        "role": "lora",
+        "filename": "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+        "size_bytes": 849608296,
+        "sha256": "22226e8d05d354bb356627d428809f5afd7819399b077238a2b70a82883a904f",
+        "download_url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning/resolve/107d238d68b8387e32843d0b4a2e24ceb0d3ad86/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+      }
+    ],
+    "default_steps": 4,
+    "cfg_scale": 1.0,
+    "author": "LightX2V",
+    "license_name": "Apache-2.0",
+    "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+    "source_url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning",
+    "commercial_use_allowed": true,
+    "attribution_required": true,
+    "terms_acceptance_required": false,
+    "automated_download_allowed": true
   }
 ]

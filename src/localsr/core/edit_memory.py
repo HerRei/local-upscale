@@ -93,6 +93,40 @@ def mapped_size(model: dict) -> int:
     return sum(f["size_bytes"] for f in model["files"])
 
 
+# A speed LoRA is applied while the transformer samples, never merged into the GGUF
+# weights. On unified memory its weights and the buffers that apply it stay resident
+# beside the transformer, a little more than twice its file size: Qwen Image Edit 2511
+# Q2_K at 512 px peaked at 7.31 GiB without the 0.79 GiB Lightning LoRA and at
+# 8.97-9.00 GiB with it. Beside a dedicated GPU the card holds its weights with the
+# transformer.
+LORA_UNIFIED_SHARE = 2.14
+
+# Peak physical footprints of the editor measured at 512 px with the text encoder and VAE
+# on the CPU (16 GB M1 Pro, stable-diffusion.cpp 3f8527a, 28 November 2026), without and
+# with the speed LoRA. A measured bundle uses them, plus MEASURED_MARGIN, instead of the
+# phase model; a larger edit adds its larger working buffers.
+MEASURED_UNIFIED_PEAKS = {
+    "qwen_edit_2511_q2_k": (int(7.31 * GIB), int(9.00 * GIB)),
+}
+MEASURED_MARGIN = 1.02
+
+
+def lora_size(model: dict) -> int:
+    """Bytes of the speed LoRA a run applies, 0 for a run without one."""
+    return sum(f["size_bytes"] for f in model["files"] if f["role"] == "lora")
+
+
+def lora_footprint(model: dict, unified: bool) -> int:
+    """What the speed LoRA adds to the transformer's memory while it samples."""
+    size = lora_size(model)
+    return int(size * LORA_UNIFIED_SHARE) if unified else size
+
+
+def with_addon(model: dict, addon: dict) -> dict:
+    """The bundle as it runs with a speed add-on: its own files and the add-on's."""
+    return {**model, "files": [*model["files"], *addon["files"]]}
+
+
 def estimate_edit_memory(
     model: dict,
     unified: bool,
@@ -106,17 +140,24 @@ def estimate_edit_memory(
     Weights are memory-mapped and touched lazily: the encoders are resident while
     the prompt and reference are encoded, the transformer while the image is
     sampled, and the phase that is over can be evicted. On unified memory the
-    transformer lives in the same pool; beside a dedicated GPU the card holds
-    the transformer and any component placed on the GPU, while the host holds
-    components placed on the CPU.
+    transformer lives in the same pool, with a speed LoRA when the run applies one;
+    beside a dedicated GPU the card holds the transformer, the LoRA and any
+    component placed on the GPU, while the host holds components placed on the CPU.
+    A bundle with a measured peak on unified memory uses that peak instead.
     """
     sizes = {f["role"]: f["size_bytes"] for f in model["files"]}
     activations = activation_memory(unified, limit)
     conditioning = (
         0 if text_encoder == "gpu" else sizes.get("text_encoder", 0) + sizes.get("vision", 0)
     )
+    measured = MEASURED_UNIFIED_PEAKS.get(model.get("model_id", "")) if unified else None
+    if measured is not None:
+        peak = measured[1] if lora_size(model) else measured[0]
+        larger = max(0, activations - activation_memory(True, 512))
+        return max(int(conditioning * 1.1), int(peak * MEASURED_MARGIN + larger * 1.1))
     vae_host = 0 if vae == "gpu" else sizes.get("vae", 0)
-    sampling = vae_host + activations + (sizes["diffusion"] if unified else 0)
+    transformer = sizes["diffusion"] + lora_footprint(model, True) if unified else 0
+    sampling = vae_host + activations + transformer
     return int(max(conditioning, sampling) * 1.1)
 
 
@@ -408,7 +449,8 @@ def plan_edit(
     reserve = reserve_for(memory.total_ram, memory.unified)
     requested_limit = min(1024, max_dimension)
     sizes = {f["role"]: f["size_bytes"] for f in model["files"]}
-    diffusion_bytes = sizes.get("diffusion", 0)
+    # The speed LoRA samples with the transformer, so it is placed and budgeted with it.
+    diffusion_bytes = sizes.get("diffusion", 0) + lora_footprint(model, memory.unified)
     vae_bytes = sizes.get("vae", 0)
     encoder_bytes = sizes.get("text_encoder", 0) + sizes.get("vision", 0)
     total_bytes = mapped_size(model)

@@ -1,3 +1,4 @@
+import { editSpeed } from './editing';
 import { formatBytes } from './format';
 import {
   FIX_ROW_LABELS,
@@ -152,6 +153,7 @@ export interface PlanStage {
     | 'face_restore'
     | 'video'
     | 'edit'
+    | 'edit_addon'
     | 'deflicker'
     | 'interpolate'
     | 'audio_denoise'
@@ -272,6 +274,8 @@ export function resolvePlan(
     usingTemporalVideo: boolean;
     selectedVideoModel?: CatalogVideoModel;
     editModel?: EditModel;
+    /** The speed add-on Quick would use with `editModel` (`editSpeedAddon`). */
+    editAddon?: EditModel;
     hasAudio?: boolean;
     /** Steps that need paint, which the open photo has; a step that needs it runs only then. */
     maskedSteps?: readonly string[];
@@ -294,6 +298,21 @@ export function resolvePlan(
         needsFile: !model.installed && !model.automated_download_allowed,
         sizeBytes: model.installed ? 0 : model.total_size_bytes,
       });
+      // Quick runs the add-on too: a stage only the download code reads, so a missing file
+      // is fetched with the model. The Model list leaves it out.
+      const addon = options.editAddon;
+      if (addon && editSpeed(settings, model, addon) === 'lightning') {
+        stages.push({
+          kind: 'edit_addon',
+          role: 'step',
+          label: 'Quick',
+          editModel: addon,
+          installed: addon.installed,
+          canDownload: !addon.installed && addon.automated_download_allowed,
+          needsFile: !addon.installed && !addon.automated_download_allowed,
+          sizeBytes: addon.installed ? 0 : addon.total_size_bytes,
+        });
+      }
     }
     return stages;
   }

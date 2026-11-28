@@ -397,6 +397,25 @@
       "accepted_terms": false
     }
   },
+  "edit_lightning": {
+    "type": "edit_job_request",
+    "data": {
+      "job_id": "sample-edit-lightning",
+      "image_path": "/in/photo.png",
+      "output_path": "/out/photo_localsr_edit_quick.png",
+      "model_id": "qwen_edit_2511_q2_k",
+      "bundle_dir": "/models/qwen-image-edit-2511",
+      "runtime_path": "/bin/sd-cli",
+      "prompt": "Replace the sky with sunset clouds.",
+      "device": "mps",
+      "max_dimension": 512,
+      "steps": 40,
+      "seed": 42,
+      "accepted_terms": false,
+      "speed": "lightning",
+      "lightning_lora_path": "/models/qwen-image-edit-2511/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+    }
+  },
   "edit_custom_model": {
     "type": "edit_job_request",
     "data": {

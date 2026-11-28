@@ -13,9 +13,11 @@ sys.path.insert(0, str(ROOT / "src"))
 
 from localsr.core.edit_memory import (  # noqa: E402
     GIB,
+    MEASURED_UNIFIED_PEAKS,
     activation_memory,
     estimate_edit_memory,
     reserve_for,
+    with_addon,
 )
 
 # Memory sizes Apple sells and common graphics-card sizes, in GiB.
@@ -23,19 +25,24 @@ MAC_TIERS = (16, 24, 32, 36, 48, 64, 96, 128)
 GPU_TIERS = (8, 12, 16, 20, 24, 32, 48)
 
 
-def unified_tier(model: dict) -> int:
+def unified_tier(model: dict, addon: dict | None = None) -> int:
     """Smallest Mac whose idle memory admits the bundle at 512 px.
 
     Roughly 70% of unified memory is free on an idle Mac, and the transformer
     with its working buffers must stay under 60% of it so Metal never wires
-    more than Apple's recommended working set.
+    more than Apple's recommended working set. An estimated bundle keeps a 4 GiB
+    reserve; a bundle with a measured peak gets the worker's own Mac reserve, and
+    must fit with its speed add-on as well.
     """
     diffusion = next(f["size_bytes"] for f in model["files"] if f["role"] == "diffusion")
     vae = next((f["size_bytes"] for f in model["files"] if f["role"] == "vae"), 0)
-    needed = estimate_edit_memory(model, True, 512)
+    measured = model["model_id"] in MEASURED_UNIFIED_PEAKS
+    runs = [model, with_addon(model, addon)] if measured and addon else [model]
+    needed = max(estimate_edit_memory(run, True, 512) for run in runs)
     sampling = diffusion + vae + activation_memory(True, 512)
     for tier in MAC_TIERS:
-        if needed + reserve_for(tier * GIB) <= 0.70 * tier * GIB and sampling <= 0.60 * tier * GIB:
+        reserve = reserve_for(tier * GIB, unified=measured)
+        if needed + reserve <= 0.70 * tier * GIB and sampling <= 0.60 * tier * GIB:
             return tier
     raise ValueError(f"no Mac tier holds {model['model_id']}")
 
@@ -59,6 +66,7 @@ REVISIONS = {
     "johnsor/Mage-Flow-Edit-Turbo-GGUF": "93a5c5ca0cab9021d5c251e36168725681f0c45f",
     "Qwen/Qwen3-VL-4B-Instruct-GGUF": "1cd86afb9a95c410a6038ab3b40d8b578c892266",
     "Comfy-Org/Mage-Flow": "6ff68fbf3c667325e961d551691b246791d5eec0",
+    "lightx2v/Qwen-Image-Edit-2511-Lightning": "107d238d68b8387e32843d0b4a2e24ceb0d3ad86",
 }
 
 
@@ -202,12 +210,47 @@ def main():
             "automated_download_allowed": True,
         }
     )
+    # Qwen Image Edit 2511 Lightning: LightX2V's 4-step distilled LoRA for the 2511 editor,
+    # Apache-2.0 (model card front matter `license: apache-2.0`; the companion repository
+    # ModelTC/Qwen-Image-Lightning carries the Apache-2.0 text). It is a speed add-on of
+    # the Qwen bundles, never an edit model of its own: a Lightning edit applies it at run
+    # time with its own 4 steps and guidance 1.
+    addons = [
+        {
+            "model_id": "qwen_edit_2511_lightning_4step",
+            "kind": "speed_addon",
+            "speed": "lightning",
+            "name": "Qwen Image Edit 2511 · Lightning 4-step",
+            "family": "qwen-image-edit-2511",
+            "quantization": "BF16",
+            "files": [
+                file(
+                    "lora",
+                    "lightx2v/Qwen-Image-Edit-2511-Lightning",
+                    "Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+                )
+            ],
+            "default_steps": 4,
+            "cfg_scale": 1.0,
+            "author": "LightX2V",
+            "license_name": "Apache-2.0",
+            "license_url": "https://www.apache.org/licenses/LICENSE-2.0",
+            "source_url": "https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning",
+            "commercial_use_allowed": True,
+            "attribution_required": True,
+            "terms_acceptance_required": False,
+            "automated_download_allowed": True,
+        }
+    ]
     for model in models:
-        model["min_unified_memory_gb"] = unified_tier(model)
+        addon = next((a for a in addons if a["family"] == model["family"]), None)
+        model["min_unified_memory_gb"] = unified_tier(model, addon)
         model["min_vram_gb"] = gpu_tier(model)
     path = ROOT / "src/localsr/core/edit_catalog.json"
-    path.write_text(json.dumps(models, indent=2) + "\n", encoding="utf-8")
-    print(f"Pinned {len(models)} editing bundles; downloaded metadata only.")
+    path.write_text(json.dumps(models + addons, indent=2) + "\n", encoding="utf-8")
+    print(
+        f"Pinned {len(models)} editing bundles and {len(addons)} add-ons; downloaded metadata only."
+    )
 
 
 if __name__ == "__main__":

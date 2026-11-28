@@ -422,6 +422,36 @@ impl FromStr for EditPlacement {
     }
 }
 
+/// How an edit samples: the bundle's own steps and guidance, or the model family's
+/// Lightning LoRA with its 4 steps and guidance 1.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EditSpeed {
+    #[default]
+    Full,
+    Lightning,
+}
+
+impl EditSpeed {
+    pub fn is_full(&self) -> bool {
+        *self == Self::Full
+    }
+}
+
+impl FromStr for EditSpeed {
+    type Err = AppError;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "full" => Ok(Self::Full),
+            "lightning" => Ok(Self::Lightning),
+            _ => Err(AppError::Validation(format!(
+                "unsupported edit speed: {value}"
+            ))),
+        }
+    }
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct EditJobRequest {
     pub job_id: String,
@@ -456,6 +486,12 @@ pub struct EditJobRequest {
     pub edit_vram_limit_mb: u64,
     #[serde(default, skip_serializing_if = "is_false")]
     pub edit_allow_any_size: bool,
+    /// Left out when full, so engines without the `edit_lightning` feature take the request.
+    #[serde(default, skip_serializing_if = "EditSpeed::is_full")]
+    pub speed: EditSpeed,
+    /// The installed Lightning LoRA; resolved again from the catalog when the job is sent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lightning_lora_path: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -782,6 +818,44 @@ mod tests {
         assert_eq!(override_wire["data"]["edit_vram_limit_mb"], 8192);
         assert_eq!(override_wire["data"]["edit_allow_any_size"], true);
         assert!(validator.is_valid(&override_wire));
+    }
+
+    #[test]
+    fn edit_speed_is_left_out_when_full_and_lightning_names_its_lora() {
+        let validator = schema_validator();
+        let mut edit: EditJobRequest = serde_json::from_value(json!({
+            "job_id": "edit-speed",
+            "image_path": "/in/photo.png",
+            "output_path": "/out/edit.png",
+            "model_id": "qwen_edit_2511_q2_k",
+            "bundle_dir": "/models/qwen",
+            "runtime_path": "/bin/sd-cli",
+            "prompt": "Brighten",
+            "device": "mps"
+        }))
+        .unwrap();
+        // A request from a host that knows no speed is a full edit.
+        assert_eq!(edit.speed, EditSpeed::Full);
+        assert_eq!(edit.lightning_lora_path, None);
+        let full_wire = serde_json::to_value(WorkerJobRequest::Edit(edit.clone())).unwrap();
+        assert!(full_wire["data"].get("speed").is_none());
+        assert!(full_wire["data"].get("lightning_lora_path").is_none());
+        assert!(validator.is_valid(&full_wire));
+
+        edit.speed = EditSpeed::Lightning;
+        edit.lightning_lora_path =
+            Some("/models/qwen/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors".into());
+        let fast_wire = serde_json::to_value(WorkerJobRequest::Edit(edit)).unwrap();
+        assert_eq!(fast_wire["data"]["speed"], "lightning");
+        assert!(validator.is_valid(&fast_wire));
+        let mut bad = fast_wire.clone();
+        bad["data"]["speed"] = json!("turbo");
+        assert!(!validator.is_valid(&bad));
+        assert!("turbo".parse::<EditSpeed>().is_err());
+        assert_eq!(
+            "lightning".parse::<EditSpeed>().unwrap(),
+            EditSpeed::Lightning
+        );
     }
 
     #[test]

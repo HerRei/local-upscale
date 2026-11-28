@@ -381,6 +381,12 @@ describes the bundles and what they need.
 - **Qwen Image Edit 2511** — [Qwen](https://huggingface.co/Qwen/Qwen-Image-Edit-2511),
   Apache-2.0, with GGUF diffusion quantizations by Unsloth, the matching Qwen2.5-VL text and
   vision encoders and the Qwen Image VAE.
+- **Qwen Image Edit 2511 Lightning 4-step** — a LoRA by
+  [LightX2V](https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning), Apache-2.0 (the
+  model card's `license: apache-2.0`; the companion repository
+  [ModelTC/Qwen-Image-Lightning](https://github.com/ModelTC/Qwen-Image-Lightning) carries the
+  Apache-2.0 text). A speed add-on of the Qwen Image Edit 2511 bundles, pinned at revision
+  `107d238d68b8387e32843d0b4a2e24ceb0d3ad86`.
 - **FLUX.2 klein 4B** — [Black Forest Labs](https://huggingface.co/black-forest-labs/FLUX.2-klein-4B),
   Apache-2.0, with GGUF diffusion quantizations by leejet, the Qwen3-4B text encoder (Qwen,
   Apache-2.0, GGUF by Unsloth) and the FLUX.2 autoencoder as published by Comfy-Org (Apache-2.0).

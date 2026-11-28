@@ -16,12 +16,18 @@ import {
   editPeakEstimate,
   editRecommendedSize,
   editSizeFor,
+  editSpeed,
+  editSpeedAddon,
+  editStepsFor,
   editVramOptions,
   recommendAnyEditModel,
 } from './editing';
 import type { DeviceInfo, EditModel } from './types';
 
-const models = rawModels as unknown as EditModel[];
+// The catalog file lists the bundles and the speed add-on; the host splits them.
+const entries = rawModels as unknown as EditModel[];
+const models = entries.filter((model) => !model.kind);
+const lightning = entries.find((model) => model.kind === 'speed_addon')!;
 const gpu = (id: string, capacity: number): DeviceInfo => ({
   id,
   type: id === 'mps' ? 'mps' : 'cuda',
@@ -205,7 +211,11 @@ describe('Edit helpers', () => {
     const capabilities = demoSnapshot().capabilities;
     capabilities.system_ram_total = 16 * EDIT_GIB;
     const q2 = models.find((model) => model.model_id === 'qwen_edit_2511_q2_k')!;
-    expect(editFitFor(q2, capabilities, gpu('mps', 16))).toBe('too_heavy');
+    // Measured on a 16 GB M1 Pro: 7.31 GiB at 40 steps, 9.00 GiB with Lightning.
+    expect(editFitFor(q2, capabilities, gpu('mps', 16))).toBe('runs');
+    capabilities.system_ram_total = 8 * EDIT_GIB;
+    expect(editFitFor(q2, capabilities, gpu('mps', 8))).toBe('too_heavy');
+    capabilities.system_ram_total = 16 * EDIT_GIB;
     expect(editFitFor(q2, capabilities, gpu('cuda:0', 8))).toBe('runs');
     expect(editFitFor(q2, capabilities, undefined)).toBe('unknown');
     expect(editHardwareLabel(capabilities, gpu('mps', 16))).toBe(
@@ -305,5 +315,77 @@ describe('Mage-Flow summary', () => {
     const summary = EDIT_FAMILIES.find((family) => family.id === 'mage-flow-edit-turbo')!.summary;
     if (detectPlatform() === 'macos') expect(summary).toBe('4-step editor (CPU only) · MIT');
     else expect(summary).toBe('4-step editor · MIT');
+  });
+});
+
+describe('Quick quality and the Lightning add-on', () => {
+  const qwen = models.find((model) => model.model_id === 'qwen_edit_2511_q2_k')!;
+  const flux = models.find((model) => model.model_id === 'flux2_klein_4b_q4_0')!;
+  const features = ['image_edit', 'edit_lightning'];
+
+  it('lists the add-on in the catalog file but never as an edit model', () => {
+    expect(lightning).toMatchObject({
+      model_id: 'qwen_edit_2511_lightning_4step',
+      speed: 'lightning',
+      family: 'qwen-image-edit-2511',
+      default_steps: 4,
+      cfg_scale: 1,
+    });
+    expect(demoSnapshot().edit.models.some((model) => model.kind)).toBe(false);
+    expect(demoSnapshot().edit.addons?.map((model) => model.model_id)).toEqual([
+      'qwen_edit_2511_lightning_4step',
+    ]);
+  });
+
+  it.each([8, 16, 24, 48])(
+    'never recommends the 850 MB add-on, even as the smallest file, on a %s GB Mac',
+    (gb) => {
+      const capabilities = demoSnapshot().capabilities;
+      capabilities.system_ram_total = gb * EDIT_GIB;
+      for (const device of [gpu('mps', gb), gpu('cuda:0', gb), undefined]) {
+        expect(recommendAnyEditModel(entries, capabilities, device)?.kind).toBeUndefined();
+      }
+    },
+  );
+
+  it('shows the smallest bundle, not the add-on, where nothing fits', () => {
+    const capabilities = demoSnapshot().capabilities;
+    capabilities.system_ram_total = 8 * EDIT_GIB;
+    expect(recommendAnyEditModel(entries, capabilities, gpu('mps', 8))?.model_id).toBe(
+      'flux2_klein_4b_q4_0',
+    );
+    expect(recommendAnyEditModel(entries, capabilities, undefined)?.model_id).toBe(
+      'flux2_klein_4b_q4_0',
+    );
+  });
+
+  it('offers Quick for a catalog Qwen model on an engine that runs it', () => {
+    expect(editSpeedAddon(qwen, [lightning], features)).toBe(lightning);
+    expect(editSpeedAddon(qwen, [lightning], ['image_edit'])).toBeUndefined();
+    expect(editSpeedAddon(flux, [lightning], features)).toBeUndefined();
+    expect(editSpeedAddon({ ...qwen, model_id: '__custom__' }, [lightning], features)).toBe(
+      undefined,
+    );
+    expect(editSpeedAddon(qwen, undefined, features)).toBeUndefined();
+    expect(editSpeedAddon(undefined, [lightning], features)).toBeUndefined();
+  });
+
+  it('defaults to Quick unless the model is installed and the add-on is not', () => {
+    const installed = (model: EditModel, value: boolean) => ({ ...model, installed: value });
+    expect(editSpeed({}, qwen, undefined)).toBeNull();
+    expect(editSpeed({}, installed(qwen, false), installed(lightning, false))).toBe('lightning');
+    expect(editSpeed({}, installed(qwen, true), installed(lightning, false))).toBe('full');
+    expect(editSpeed({}, installed(qwen, true), installed(lightning, true))).toBe('lightning');
+    expect(
+      editSpeed({ edit_speed: 'lightning' }, installed(qwen, true), installed(lightning, false)),
+    ).toBe('lightning');
+    expect(editSpeed({ edit_speed: 'full' }, qwen, lightning)).toBe('full');
+  });
+
+  it('runs the add-on steps in Quick and the saved or own steps in Best', () => {
+    expect(editStepsFor({ edit_steps: 25 }, qwen, 'lightning', lightning)).toBe(4);
+    expect(editStepsFor({ edit_steps: 25 }, qwen, 'full', lightning)).toBe(25);
+    expect(editStepsFor({ edit_steps: 0 }, qwen, 'full', lightning)).toBe(40);
+    expect(editStepsFor({ edit_steps: 0 }, flux, null, undefined)).toBe(4);
   });
 });

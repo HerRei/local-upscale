@@ -530,6 +530,10 @@ pub struct UiSettings {
     pub edit_vram_limit_mb: u64,
     #[serde(default)]
     pub edit_allow_any_size: bool,
+    /// `full` or `lightning` once the user chose; None until then, when the plan takes
+    /// `lightning` unless the model is installed and its add-on is not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub edit_speed: Option<String>,
     #[serde(default)]
     pub custom_edit_model: CustomEditModel,
     pub model_directory: String,
@@ -797,6 +801,7 @@ impl Default for UiSettings {
             edit_vae: default_edit_placement(),
             edit_vram_limit_mb: 0,
             edit_allow_any_size: false,
+            edit_speed: None,
             custom_edit_model: CustomEditModel::default(),
             model_directory: String::new(),
             gpu_download_notice_dismissed: false,

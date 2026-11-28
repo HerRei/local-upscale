@@ -15,11 +15,17 @@ for (const model of [
   model.installed = false;
 }
 
-const editModels: EditModel[] = rawEditModels.map((model) => ({
+// One catalog file lists the bundles and their speed add-ons; the host splits them into
+// `edit.models` and `edit.addons` (`catalog_in` and `addons_in` in src-tauri/src/editing.rs).
+const editEntries: EditModel[] = (rawEditModels as unknown as EditModel[]).map((model) => ({
   ...model,
+  min_unified_memory_gb: model.min_unified_memory_gb ?? 0,
+  min_vram_gb: model.min_vram_gb ?? 0,
   installed: false,
   total_size_bytes: model.files.reduce((total, file) => total + file.size_bytes, 0),
 }));
+const editModels = editEntries.filter((model) => !model.kind);
+const editAddons = editEntries.filter((model) => model.kind === 'speed_addon');
 
 export function demoSnapshot(): AppSnapshot {
   return {
@@ -153,7 +159,12 @@ export function demoSnapshot(): AppSnapshot {
       last_steps: null,
     },
     latest_benchmark: null,
-    edit: { models: structuredClone(editModels), runtime_path: '', custom_model: null },
+    edit: {
+      models: structuredClone(editModels),
+      addons: structuredClone(editAddons),
+      runtime_path: '',
+      custom_model: null,
+    },
     default_model_directory: '~/Library/Application Support/LocalSR/models',
     model_directory_missing: false,
     gpu_download_notice: null,

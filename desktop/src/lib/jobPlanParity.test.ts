@@ -36,6 +36,8 @@ interface ParityCase {
     using_temporal_video: boolean;
     selected_video_model_id: string | null;
     edit_model_id: string | null;
+    /** The speed add-on Quick would use; left out of a case that names none. */
+    edit_addon_id?: string;
     has_audio: boolean | null;
     /** Left out of a case that names none. */
     masked_steps?: string[];
@@ -97,6 +99,7 @@ function makeCase(
     usingTemporalVideo?: boolean;
     selectedVideoModelId?: string | null;
     editModelId?: string | null;
+    editAddonId?: string;
     hasAudio?: boolean | null;
     maskedSteps?: string[];
     mediaIds?: string[];
@@ -128,7 +131,7 @@ function makeCase(
   ]) {
     model.installed = installedSet.has(model.model_id);
   }
-  for (const model of snapshot.edit.models) {
+  for (const model of [...snapshot.edit.models, ...(snapshot.edit.addons ?? [])]) {
     model.installed = installedSet.has(model.model_id);
   }
 
@@ -156,6 +159,9 @@ function makeCase(
   const editModel = editModelId
     ? snapshot.edit.models.find((m) => m.model_id === editModelId)
     : undefined;
+  const editAddon = spec.editAddonId
+    ? snapshot.edit.addons?.find((m) => m.model_id === spec.editAddonId)
+    : undefined;
 
   const plan = resolvePlan(snapshot, effectiveSettings, {
     faceModel,
@@ -163,6 +169,7 @@ function makeCase(
     usingTemporalVideo,
     selectedVideoModel,
     editModel,
+    editAddon,
     hasAudio: hasAudio === null ? undefined : hasAudio,
     maskedSteps,
     steps,
@@ -194,6 +201,7 @@ function makeCase(
       using_temporal_video: usingTemporalVideo,
       selected_video_model_id: selectedVideoModelId,
       edit_model_id: editModelId,
+      ...(spec.editAddonId ? { edit_addon_id: spec.editAddonId } : {}),
       has_audio: hasAudio,
       ...(maskedSteps.length > 0 ? { masked_steps: maskedSteps } : {}),
     },
@@ -614,6 +622,30 @@ function buildCorpus(): ParityCase[] {
       });
     }
   }
+  // 8b. Quick: the saved quality, or the default rule, adds the Lightning stage (12 cases)
+  for (const speed of [undefined, 'lightning', 'full'] as const) {
+    for (const [modelInstalled, addonInstalled] of [
+      [false, false],
+      [true, false],
+      [true, true],
+      [false, true],
+    ]) {
+      const installedIds = [
+        ...(modelInstalled ? ['qwen_edit_2511_q2_k'] : []),
+        ...(addonInstalled ? ['qwen_edit_2511_lightning_4step'] : []),
+      ];
+      push(`edit-quick-${speed ?? 'unset'}-model_${modelInstalled}-addon_${addonInstalled}`, {
+        settingsPatch: {
+          task: 'edit',
+          edit_model_id: 'qwen_edit_2511_q2_k',
+          ...(speed ? { edit_speed: speed } : {}),
+        },
+        installedIds,
+        editModelId: 'qwen_edit_2511_q2_k',
+        editAddonId: 'qwen_edit_2511_lightning_4step',
+      });
+    }
+  }
   push('empty-task', {
     settingsPatch: {
       task: '',
@@ -980,6 +1012,7 @@ describe('job_plan parity corpus', () => {
         'face_restore',
         'video',
         'edit',
+        'edit_addon',
         'deflicker',
         'interpolate',
         'audio_denoise',
@@ -994,6 +1027,28 @@ describe('job_plan parity corpus', () => {
       ]),
     );
     expect(cases.some((c) => (c.expected_start_input.step_stages ?? []).length > 0)).toBe(true);
+    // Quick adds the Lightning file as a stage of its own; Best and an install that predates
+    // it (model there, file not, nothing chosen) do not.
+    const quick = (tag: string) =>
+      cases
+        .find((c) => c.id.endsWith(`-edit-quick-${tag}`))!
+        .expected_plan.filter((stage) => stage.kind === 'edit_addon');
+    expect(quick('unset-model_false-addon_false')).toEqual([
+      expect.objectContaining({
+        role: 'step',
+        label: 'Quick',
+        edit_model_id: 'qwen_edit_2511_lightning_4step',
+        installed: false,
+        can_download: true,
+        size_bytes: 849_608_296,
+      }),
+    ]);
+    expect(quick('unset-model_true-addon_false')).toEqual([]);
+    expect(quick('unset-model_true-addon_true')).toEqual([
+      expect.objectContaining({ installed: true, size_bytes: 0 }),
+    ]);
+    expect(quick('lightning-model_true-addon_false')).toHaveLength(1);
+    expect(quick('full-model_false-addon_false')).toEqual([]);
     const repairPlans = new Map(
       cases
         .filter((c) => c.id.includes('-repair-'))

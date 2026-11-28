@@ -1,5 +1,6 @@
 import { writable, type Readable } from 'svelte/store';
 import { isTauri, planJob, type HostPlanStage, type PlanJobOptions } from './api';
+import { editSpeedAddon } from './editing';
 import { isRestoreTask, resolvePlan, type PlanStage } from './plan';
 import type { AppSnapshot, UiSettings } from './types';
 
@@ -85,7 +86,9 @@ export function hydrateStage(stage: HostPlanStage, snapshot: AppSnapshot): PlanS
                   }
                   return snapshot.edit.custom_model;
                 })()
-              : find(snapshot.edit.models, stage.edit_model_id, 'edit'),
+              : stage.kind === 'edit_addon'
+                ? find(snapshot.edit.addons, stage.edit_model_id, 'edit add-on')
+                : find(snapshot.edit.models, stage.edit_model_id, 'edit'),
         }
       : {}),
     ...(stage.custom !== undefined ? { custom: stage.custom } : {}),
@@ -109,6 +112,11 @@ function resolveOptions(snapshot: AppSnapshot, settings: UiSettings, options: Pl
     editId === '__custom__'
       ? (snapshot.edit.custom_model ?? undefined)
       : snapshot.edit.models.find((model) => model.model_id === editId);
+  const editAddon = editSpeedAddon(
+    editModel,
+    snapshot.edit.addons,
+    snapshot.engine?.features ?? [],
+  );
   const usingTemporalVideo =
     options.using_temporal_video ??
     (settings.task === 'video' &&
@@ -120,6 +128,7 @@ function resolveOptions(snapshot: AppSnapshot, settings: UiSettings, options: Pl
     usingTemporalVideo,
     selectedVideoModel,
     editModel,
+    editAddon,
     hasAudio: options.has_audio === null ? undefined : options.has_audio,
     maskedSteps: options.masked_steps ?? [],
   };

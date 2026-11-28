@@ -1,6 +1,13 @@
 import type { Fit } from './plan';
 import { detectPlatform } from './platform';
-import type { CapabilityInfo, DeviceInfo, EditModel, EditPlacement, UiSettings } from './types';
+import type {
+  CapabilityInfo,
+  DeviceInfo,
+  EditModel,
+  EditPlacement,
+  EditSpeed,
+  UiSettings,
+} from './types';
 
 export const EDIT_GIB = 1024 ** 3;
 const EDIT_MIB = 1024 ** 2;
@@ -186,10 +193,13 @@ export function editPeakEstimate(model: EditModel): number {
  * family's largest bundle that fits; otherwise the smallest bundle of all.
  */
 export function recommendAnyEditModel(
-  models: EditModel[],
+  listed: EditModel[],
   capabilities: CapabilityInfo,
   device?: DeviceInfo,
 ): EditModel | undefined {
+  // A speed add-on shares the catalog file but is never a model to edit with: as "the
+  // smallest bundle of all" it would win the last fallback below.
+  const models = listed.filter((model) => !model.kind);
   if (device?.id === 'mps') {
     const budget = capabilities.system_ram_total * MAC_DEFAULT_EDIT_SHARE;
     for (const family of EDIT_FAMILIES) {
@@ -214,6 +224,54 @@ export function recommendAnyEditModel(
   const size = (model: EditModel): number =>
     model.total_size_bytes || model.files.reduce((total, file) => total + file.size_bytes, 0);
   return [...models].sort((left, right) => size(left) - size(right))[0];
+}
+
+/** The engine feature for `speed` and `lightning_lora_path` on an edit job. */
+export const EDIT_LIGHTNING_FEATURE = 'edit_lightning';
+
+/**
+ * The speed add-on Quick uses with this model: the add-on of the model's family, while the
+ * engine lists `edit_lightning`. Your own edit model gets none.
+ */
+export function editSpeedAddon(
+  model: EditModel | undefined,
+  addons: readonly EditModel[] | undefined,
+  features: readonly string[],
+): EditModel | undefined {
+  if (!model || model.model_id === '__custom__' || !features.includes(EDIT_LIGHTNING_FEATURE)) {
+    return undefined;
+  }
+  return addons?.find(
+    (addon) =>
+      addon.kind === 'speed_addon' && addon.speed === 'lightning' && addon.family === model.family,
+  );
+}
+
+/**
+ * The speed an edit runs, null when Quick is not offered (no add-on). The user's saved
+ * choice wins; until there is one it is `lightning`, unless the model is installed and its
+ * add-on is not, so an existing install edits as before without a new download. The host's
+ * planner applies the same rule (`edit_speed` in src-tauri/src/editing.rs).
+ */
+export function editSpeed(
+  settings: Pick<UiSettings, 'edit_speed'>,
+  model: EditModel | undefined,
+  addon: EditModel | undefined,
+): EditSpeed | null {
+  if (!addon) return null;
+  if (settings.edit_speed) return settings.edit_speed;
+  return model?.installed && !addon.installed ? 'full' : 'lightning';
+}
+
+/** Steps the edit runs: the add-on's in Quick, else the saved number or the model's own. */
+export function editStepsFor(
+  settings: Pick<UiSettings, 'edit_steps'>,
+  model: EditModel,
+  speed: EditSpeed | null,
+  addon: EditModel | undefined,
+): number {
+  if (speed === 'lightning' && addon) return addon.default_steps;
+  return settings.edit_steps || model.default_steps;
 }
 
 export interface EditExpertState {

@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    editing::EditModel,
+    editing::{edit_speed, EditModel, LIGHTNING_SPEED},
     results::ResultUi,
     steps::{StepDefinition, StepPlacement, StepRegistry},
     types::{
@@ -78,6 +78,8 @@ pub struct PlanOptions<'a> {
     pub using_temporal_video: bool,
     pub selected_video_model: Option<&'a CatalogVideoModel>,
     pub edit_model: Option<&'a EditModel>,
+    /// The speed add-on Quick would use with `edit_model`, when Quick is offered for it.
+    pub edit_addon: Option<&'a EditModel>,
     pub has_audio: Option<bool>,
     /// Steps that need paint, which the open photo has; the plan leaves out any other step that
     /// `requires_mask`.
@@ -448,6 +450,35 @@ pub fn resolve_plan(
                     model.total_size_bytes
                 },
             });
+            // Quick runs the add-on as well: a stage only the download code reads, so a
+            // missing file is fetched with the model (`edit_addon` in lib/plan.ts).
+            if let Some(addon) = options
+                .edit_addon
+                .filter(|addon| edit_speed(settings, model, addon) == LIGHTNING_SPEED)
+            {
+                stages.push(PlanStage {
+                    kind: "edit_addon".into(),
+                    role: "step".into(),
+                    fix: None,
+                    remembered: None,
+                    missing: None,
+                    label: "Quick".into(),
+                    model_id: None,
+                    video_model_id: None,
+                    interpolation_model_id: None,
+                    audio_model_id: None,
+                    edit_model_id: Some(addon.model_id.clone()),
+                    custom: None,
+                    installed: addon.installed,
+                    can_download: !addon.installed && addon.automated_download_allowed,
+                    needs_file: !addon.installed && !addon.automated_download_allowed,
+                    size_bytes: if addon.installed {
+                        0
+                    } else {
+                        addon.total_size_bytes
+                    },
+                });
+            }
         }
         return stages;
     }
@@ -875,6 +906,8 @@ mod tests {
         using_temporal_video: bool,
         selected_video_model_id: Option<String>,
         edit_model_id: Option<String>,
+        #[serde(default)]
+        edit_addon_id: Option<String>,
         has_audio: Option<bool>,
         #[serde(default)]
         masked_steps: Vec<String>,
@@ -942,6 +975,9 @@ mod tests {
                 model.total_size_bytes = model.files.iter().map(|file| file.size_bytes).sum();
                 model.installed = installed.contains(model.model_id.as_str());
             }
+            let (edit_addons, edit_models): (Vec<EditModel>, Vec<EditModel>) = edit_models
+                .into_iter()
+                .partition(|model| model.kind.is_some());
 
             let face_model = case
                 .options
@@ -958,6 +994,11 @@ mod tests {
                 .edit_model_id
                 .as_deref()
                 .and_then(|id| edit_models.iter().find(|m| m.model_id == id));
+            let edit_addon = case
+                .options
+                .edit_addon_id
+                .as_deref()
+                .and_then(|id| edit_addons.iter().find(|m| m.model_id == id));
 
             let options = PlanOptions {
                 face_model,
@@ -965,6 +1006,7 @@ mod tests {
                 using_temporal_video: case.options.using_temporal_video,
                 selected_video_model,
                 edit_model,
+                edit_addon,
                 has_audio: case.options.has_audio,
                 masked_steps: case.options.masked_steps.clone(),
             };

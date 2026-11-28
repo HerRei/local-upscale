@@ -1372,6 +1372,78 @@ fn a_queued_edit_runs_the_editing_runtime_the_host_resolves_when_it_is_sent() {
 }
 
 #[test]
+fn a_queued_quick_edit_loads_the_lightning_file_installed_when_it_is_sent() {
+    let directory = tempfile::tempdir().unwrap();
+    let runtime = directory.path().join("engine").join("sd-cli");
+    std::fs::create_dir_all(runtime.parent().unwrap()).unwrap();
+    std::fs::write(&runtime, b"program").unwrap();
+    let runtime = std::fs::canonicalize(runtime).unwrap();
+    let edit = |speed: &str| {
+        json!({"type": "edit_job_request", "data": {
+            "image_path": "/in/q.png", "model_id": "qwen_edit_2511_q2_k",
+            "runtime_path": runtime.to_string_lossy(), "speed": speed,
+            "lightning_lora_path": "/elsewhere/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors"
+        }})
+    };
+    let prepare = |name: &str, speed: &str, features: &[&str]| {
+        let state = queued(&directory.path().join(name), edit(speed));
+        *lock(&state.edit_runtime).unwrap() = runtime.to_string_lossy().into_owned();
+        lock(&state.engine).unwrap().as_mut().unwrap().features =
+            features.iter().map(|feature| feature.to_string()).collect();
+        state
+    };
+    let install_lora = |state: &AppState| {
+        let addons = crate::editing::addons_in(&state.model_root()).unwrap();
+        let addon = &addons[0];
+        let folder = state.model_root().join(&addon.family);
+        std::fs::create_dir_all(&folder).unwrap();
+        let path = folder.join(&addon.files[0].filename);
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(addon.files[0].size_bytes)
+            .unwrap();
+        path
+    };
+    let dispatch = |state: &Arc<AppState>| -> Option<Value> {
+        let (sender, receiver) = mpsc::channel();
+        *lock(&state.worker.sender).unwrap() = Some(sender);
+        begin_dispatch(state, false).unwrap();
+        let sent = receiver
+            .try_recv()
+            .ok()
+            .map(|line| serde_json::from_str(&line).unwrap());
+        lock(&state.worker.cancellation).unwrap().finish().unwrap();
+        sent
+    };
+
+    // The file installed now is sent, not the path the queue file holds.
+    let state = prepare("a", "lightning", &["image_edit", "edit_lightning"]);
+    let installed = install_lora(&state);
+    let sent = dispatch(&state).unwrap();
+    assert_eq!(sent["data"]["speed"], "lightning");
+    assert_eq!(
+        sent["data"]["lightning_lora_path"],
+        json!(installed.to_string_lossy())
+    );
+
+    // Removed since it was queued: the job fails unsent.
+    let state = prepare("b", "lightning", &["image_edit", "edit_lightning"]);
+    assert!(dispatch(&state).is_none());
+    assert_eq!(status(&state, "q"), "failed");
+
+    // An engine without the feature would run 40 steps: nothing is sent.
+    let state = prepare("c", "lightning", &["image_edit"]);
+    install_lora(&state);
+    assert!(dispatch(&state).is_none());
+    assert_eq!(status(&state, "q"), "failed");
+
+    // A Best edit names no LoRA, whatever the queue file says.
+    let state = prepare("d", "full", &["image_edit"]);
+    let sent = dispatch(&state).unwrap();
+    assert!(sent["data"].get("lightning_lora_path").is_none(), "{sent}");
+}
+
+#[test]
 fn a_queued_video_runs_the_ffmpeg_the_settings_name_when_it_is_sent() {
     let directory = tempfile::tempdir().unwrap();
     for (index, setting) in ["/opt/tools/ffmpeg", ""].into_iter().enumerate() {

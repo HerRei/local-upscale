@@ -70,8 +70,16 @@ export interface ModelFile {
   download_url: string;
 }
 
+/** How an edit samples (the engine's words): `lightning` is Quick, `full` is Best. */
+export type EditSpeed = 'full' | 'lightning';
+
+/** An editing bundle, or with `kind` a speed add-on of its family (`EditSetup.addons`). */
 export interface EditModel {
   model_id: string;
+  /** Set on a speed add-on only; an add-on is never a model to edit with. */
+  kind?: 'speed_addon';
+  /** The speed an add-on gives. */
+  speed?: EditSpeed;
   name: string;
   family: string;
   quantization: string;
@@ -102,6 +110,8 @@ export interface CustomEditModel {
 
 export interface EditSetup {
   models: EditModel[];
+  /** Speed add-ons (the Lightning LoRA) with their install state; absent from older hosts. */
+  addons?: EditModel[];
   runtime_path: string;
   custom_model?: EditModel | null;
 }
@@ -123,6 +133,8 @@ export interface StartEditInput {
   edit_vae?: EditPlacement;
   edit_vram_limit_mb?: number;
   edit_allow_any_size?: boolean;
+  /** `full` when absent. */
+  speed?: EditSpeed;
 }
 
 export interface CatalogVideoModel {
@@ -422,6 +434,8 @@ export interface UiSettings {
   edit_vae?: EditPlacement;
   edit_vram_limit_mb?: number;
   edit_allow_any_size?: boolean;
+  /** The quality the user chose for Qwen edits; absent until then (see `editSpeed`). */
+  edit_speed?: EditSpeed;
   custom_edit_model?: CustomEditModel;
   model_directory?: string;
   gpu_download_notice_dismissed?: boolean;

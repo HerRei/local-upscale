@@ -13,7 +13,7 @@ use serde::{Deserialize, Serialize};
 use crate::{
     error::AppResult,
     paths::AppPaths,
-    types::{CustomEditModel, ModelFile},
+    types::{CustomEditModel, ModelFile, UiSettings},
 };
 
 const EDIT_CATALOG: &str = include_str!("../../../src/localsr/core/edit_catalog.json");
@@ -72,14 +72,28 @@ pub fn find_family_spec(id: &str) -> Option<&'static EditFamilySpec> {
     CUSTOM_EDIT_FAMILIES.iter().find(|spec| spec.id == id)
 }
 
+/// The catalog `kind` of a speed add-on: a LoRA of one model family that a job applies
+/// on top of an edit model, never a model to edit with.
+pub const SPEED_ADDON_KIND: &str = "speed_addon";
+pub const LIGHTNING_SPEED: &str = "lightning";
+
+/// A catalog entry: an editing bundle, or (with a `kind`) a speed add-on of a family.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EditModel {
     pub model_id: String,
+    /// None for an editing bundle; `speed_addon` for a speed LoRA.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub kind: Option<String>,
+    /// For a speed add-on: the speed it gives (`lightning`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speed: Option<String>,
     pub name: String,
     pub family: String,
     pub quantization: String,
     pub files: Vec<ModelFile>,
+    #[serde(default)]
     pub min_unified_memory_gb: u64,
+    #[serde(default)]
     pub min_vram_gb: u64,
     #[serde(default = "default_steps")]
     pub default_steps: u32,
@@ -117,13 +131,17 @@ fn default_cfg_scale() -> f64 {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct EditSetup {
+    /// The editing bundles a user can choose.
     pub models: Vec<EditModel>,
+    /// Speed add-ons (the Lightning LoRA), with their install state; never edit models.
+    #[serde(default)]
+    pub addons: Vec<EditModel>,
     pub runtime_path: String,
     #[serde(default)]
     pub custom_model: Option<EditModel>,
 }
 
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize)]
 pub struct StartEditInput {
     pub media_id: String,
     pub model_id: String,
@@ -143,10 +161,17 @@ pub struct StartEditInput {
     pub edit_vram_limit_mb: Option<u64>,
     #[serde(default)]
     pub edit_allow_any_size: Option<bool>,
+    /// `full` (the default) or `lightning`.
+    #[serde(default = "default_edit_speed")]
+    pub speed: String,
 }
 
 fn default_edit_placement() -> String {
     "auto".into()
+}
+
+pub fn default_edit_speed() -> String {
+    "full".into()
 }
 
 #[cfg(test)]
@@ -154,7 +179,9 @@ pub fn catalog(paths: &AppPaths) -> AppResult<Vec<EditModel>> {
     catalog_in(&paths.model_root)
 }
 
-pub fn catalog_in(model_root: &Path) -> AppResult<Vec<EditModel>> {
+/// Every catalog entry, bundles and add-ons, with its install state under `model_root`:
+/// what the downloader, the model library's removal and a folder move work on.
+pub fn entries_in(model_root: &Path) -> AppResult<Vec<EditModel>> {
     let mut models: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG)?;
     let root_present = model_root.is_dir();
     for model in &mut models {
@@ -171,6 +198,56 @@ pub fn catalog_in(model_root: &Path) -> AppResult<Vec<EditModel>> {
     Ok(models)
 }
 
+/// The editing bundles a user can choose; add-ons are left out.
+pub fn catalog_in(model_root: &Path) -> AppResult<Vec<EditModel>> {
+    Ok(entries_in(model_root)?
+        .into_iter()
+        .filter(|model| model.kind.is_none())
+        .collect())
+}
+
+/// The speed add-ons, with their install state.
+pub fn addons_in(model_root: &Path) -> AppResult<Vec<EditModel>> {
+    Ok(entries_in(model_root)?
+        .into_iter()
+        .filter(|model| model.kind.as_deref() == Some(SPEED_ADDON_KIND))
+        .collect())
+}
+
+/// The add-on that gives `speed` to a model family, if the catalog has one.
+pub fn speed_addon<'a>(
+    addons: &'a [EditModel],
+    family: &str,
+    speed: &str,
+) -> Option<&'a EditModel> {
+    addons.iter().find(|addon| {
+        addon.kind.as_deref() == Some(SPEED_ADDON_KIND)
+            && addon.family == family
+            && addon.speed.as_deref() == Some(speed)
+    })
+}
+
+/// The speed an edit with `model` runs: the user's choice once made; until then
+/// `lightning`, unless the model is installed and its add-on is not, so an existing
+/// install keeps editing as before without a new download (`editSpeed` in lib/editing.ts).
+pub fn edit_speed<'a>(settings: &'a UiSettings, model: &EditModel, addon: &EditModel) -> &'a str {
+    match settings.edit_speed.as_deref() {
+        Some(speed) => speed,
+        None if model.installed && !addon.installed => "full",
+        None => LIGHTNING_SPEED,
+    }
+}
+
+/// The installed file of a one-file add-on, where the downloader put it.
+pub fn addon_file(model_root: &Path, addon: &EditModel) -> Option<PathBuf> {
+    let [file] = addon.files.as_slice() else {
+        return None;
+    };
+    addon
+        .installed
+        .then(|| model_root.join(&addon.family).join(&file.filename))
+}
+
 /// The name of an editing bundle, for labels of recorded Edit jobs.
 pub fn model_name(model_id: &str) -> Option<String> {
     if model_id == CUSTOM_EDIT_MODEL_ID {
@@ -179,7 +256,7 @@ pub fn model_name(model_id: &str) -> Option<String> {
     serde_json::from_str::<Vec<EditModel>>(EDIT_CATALOG)
         .ok()?
         .into_iter()
-        .find(|model| model.model_id == model_id)
+        .find(|model| model.model_id == model_id && model.kind.is_none())
         .map(|model| model.name)
 }
 
@@ -304,6 +381,8 @@ pub fn custom_edit_model(custom: &CustomEditModel) -> Option<EditModel> {
     let (min_unified_memory_gb, min_vram_gb) = custom_memory_tiers(&files);
     Some(EditModel {
         model_id: CUSTOM_EDIT_MODEL_ID.into(),
+        kind: None,
+        speed: None,
         name: "Your edit model".into(),
         family: spec.id.into(),
         quantization: "Custom".into(),
@@ -684,7 +763,7 @@ pub fn remove_bundle(paths: &AppPaths, model_id: &str) -> AppResult<bool> {
 }
 
 pub fn remove_bundle_in(model_root: &Path, model_id: &str) -> AppResult<bool> {
-    let models = catalog_in(model_root)?;
+    let models = entries_in(model_root)?;
     let Some(model) = models.iter().find(|model| model.model_id == model_id) else {
         return Ok(false);
     };
@@ -778,6 +857,9 @@ pub fn validate(input: &StartEditInput, model: &EditModel) -> Result<(), String>
         || input.prompt.contains('\0')
     {
         return Err("Describe the edit in 1–4000 characters.".into());
+    }
+    if input.speed.parse::<crate::protocol::EditSpeed>().is_err() {
+        return Err("Choose Quick or Best for the edit.".into());
     }
     let steps = crate::steps::registry();
     if !steps.param_has_int_choice("edit", "max_dimension", input.max_dimension)
@@ -899,8 +981,22 @@ mod tests {
 
     #[test]
     fn all_edit_bundles_pin_each_component_under_an_open_license() {
-        let models: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG).unwrap();
+        let entries: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG).unwrap();
+        assert_eq!(entries.len(), 10);
+        let (addons, models): (Vec<EditModel>, Vec<EditModel>) =
+            entries.into_iter().partition(|model| model.kind.is_some());
         assert_eq!(models.len(), 9);
+        let [addon] = addons.as_slice() else {
+            panic!("one speed add-on")
+        };
+        assert_eq!(addon.files.len(), 1);
+        assert_eq!(addon.files[0].role, "lora");
+        assert_eq!(addon.files[0].sha256.len(), 64);
+        assert!(!addon.files[0].download_url.contains("/resolve/main/"));
+        assert_eq!((addon.default_steps, addon.cfg_scale), (4, 1.0));
+        assert_eq!(addon.license_name, "Apache-2.0");
+        assert_eq!(addon.commercial_use_allowed, Some(true));
+        assert!(addon.automated_download_allowed && !addon.terms_acceptance_required);
         for model in models {
             // Qwen and Mage-Flow bundles carry a vision projector; FLUX.2 klein edits without one.
             assert_eq!(
@@ -929,6 +1025,82 @@ mod tests {
     }
 
     #[test]
+    fn the_lightning_add_on_is_listed_apart_from_the_edit_models_and_installs_like_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let paths = AppPaths::under(directory.path());
+        let models = catalog(&paths).unwrap();
+        let addons = addons_in(&paths.model_root).unwrap();
+        // Never a model to pick: not among the bundles, no label for a recorded job.
+        assert!(models.iter().all(|model| model.kind.is_none()));
+        assert!(!models
+            .iter()
+            .any(|model| model.model_id == "qwen_edit_2511_lightning_4step"));
+        assert_eq!(model_name("qwen_edit_2511_lightning_4step"), None);
+        let [addon] = addons.as_slice() else {
+            panic!("one speed add-on")
+        };
+        assert_eq!(addon.model_id, "qwen_edit_2511_lightning_4step");
+        assert_eq!(addon.kind.as_deref(), Some(SPEED_ADDON_KIND));
+        assert_eq!(addon.total_size_bytes, 849_608_296);
+        assert!(!addon.installed);
+        assert_eq!(addon_file(&paths.model_root, addon), None);
+        let qwen = models
+            .iter()
+            .find(|model| model.model_id == "qwen_edit_2511_q2_k")
+            .unwrap();
+        assert_eq!(
+            speed_addon(&addons, &qwen.family, LIGHTNING_SPEED).map(|a| &a.model_id),
+            Some(&addon.model_id)
+        );
+        assert!(speed_addon(&addons, "flux2-klein-4b", LIGHTNING_SPEED).is_none());
+        assert!(speed_addon(&addons, &qwen.family, "full").is_none());
+
+        // Downloaded into the family's folder beside an installed bundle, then removed alone.
+        install(&paths, qwen);
+        install(&paths, addon);
+        let addons = addons_in(&paths.model_root).unwrap();
+        assert!(addons[0].installed);
+        assert_eq!(
+            addon_file(&paths.model_root, &addons[0]),
+            Some(
+                paths
+                    .model_root
+                    .join("qwen-image-edit-2511")
+                    .join("Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors")
+            )
+        );
+        assert!(remove_bundle(&paths, "qwen_edit_2511_lightning_4step").unwrap());
+        assert!(!addons_in(&paths.model_root).unwrap()[0].installed);
+        assert!(catalog(&paths)
+            .unwrap()
+            .iter()
+            .any(|model| model.model_id == qwen.model_id && model.installed));
+    }
+
+    #[test]
+    fn quick_is_the_default_unless_the_model_is_installed_without_its_add_on() {
+        let entries: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG).unwrap();
+        let mut model = entries[0].clone();
+        let mut addon = entries
+            .iter()
+            .find(|entry| entry.kind.is_some())
+            .unwrap()
+            .clone();
+        let mut settings = UiSettings::default();
+        assert_eq!(edit_speed(&settings, &model, &addon), "lightning");
+        model.installed = true;
+        assert_eq!(edit_speed(&settings, &model, &addon), "full");
+        addon.installed = true;
+        assert_eq!(edit_speed(&settings, &model, &addon), "lightning");
+        addon.installed = false;
+        settings.edit_speed = Some("lightning".into());
+        assert_eq!(edit_speed(&settings, &model, &addon), "lightning");
+        settings.edit_speed = Some("full".into());
+        model.installed = false;
+        assert_eq!(edit_speed(&settings, &model, &addon), "full");
+    }
+
+    #[test]
     fn edit_validation_requires_a_complete_bundle_and_explicit_license_acceptance() {
         let mut models: Vec<EditModel> = serde_json::from_str(EDIT_CATALOG).unwrap();
         let model = &mut models[0];
@@ -948,6 +1120,7 @@ mod tests {
             edit_vae: "auto".into(),
             edit_vram_limit_mb: None,
             edit_allow_any_size: None,
+            speed: "full".into(),
         };
         assert!(validate(&input, model).unwrap_err().contains("license"));
         input.accepted_terms = true;
@@ -960,6 +1133,12 @@ mod tests {
         input.prompt = " ".into();
         assert!(validate(&input, model).is_err());
         input.prompt = "Edit".into();
+        input.speed = "turbo".into();
+        assert!(validate(&input, model)
+            .unwrap_err()
+            .contains("Quick or Best"));
+        input.speed = "lightning".into();
+        assert!(validate(&input, model).is_ok());
         input.device = "cpu".into();
         assert!(validate(&input, model).is_err());
     }

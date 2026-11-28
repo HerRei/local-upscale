@@ -70,7 +70,15 @@
               "edit_text_encoder": { "enum": ["auto", "gpu", "cpu"], "default": "auto" },
               "edit_vae": { "enum": ["auto", "gpu", "cpu"], "default": "auto" },
               "edit_vram_limit_mb": { "type": "integer", "minimum": 0, "default": 0 },
-              "edit_allow_any_size": { "type": "boolean", "default": false }
+              "edit_allow_any_size": { "type": "boolean", "default": false },
+              "speed": {
+                "enum": ["full", "lightning"], "default": "full",
+                "description": "lightning applies the model family's 4-step LoRA with its own steps and guidance; sent only to engines that list the edit_lightning feature."
+              },
+              "lightning_lora_path": {
+                "type": "string", "minLength": 1,
+                "description": "The installed Lightning LoRA file, resolved by the host when it sends the job. Required with speed lightning."
+              }
             },
             "additionalProperties": false
           }

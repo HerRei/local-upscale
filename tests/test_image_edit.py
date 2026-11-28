@@ -63,7 +63,9 @@ def test_mac_tiers_are_sensible_for_the_bigger_models():
     assert tiers["qwen_edit_2511_q4_k_m"] <= 32, "common 32 GB Macs get a Q4 editor"
     assert tiers["flux2_klein_4b_q8_0"] == 16
     assert tiers["mage_flow_edit_turbo_q6_k"] == 16
-    assert tiers["qwen_edit_2511_q2_k"] > 16, "the 20B editor stays off 16 GB Macs"
+    # Measured on a 16 GB M1 Pro at 512 px: 7.31 GiB at 40 steps, 9.00 GiB with Lightning.
+    assert tiers["qwen_edit_2511_q2_k"] == 16, "the measured 2-bit Qwen editor fits 16 GB Macs"
+    assert tiers["qwen_edit_2511_q3_k_s"] == 24, "the unmeasured 3-bit editor keeps its estimate"
 
 
 @pytest.mark.parametrize("selected", image_edit.edit_catalog(), ids=lambda m: m["model_id"])
@@ -1787,14 +1789,12 @@ def test_allow_any_size_keeps_requested_size_and_unified_plans_stay_identical():
     qwen_q2 = model("Q2_K", "qwen-image-edit-2511")
     mac_24 = EditMemory(24 * GIB, 20 * GIB, unified=True)
     mac_plan = plan_edit(qwen_q2, mac_24, 1024)
+    # Q2_K's estimate is its measured 40-step peak (7.31 GiB at 512 px) plus 2%.
+    measured = int(int(7.31 * GIB) * 1.02)
     assert mac_plan == EditPlan(
-        required_ram=int((7_468_022_368 + 253_806_246 + int(1.5 * GIB)) * 1.1),
+        required_ram=measured,
         reserve_ram=int(24 * GIB * 0.10),
-        gpu_budget=min(
-            int((7_468_022_368 + 253_806_246 + int(1.5 * GIB)) * 1.1),
-            int(24 * GIB * 0.60),
-            20 * GIB - int(24 * GIB * 0.10),
-        ),
+        gpu_budget=min(measured, int(24 * GIB * 0.60), 20 * GIB - int(24 * GIB * 0.10)),
         max_dimension=512,
         process_limit=int(
             (7_468_022_368 + 3_015_939_072 + 853_119_712 + 253_806_246) * 1.1 + int(1.5 * GIB)

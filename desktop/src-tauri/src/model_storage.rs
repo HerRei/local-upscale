@@ -386,7 +386,8 @@ fn collect_entries(
         }
     }
 
-    for bundle in crate::editing::catalog_in(old_root)? {
+    // Editing bundles and their add-ons live in the family's folder.
+    for bundle in crate::editing::entries_in(old_root)? {
         let family = safe_model_filename(&bundle.family)?;
         for file in &bundle.files {
             let filename = safe_model_filename(&file.filename)?;
@@ -1107,6 +1108,30 @@ mod tests {
         state.refresh_catalog().unwrap();
 
         (state, img_bytes, bundle_a, bundle_b)
+    }
+
+    #[test]
+    fn a_model_folder_move_takes_the_lightning_add_on_along() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(AppPaths::under(dir.path())).unwrap();
+        let addon = crate::editing::addons_in(&state.paths.model_root).unwrap()[0].clone();
+        let family = state.paths.model_root.join(&addon.family);
+        fs::create_dir_all(&family).unwrap();
+        fs::write(family.join(&addon.files[0].filename), b"lora").unwrap();
+        let dest = dir.path().join("dest");
+        let entries = collect_entries(&state, &state.paths.model_root, &dest).unwrap();
+        let entry = entries
+            .iter()
+            .find(|entry| entry.relative.ends_with(&addon.files[0].filename))
+            .expect("the add-on's file moves with the edit bundles");
+        assert_eq!(
+            entry.destination,
+            dest.join(&addon.family).join(&addon.files[0].filename)
+        );
+        assert_eq!(
+            entry.expected_sha256.as_deref(),
+            Some(addon.files[0].sha256.as_str())
+        );
     }
 
     #[cfg(unix)]

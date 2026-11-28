@@ -54,7 +54,7 @@ pub fn open_edit_link(
     model_id: String,
     link: String,
 ) -> AppResult<()> {
-    let model = crate::editing::catalog_in(&state.model_root())?
+    let model = crate::editing::entries_in(&state.model_root())?
         .into_iter()
         .find(|m| m.model_id == model_id)
         .ok_or_else(|| AppError::Validation("Unknown editing model.".into()))?;
@@ -137,6 +137,11 @@ pub(crate) fn start_edit_checked(
         };
     crate::editing::validate(&input, &model).map_err(AppError::Validation)?;
     validate_edit_placement_engine(&input, lock(&state.engine)?.as_ref())?;
+    // Checked now so a Quick edit without its file never queues; resolved again at send time.
+    let lightning_lora = match input.speed.parse::<crate::protocol::EditSpeed>()? {
+        crate::protocol::EditSpeed::Lightning => Some(lightning_lora_path(state, &model.family)?),
+        crate::protocol::EditSpeed::Full => None,
+    };
     let (settings_vram_limit_mb, settings_allow_any_size) = {
         let settings = lock(&state.settings)?;
         (settings.edit_vram_limit_mb, settings.edit_allow_any_size)
@@ -183,6 +188,7 @@ pub(crate) fn start_edit_checked(
         custom_files,
         edit_vram_limit_mb,
         edit_allow_any_size,
+        lightning_lora.as_deref(),
     );
     lock(&state.database)?.insert_job(&id, &media.id, &serde_json::to_string(&request)?)?;
     crate::stay_awake::sync(state);
@@ -201,6 +207,7 @@ fn build_edit_request(
     custom_files: Option<std::collections::BTreeMap<String, String>>,
     edit_vram_limit_mb: u64,
     edit_allow_any_size: bool,
+    lightning_lora: Option<&Path>,
 ) -> crate::protocol::WorkerJobRequest {
     crate::protocol::WorkerJobRequest::Edit(crate::protocol::EditJobRequest {
         job_id: job_id.to_owned(),
@@ -223,8 +230,42 @@ fn build_edit_request(
         edit_vae: input.edit_vae.parse().unwrap_or_default(),
         edit_vram_limit_mb,
         edit_allow_any_size,
+        speed: input.speed.parse().unwrap_or_default(),
+        lightning_lora_path: lightning_lora.map(|path| path.to_string_lossy().into_owned()),
     })
 }
+
+/// The installed Lightning LoRA for a model family, where a Quick edit loads it from. The
+/// host resolves it when the edit is queued and again when it is sent, from the catalog
+/// entry in the current model folder, never from a path the queue file holds. An error
+/// says what is missing: the engine feature, an add-on for the family, or its file.
+pub(crate) fn lightning_lora_path(state: &AppState, family: &str) -> AppResult<PathBuf> {
+    if !lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == EDIT_LIGHTNING_FEATURE)
+    }) {
+        return Err(AppError::Validation(
+            "This engine cannot run Quick. Update LocalSR, or choose Best.".into(),
+        ));
+    }
+    let model_root = state.model_root();
+    let addons = crate::editing::addons_in(&model_root)?;
+    let addon = crate::editing::speed_addon(&addons, family, crate::editing::LIGHTNING_SPEED)
+        .ok_or_else(|| {
+            AppError::Validation("Quick is not available for this edit model. Choose Best.".into())
+        })?;
+    crate::editing::addon_file(&model_root, addon).ok_or_else(|| {
+        AppError::Validation(
+            "Quick needs the Lightning file, which is not downloaded. Download it in the model library, or choose Best."
+                .into(),
+        )
+    })
+}
+
+/// The engine feature for `speed` and `lightning_lora_path` on an edit request.
+pub(crate) const EDIT_LIGHTNING_FEATURE: &str = "edit_lightning";
 
 fn validate_edit_placement_engine(
     input: &crate::editing::StartEditInput,
@@ -1405,6 +1446,28 @@ pub(crate) fn plan_job_checked(
     } else {
         edit_models.iter().find(|model| model.model_id == edit_id)
     };
+    // Quick is offered for a catalog model whose family has an add-on, on an engine that
+    // runs it (`editSpeedAddon` in lib/editing.ts).
+    let edit_addons = if effective.task == "edit" {
+        crate::editing::addons_in(&model_root)?
+    } else {
+        Vec::new()
+    };
+    let lightning_engine = lock(&state.engine)?.as_ref().is_some_and(|engine| {
+        engine
+            .features
+            .iter()
+            .any(|feature| feature == EDIT_LIGHTNING_FEATURE)
+    });
+    let edit_addon = edit_model
+        .filter(|model| lightning_engine && model.model_id != crate::editing::CUSTOM_EDIT_MODEL_ID)
+        .and_then(|model| {
+            crate::editing::speed_addon(
+                &edit_addons,
+                &model.family,
+                crate::editing::LIGHTNING_SPEED,
+            )
+        });
     let using_temporal_video = options
         .using_temporal_video
         .unwrap_or_else(|| crate::job_plan::default_using_temporal_video(&effective));
@@ -1415,6 +1478,7 @@ pub(crate) fn plan_job_checked(
         using_temporal_video,
         selected_video_model,
         edit_model,
+        edit_addon,
         has_audio: options.has_audio,
         masked_steps: options.masked_steps,
     };
@@ -1764,7 +1828,8 @@ const QUEUED_JOB_CANNOT_RUN: &str = "This job cannot run. Add it to the queue ag
 /// The programs the engine runs for a queued job are the ones LocalSR resolves when it
 /// sends the job, never paths the queue file holds: an edit runs the editing runtime
 /// `edit_runtime` accepts now (one chosen in LocalSR's file dialog, otherwise the one
-/// LocalSR found), a video the FFmpeg the settings name, or none. An error fails the job.
+/// LocalSR found) and, in Quick, the Lightning file installed now; a video the FFmpeg the
+/// settings name, or none. An error fails the job.
 pub(crate) fn use_current_programs(state: &AppState, message: &mut Value) -> AppResult<()> {
     let kind = message["type"].as_str().unwrap_or_default().to_owned();
     let Some(data) = message.get_mut("data").and_then(Value::as_object_mut) else {
@@ -1792,6 +1857,30 @@ pub(crate) fn use_current_programs(state: &AppState, message: &mut Value) -> App
                 "runtime_path".into(),
                 Value::String(runtime.to_string_lossy().into_owned()),
             );
+            // A Quick edit loads the Lightning file installed now; a Best edit names none.
+            if data.get("speed").and_then(Value::as_str) == Some("lightning") {
+                let family = match data.get("family").and_then(Value::as_str) {
+                    Some(family) => family.to_owned(),
+                    None => {
+                        let model_id = data
+                            .get("model_id")
+                            .and_then(Value::as_str)
+                            .unwrap_or_default();
+                        crate::editing::catalog_in(&state.model_root())?
+                            .into_iter()
+                            .find(|model| model.model_id == model_id)
+                            .map(|model| model.family)
+                            .ok_or_else(|| AppError::Validation(QUEUED_JOB_CANNOT_RUN.into()))?
+                    }
+                };
+                let lora = lightning_lora_path(state, &family)?;
+                data.insert(
+                    "lightning_lora_path".into(),
+                    Value::String(lora.to_string_lossy().into_owned()),
+                );
+            } else {
+                data.remove("lightning_lora_path");
+            }
         }
         _ => {}
     }
@@ -4734,6 +4823,13 @@ fn validate_settings(settings: &UiSettings) -> AppResult<()> {
         return Err(AppError::Validation(
             "Edit VRAM limit must be 0 (automatic) or at least 1024 MiB.".into(),
         ));
+    }
+    if settings
+        .edit_speed
+        .as_deref()
+        .is_some_and(|speed| speed.parse::<crate::protocol::EditSpeed>().is_err())
+    {
+        return Err(AppError::Validation("unknown edit quality".into()));
     }
     if settings
         .edit_text_encoder

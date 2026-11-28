@@ -315,7 +315,7 @@ fn resolve_target(state: &AppState, model_id: &str) -> AppResult<DownloadTarget>
         Ok(DownloadTarget::Image(Box::new(model.clone())))
     } else if let Some(model) = bundle_model(&catalog, model_id) {
         Ok(DownloadTarget::Video(Box::new(model)))
-    } else if let Some(model) = crate::editing::catalog_in(&state.model_root())?
+    } else if let Some(model) = crate::editing::entries_in(&state.model_root())?
         .into_iter()
         .find(|model| model.model_id == model_id)
     {
@@ -1410,6 +1410,27 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     use super::*;
+
+    #[test]
+    fn the_lightning_add_on_downloads_like_an_edit_bundle_into_its_family_folder() {
+        let directory = tempfile::tempdir().unwrap();
+        let state = AppState::from_paths(crate::paths::AppPaths::under(directory.path())).unwrap();
+        let target = resolve_target(&state, "qwen_edit_2511_lightning_4step").unwrap();
+        assert!(matches!(&target, DownloadTarget::Edit(model) if model.kind.is_some()));
+        target.validate_policy(false).unwrap();
+        let planned = target
+            .planned_files(&state, DownloadEnv::default())
+            .unwrap();
+        assert_eq!(planned.len(), 1);
+        assert_eq!(
+            planned[0].destination,
+            state
+                .model_root()
+                .join("qwen-image-edit-2511")
+                .join("Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors")
+        );
+        assert_eq!(planned[0].expected_size, 849_608_296);
+    }
 
     fn current_thread_runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_current_thread()

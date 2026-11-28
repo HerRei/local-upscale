@@ -410,6 +410,10 @@ def validate_video_job(data: Any) -> None:
 def validate_edit_job(data: Any) -> None:
     _validate_object(data, _EDIT_JOB_SPEC, "edit job request")
     _check_paths(data["image_path"], data["output_path"])
+    if data.get("speed", "full") == "lightning" and "lightning_lora_path" not in data:
+        raise InvalidRequest(
+            'The edit job request has "speed" lightning but no "lightning_lora_path".'
+        )
     vram_limit = data.get("edit_vram_limit_mb", 0)
     if vram_limit != 0 and vram_limit < 1024:
         raise InvalidRequest(

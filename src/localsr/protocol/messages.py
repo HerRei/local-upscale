@@ -119,6 +119,10 @@ class EditJobRequest:
     edit_vae: str = "auto"
     edit_vram_limit_mb: int = 0
     edit_allow_any_size: bool = False
+    # "lightning" applies the family's 4-step LoRA at lightning_lora_path, a file the host
+    # resolves from the installed catalog item when it sends the job.
+    speed: str = "full"
+    lightning_lora_path: str | None = None
 
     def to_json(self) -> str:
         return json.dumps({"type": "edit_job_request", "data": asdict(self)})

@@ -227,6 +227,32 @@ describe('jobPlanClient', () => {
     ).toThrow();
   });
 
+  it('plans the Lightning file for Quick only on an engine that runs it', () => {
+    const snapshot = demoSnapshot();
+    const settings: UiSettings = {
+      ...snapshot.settings,
+      task: 'edit',
+      edit_model_id: 'qwen_edit_2511_q2_k',
+    };
+    expect(planLocally(snapshot, settings).map((stage) => stage.kind)).toEqual(['edit']);
+    snapshot.engine = {
+      protocol_version: 1,
+      minimum_protocol_version: 1,
+      engine_id: 'demo',
+      engine_version: '0.7.0',
+      features: ['image_edit', 'edit_lightning'],
+      model_formats: [],
+      video_engines: [],
+    };
+    const quick = planLocally(snapshot, settings);
+    expect(quick.map((stage) => [stage.kind, stage.edit_model_id])).toEqual([
+      ['edit', 'qwen_edit_2511_q2_k'],
+      ['edit_addon', 'qwen_edit_2511_lightning_4step'],
+    ]);
+    expect(hydrateStage(quick[1], snapshot).editModel?.kind).toBe('speed_addon');
+    expect(planLocally(snapshot, { ...settings, edit_speed: 'full' })).toHaveLength(1);
+  });
+
   it('round-trips every stage in the parity fixture through hydrateStage and toHostStage', () => {
     const raw = JSON.parse(fs.readFileSync(FIXTURE_PATH, 'utf8')) as {
       cases: {

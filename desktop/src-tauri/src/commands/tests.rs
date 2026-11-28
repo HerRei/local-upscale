@@ -3611,6 +3611,7 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
                     edit_vae: "auto".into(),
                     edit_vram_limit_mb: None,
                     edit_allow_any_size: None,
+                    speed: "full".into(),
                 },
             ),
         ),
@@ -3633,6 +3634,7 @@ fn ungranted_paths_are_refused_for_every_path_taking_command() {
                     edit_vae: "auto".into(),
                     edit_vram_limit_mb: None,
                     edit_allow_any_size: None,
+                    speed: "full".into(),
                 },
             ),
         ),
@@ -4313,6 +4315,7 @@ fn custom_edit_model_requires_grants_checks_sd_cli_and_persists_paths_in_place()
             edit_vae: "auto".into(),
             edit_vram_limit_mb: None,
             edit_allow_any_size: None,
+            speed: "full".into(),
         },
     )
     .unwrap();
@@ -4397,6 +4400,7 @@ fn edit_placement_overrides_are_gated_by_engine_feature() {
         edit_vae: vae.into(),
         edit_vram_limit_mb: None,
         edit_allow_any_size: None,
+        speed: "full".into(),
     };
 
     // Old engine without edit_placement: auto succeeds and omits placement fields from the wire.
@@ -4434,6 +4438,205 @@ fn edit_placement_overrides_are_gated_by_engine_feature() {
     let latest: Value = serde_json::from_str(&next.request_json).unwrap();
     assert_eq!(latest["data"]["edit_text_encoder"], "cpu");
     assert_eq!(latest["data"]["edit_vae"], "gpu");
+}
+
+#[test]
+fn a_quick_edit_queues_only_with_the_engine_feature_and_the_installed_lightning_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(&dir.path().join("app"))).unwrap();
+    let install = |model: &crate::editing::EditModel| {
+        let folder = state.paths.model_root.join(&model.family);
+        fs::create_dir_all(&folder).unwrap();
+        for file in &model.files {
+            fs::File::create(folder.join(&file.filename))
+                .unwrap()
+                .set_len(file.size_bytes)
+                .unwrap();
+        }
+    };
+    let qwen = crate::editing::catalog_in(&state.model_root())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.model_id == "qwen_edit_2511_q2_k")
+        .unwrap();
+    install(&qwen);
+    let sd_cli = dir.path().join("sd-cli");
+    fs::write(&sd_cli, b"rt").unwrap();
+    *lock(&state.edit_runtime).unwrap() = sd_cli.to_string_lossy().into_owned();
+    lock(&state.runtime).unwrap().worker = "ready".into();
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "old".into(),
+        engine_version: "0.6.3".into(),
+        features: vec!["image_edit".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    lock(&state.capabilities)
+        .unwrap()
+        .devices
+        .push(crate::types::DeviceInfo {
+            id: "mps".into(),
+            device_type: "mps".into(),
+            name: "Apple GPU".into(),
+            ..Default::default()
+        });
+    let photo = dir.path().join("photo.png");
+    fs::write(&photo, b"png").unwrap();
+    state.grants.grant_media_file(&photo);
+    {
+        let db = lock(&state.database).unwrap();
+        db.insert_media("m1", photo.to_str().unwrap(), "photo.png", "image")
+            .unwrap();
+        db.update_media_probe(
+            photo.to_str().unwrap(),
+            "image",
+            512,
+            512,
+            1,
+            0.0,
+            0.0,
+            "",
+            "",
+            "",
+            false,
+            "",
+        )
+        .unwrap();
+    }
+    let input = |speed: &str| crate::editing::StartEditInput {
+        media_id: "m1".into(),
+        model_id: qwen.model_id.clone(),
+        prompt: "Remove the scratches".into(),
+        runtime_path: String::new(),
+        device: "mps".into(),
+        max_dimension: 512,
+        steps: 40,
+        seed: 42,
+        accepted_terms: false,
+        output_directory: String::new(),
+        edit_text_encoder: "auto".into(),
+        edit_vae: "auto".into(),
+        edit_vram_limit_mb: None,
+        edit_allow_any_size: None,
+        speed: speed.into(),
+    };
+    let queued = || lock(&state.database).unwrap().next_queued_job().unwrap();
+
+    // An engine without the feature would ignore the speed and run 40 steps.
+    let error = start_edit_checked(&state, input("lightning")).unwrap_err();
+    assert!(error.to_string().contains("cannot run Quick"), "{error}");
+    assert!(queued().is_none());
+    lock(&state.engine)
+        .unwrap()
+        .as_mut()
+        .unwrap()
+        .features
+        .push("edit_lightning".into());
+    // Without the file nothing is queued, and the message says what is missing.
+    let error = start_edit_checked(&state, input("lightning")).unwrap_err();
+    assert!(error.to_string().contains("not downloaded"), "{error}");
+    assert!(queued().is_none());
+    assert!(start_edit_checked(&state, input("turbo")).is_err());
+    assert!(queued().is_none());
+
+    let addons = crate::editing::addons_in(&state.model_root()).unwrap();
+    install(&addons[0]);
+    start_edit_checked(&state, input("lightning")).unwrap();
+    let job = queued().unwrap();
+    let wire: Value = serde_json::from_str(&job.request_json).unwrap();
+    assert_eq!(wire["data"]["speed"], "lightning");
+    assert_eq!(
+        wire["data"]["lightning_lora_path"],
+        json!(state
+            .model_root()
+            .join("qwen-image-edit-2511")
+            .join("Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors")
+            .to_string_lossy())
+    );
+    lock(&state.database)
+        .unwrap()
+        .finish_job(&job.id, "completed", "", "")
+        .unwrap();
+
+    // Best sends neither field, so engines that do not know them take the request.
+    start_edit_checked(&state, input("full")).unwrap();
+    let wire: Value = serde_json::from_str(&queued().unwrap().request_json).unwrap();
+    assert!(wire["data"].get("speed").is_none());
+    assert!(wire["data"].get("lightning_lora_path").is_none());
+}
+
+#[test]
+fn plan_job_adds_the_quick_add_on_stage_by_the_saved_speed_and_the_default_rule() {
+    let dir = tempfile::tempdir().unwrap();
+    let state = AppState::from_paths(AppPaths::under(&dir.path().join("app"))).unwrap();
+    let edit_settings = |speed: Option<&str>| UiSettings {
+        task: "edit".into(),
+        edit_model_id: "qwen_edit_2511_q2_k".into(),
+        edit_speed: speed.map(str::to_owned),
+        ..UiSettings::default()
+    };
+    let kinds = |settings: UiSettings| {
+        plan_job_checked(&state, settings, PlanJobOptions::default())
+            .unwrap()
+            .into_iter()
+            .map(|stage| (stage.kind, stage.edit_model_id, stage.size_bytes))
+            .collect::<Vec<_>>()
+    };
+    let qwen_size: u64 = crate::editing::catalog_in(&state.model_root())
+        .unwrap()
+        .into_iter()
+        .find(|m| m.model_id == "qwen_edit_2511_q2_k")
+        .unwrap()
+        .total_size_bytes;
+    let lightning = Some("qwen_edit_2511_lightning_4step".to_owned());
+    // An engine without edit_lightning offers no Quick.
+    assert_eq!(kinds(edit_settings(Some("lightning"))).len(), 1);
+    *lock(&state.engine).unwrap() = Some(crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "new".into(),
+        engine_version: "0.7.0".into(),
+        features: vec!["image_edit".into(), "edit_lightning".into()],
+        model_formats: vec![],
+        video_engines: vec![],
+    });
+    // Nothing chosen and nothing installed: Quick, and both downloads are counted.
+    assert_eq!(
+        kinds(edit_settings(None)),
+        vec![
+            (
+                "edit".to_owned(),
+                Some("qwen_edit_2511_q2_k".to_owned()),
+                qwen_size
+            ),
+            ("edit_addon".to_owned(), lightning.clone(), 849_608_296),
+        ]
+    );
+    assert_eq!(kinds(edit_settings(Some("full"))).len(), 1);
+    // The model installed before Quick existed: Best until the user chooses.
+    let folder = state.paths.model_root.join("qwen-image-edit-2511");
+    fs::create_dir_all(&folder).unwrap();
+    for model in crate::editing::catalog_in(&state.model_root()).unwrap() {
+        if model.model_id == "qwen_edit_2511_q2_k" {
+            for file in &model.files {
+                fs::File::create(folder.join(&file.filename))
+                    .unwrap()
+                    .set_len(file.size_bytes)
+                    .unwrap();
+            }
+        }
+    }
+    assert_eq!(kinds(edit_settings(None)).len(), 1);
+    assert_eq!(
+        kinds(edit_settings(Some("lightning")))[1],
+        ("edit_addon".to_owned(), lightning, 849_608_296)
+    );
+    // FLUX.2 klein has no add-on.
+    let mut flux = edit_settings(Some("lightning"));
+    flux.edit_model_id = "flux2_klein_4b_q4_0".into();
+    assert_eq!(kinds(flux).len(), 1);
 }
 
 #[test]
@@ -4508,6 +4711,19 @@ fn edit_expert_settings_validate_and_flow_from_settings_to_request() {
         ..UiSettings::default()
     };
     assert!(validate_settings(&bad_settings).is_err());
+    // The saved quality is unset (old settings files), full or lightning.
+    for (speed, valid) in [
+        (None, true),
+        (Some("full"), true),
+        (Some("lightning"), true),
+        (Some("fast"), false),
+    ] {
+        let settings = UiSettings {
+            edit_speed: speed.map(str::to_owned),
+            ..UiSettings::default()
+        };
+        assert_eq!(validate_settings(&settings).is_ok(), valid, "{speed:?}");
+    }
     assert!(validate_settings(&UiSettings {
         edit_text_encoder: "tpu".into(),
         ..UiSettings::default()
@@ -4542,6 +4758,7 @@ fn edit_expert_settings_validate_and_flow_from_settings_to_request() {
         edit_vae: "auto".into(),
         edit_vram_limit_mb: None,
         edit_allow_any_size: None,
+        speed: "full".into(),
     };
 
     // Old engine without edit_expert refuses non-default settings overrides.
@@ -6192,6 +6409,8 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
 
     let catalog_edit_model = crate::editing::EditModel {
         model_id: "qwen_edit_2511_q2_k".into(),
+        kind: None,
+        speed: None,
         name: "Qwen Image Edit 2511".into(),
         family: "qwen-image-edit-2511".into(),
         quantization: "Q2_K".into(),
@@ -6226,6 +6445,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         edit_vae: "auto".into(),
         edit_vram_limit_mb: None,
         edit_allow_any_size: None,
+        speed: "full".into(),
     };
     let custom_edit_model = crate::editing::EditModel {
         model_id: "__custom__".into(),
@@ -6247,6 +6467,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
         edit_vae: "auto".into(),
         edit_vram_limit_mb: None,
         edit_allow_any_size: None,
+        speed: "full".into(),
     };
     let custom_files = std::collections::BTreeMap::from([
         ("diffusion".into(), "/custom/flux.gguf".into()),
@@ -6353,6 +6574,29 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 None,
                 0,
                 false,
+                None,
+            ))
+            .unwrap(),
+        ),
+        (
+            "edit_lightning",
+            serde_json::to_value(build_edit_request(
+                "sample-edit-lightning",
+                "/in/photo.png",
+                Path::new("/out/photo_localsr_edit_quick.png"),
+                &catalog_edit_model,
+                "/models/qwen-image-edit-2511".into(),
+                Path::new("/bin/sd-cli"),
+                &crate::editing::StartEditInput {
+                    speed: "lightning".into(),
+                    ..catalog_edit_input.clone()
+                },
+                None,
+                0,
+                false,
+                Some(Path::new(
+                    "/models/qwen-image-edit-2511/Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors",
+                )),
             ))
             .unwrap(),
         ),
@@ -6369,6 +6613,7 @@ fn typed_job_requests_match_fixtures_and_validate_against_schema() {
                 Some(custom_files),
                 0,
                 false,
+                None,
             ))
             .unwrap(),
         ),

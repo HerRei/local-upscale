@@ -24,10 +24,12 @@ from localsr.core.edit_memory import (
     GIB,
     PLACEMENT_CHOICES,
     EditPlan,
+    mapped_size,
     minimum_unified_memory_gb,
     minimum_vram_gb,
     plan_edit,
     read_edit_memory,
+    with_addon,
 )
 from localsr.core.image_formats import PILLOW_INPUT_FORMATS
 from localsr.core.image_io import open_photo
@@ -42,7 +44,16 @@ from localsr.protocol.messages import JobCompleted, LogMessage, ProgressUpdate, 
 
 CATALOG_PATH = Path(__file__).with_name("edit_catalog.json")
 REQUIRED_FLAGS = ("--max-vram", "--mmap", "--model-args", "--backend", "--vae-tiling")
+# A Lightning edit also needs the runtime to apply a LoRA from a folder.
+LORA_FLAGS = ("--lora-model-dir", "--lora-apply-mode")
+# "full" runs the bundle's own steps and guidance; "lightning" adds the family's 4-step
+# LoRA from the catalog and runs its steps and guidance instead.
+EDIT_SPEEDS = ("full", "lightning")
 CUSTOM_EDIT_MODEL_ID = "__custom__"
+# The runtime loads every <lora:NAME:WEIGHT> in a prompt, from its LoRA folder or from
+# an absolute path, so an instruction never carries one, closed or not.
+LORA_TAG = re.compile(r"<lora:[^>]*>", re.IGNORECASE)
+LORA_TAG_START = re.compile(r"<lora:", re.IGNORECASE)
 CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
     "qwen-image-edit-2511": {
         "roles": ("diffusion", "text_encoder", "vision", "vae"),
@@ -68,8 +79,10 @@ CUSTOM_EDIT_FAMILIES: dict[str, dict] = {
 
 
 PROBE_TIMEOUTS = {"--help": 90, "--list-devices": 120}
-# Runtimes whose --help already passed, keyed by path, size and modification time.
+# Runtimes whose --help already passed, keyed by path, size and modification time, and
+# those of them that also list the LoRA options.
 _CHECKED_RUNTIMES: set[tuple[str, int, int]] = set()
+_LORA_RUNTIMES: set[tuple[str, int, int]] = set()
 # Bundle files whose checksum passed, keyed by resolved path. The worker is long-lived, so a
 # 8-21 GB bundle is hashed once instead of on every edit.
 _VERIFIED_BUNDLE_FILES: dict[str, tuple[tuple[int, int, int, int, int], str]] = {}
@@ -176,8 +189,36 @@ def resolve_edit_gpu(runtime: Path, device: str, backend: str) -> str:
     return f"{'ROCm' if torch.version.hip else 'CUDA'}{index}"
 
 
-def edit_catalog() -> list[dict]:
+def _catalog_entries() -> list[dict]:
     return json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+
+
+def edit_catalog() -> list[dict]:
+    """The editing bundles a user can choose. Entries with a `kind` are add-ons."""
+    return [entry for entry in _catalog_entries() if "kind" not in entry]
+
+
+def speed_addon(family: str, speed: str) -> dict | None:
+    """The catalog's speed add-on for a model family, or None when the family has none."""
+    return next(
+        (
+            entry
+            for entry in _catalog_entries()
+            if entry.get("kind") == "speed_addon"
+            and entry["family"] == family
+            and entry.get("speed") == speed
+        ),
+        None,
+    )
+
+
+def strip_lora_tags(prompt: str) -> str:
+    """The instruction without any <lora:...> tag or unclosed start of one."""
+    while True:
+        cleaned = LORA_TAG_START.sub("", LORA_TAG.sub("", prompt))
+        if cleaned == prompt:
+            return cleaned
+        prompt = cleaned
 
 
 def custom_edit_model(data: dict) -> dict:
@@ -229,8 +270,22 @@ def validate_request(data: dict) -> dict:
     if model is None:
         raise ValueError("Unknown editing model.")
     prompt = data.get("prompt", "")
-    if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 4000 or "\0" in prompt:
+    if (
+        not isinstance(prompt, str)
+        or not strip_lora_tags(prompt).strip()
+        or len(prompt) > 4000
+        or "\0" in prompt
+    ):
         raise ValueError("Describe the edit in 1–4000 characters.")
+    speed = data.get("speed", "full")
+    if speed not in EDIT_SPEEDS:
+        raise ValueError("speed must be full or lightning.")
+    if speed == "lightning":
+        if speed_addon(model["family"], speed) is None:
+            raise ValueError(f"Quick is not available for {model['name']}. Choose Best.")
+        lora_path = data.get("lightning_lora_path")
+        if not isinstance(lora_path, str) or not lora_path.strip() or "\0" in lora_path:
+            raise ValueError("Quick needs the Lightning file, which is not downloaded.")
     if data.get("max_dimension", 512) not in (512, 768, 1024):
         raise ValueError("Edit size must be 512, 768 or 1024 pixels.")
     steps = data.get("steps") or model.get("default_steps", 40)
@@ -395,6 +450,29 @@ def verify_bundle(
     return paths
 
 
+def verify_speed_addon(addon: dict, path: Path, cancel: threading.Event, progress=None) -> Path:
+    """Check the add-on file the host named against the catalog's name, size and SHA-256."""
+    expected = addon["files"][0]
+    if path.name != expected["filename"]:
+        raise ValueError("The Lightning file is not the catalog's. Download it again.")
+    try:
+        return verify_bundle(addon, path.parent, cancel, progress)[expected["role"]]
+    except FileNotFoundError as error:
+        raise FileNotFoundError(
+            "The Lightning file is missing or incomplete. Download it again in the model library."
+        ) from error
+
+
+def require_lora_support(runtime: Path) -> None:
+    """Refuse a runtime whose --help did not list the LoRA options (see check_runtime)."""
+    stat = runtime.stat()
+    if (str(runtime), stat.st_size, stat.st_mtime_ns) not in _LORA_RUNTIMES:
+        raise ValueError(
+            "This editing runtime cannot run Quick. Choose Best, or reinstall LocalSR to get "
+            "its own runtime back."
+        )
+
+
 def check_runtime(path: str) -> Path:
     runtime = Path(path).resolve(strict=True)
     if not runtime.is_file():
@@ -410,10 +488,11 @@ def check_runtime(path: str) -> Path:
             "The editing runtime did not answer in time. Try the edit again; if it keeps "
             "happening, use Help > Report a problem."
         ) from error
-    if help_result.returncode != 0 or any(
-        flag not in help_result.stdout + help_result.stderr for flag in REQUIRED_FLAGS
-    ):
+    listed = help_result.stdout + help_result.stderr
+    if help_result.returncode != 0 or any(flag not in listed for flag in REQUIRED_FLAGS):
         raise ValueError("The editing runtime is too old. Reinstall LocalSR to restore it.")
+    if all(flag in listed for flag in LORA_FLAGS):
+        _LORA_RUNTIMES.add(key)
     _CHECKED_RUNTIMES.add(key)
     return runtime
 
@@ -453,7 +532,17 @@ def build_edit_command(
     rocm=False,
     backend="",
     gpu_override=None,
+    cfg_scale=None,
 ):
+    """The sd-cli command line. A "lora" entry in `files` applies that speed LoRA, with
+    `cfg_scale` (its guidance) in place of the model's own."""
+    # The runtime reads <lora:...> tags from the prompt; only LocalSR's own may reach it.
+    prompt = strip_lora_tags(prompt)
+    lora = files.get("lora")
+    if lora is not None:
+        # The full file name matches that one file in --lora-model-dir and nothing else.
+        prompt = f"{prompt} <lora:{Path(lora).name}:1>"
+    guidance = model.get("cfg_scale", 2.5) if cfg_scale is None else cfg_scale
     gpu_kind = "Vulkan" if backend == "VULKAN" else "ROCm" if rocm else "CUDA"
     gpu = gpu_override or (
         "MTL0" if device == "mps" else f"{gpu_kind}{device.partition(':')[2] or '0'}"
@@ -504,8 +593,11 @@ def build_edit_command(
         "--max-vram",
         f"{plan.gpu_budget / GIB:.2f}",
         "--cfg-scale",
-        f"{model.get('cfg_scale', 2.5):g}",
+        f"{guidance:g}",
     ]
+    if lora is not None:
+        # "auto" applies the LoRA at run time to quantized weights instead of merging it.
+        args += ["--lora-model-dir", str(Path(lora).parent), "--lora-apply-mode", "auto"]
     if model["family"] == "qwen-image-edit-2511":
         args += ["--flow-shift", "3", "--model-args", "qwen_image_zero_cond_t=true"]
     elif model["family"] == "qwen-image-2.1":
@@ -517,7 +609,31 @@ def build_edit_command(
 def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit_memory):
     started = time.monotonic()
     model = validate_request(data)
-    steps = int(data.get("steps") or model.get("default_steps", 40))
+    addon = speed_addon(model["family"], "lightning") if data.get("speed") == "lightning" else None
+    requested_steps = int(data.get("steps") or model.get("default_steps", 40))
+    # Lightning is distilled for its own step count and guidance; the request's steps
+    # (the model's own or an Expert choice) do not apply to it.
+    steps = int(addon["default_steps"]) if addon else requested_steps
+    if addon and requested_steps != steps:
+        emit(
+            LogMessage(
+                level="info",
+                message=(
+                    f"Lightning runs {steps} steps at guidance {addon['cfg_scale']:g}; "
+                    f"the {requested_steps} steps set for this edit are not used."
+                ),
+            )
+        )
+    prompt = strip_lora_tags(data["prompt"]).strip()
+    if prompt != data["prompt"].strip():
+        emit(
+            LogMessage(
+                level="info",
+                message="LoRA tags were removed from the instruction; LocalSR adds its own.",
+            )
+        )
+    # The plan counts the add-on's file with the bundle it runs with.
+    planned = with_addon(model, addon) if addon else model
     device = str(data.get("device", "mps"))
     edit_text_encoder = str(data.get("edit_text_encoder", "auto"))
     edit_vae = str(data.get("edit_vae", "auto"))
@@ -532,7 +648,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             )
         )
     plan = plan_edit(
-        model,
+        planned,
         initial,
         data.get("max_dimension", 512),
         text_encoder=edit_text_encoder,
@@ -544,6 +660,8 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         raise InterruptedError("Editing cancelled.")
     require_output_name(data["output_path"])
     runtime = check_runtime(str(data.get("runtime_path", "")))
+    if addon:
+        require_lora_support(runtime)
     job_id = str(data["job_id"])
     emit(StageStarted(job_id, 0, 1, "edit", model["name"]))
     tracker = EditProgress(steps)
@@ -576,16 +694,27 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
         tracker.checked(fraction)
         report()
 
+    # The bundle and the add-on share one checking bar, by size.
+    share = mapped_size(model) / mapped_size(planned) if addon else 1.0
     files = (
-        verify_custom_files(model, checked)
+        verify_custom_files(model, lambda fraction: checked(fraction * share))
         if model["model_id"] == CUSTOM_EDIT_MODEL_ID
-        else verify_bundle(model, Path(data["bundle_dir"]), cancel, checked)
+        else verify_bundle(
+            model, Path(data["bundle_dir"]), cancel, lambda fraction: checked(fraction * share)
+        )
     )
+    if addon:
+        files["lora"] = verify_speed_addon(
+            addon,
+            Path(data["lightning_lora_path"]),
+            cancel,
+            lambda fraction: checked(share + fraction * (1 - share)),
+        )
     tracker.enter(1)
     # Re-admit after the potentially long checksum pass, without trusting stale free RAM.
     initial = sampler(device)
     plan = plan_edit(
-        model,
+        planned,
         initial,
         data.get("max_dimension", 512),
         text_encoder=edit_text_encoder,
@@ -623,7 +752,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             files,
             reference,
             result,
-            data["prompt"].strip(),
+            prompt,
             plan,
             device,
             steps,
@@ -631,6 +760,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
             dimensions,
             backend=backend,
             gpu_override=resolve_edit_gpu(runtime, device, backend),
+            cfg_scale=addon["cfg_scale"] if addon else None,
         )
         specification = work / "guard.json"
         payload = json.dumps(
@@ -734,6 +864,7 @@ def run_edit_job(data: dict, cancel: threading.Event, emit, *, sampler=read_edit
                 job_id,
                 elapsed_seconds=time.monotonic() - started,
                 output_path=str(output),
-                notes=placement_note(model, plan, device),
+                notes=placement_note(model, plan, device)
+                + (f" Lightning: {steps} steps." if addon else ""),
             )
         )

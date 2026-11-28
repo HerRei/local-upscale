@@ -223,6 +223,8 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "image_16bit",
         "edit_placement",
         "edit_expert",
+        # `speed` and `lightning_lora_path` on an edit_job_request.
+        "edit_lightning",
         "precision_auto",
         # stage_picture_max_dimension on a photo job and the stage_result message.
         "stage_results",

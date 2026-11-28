@@ -48,6 +48,35 @@ Downloads resume through LocalSR's existing downloader and are verified before
 installation and again before inference. Components are shared within each model
 family, so changing quantization does not redownload a matching encoder or VAE.
 
+## Lightning (4 steps) for Qwen Image Edit 2511
+
+The catalog also lists one speed add-on: LightX2V's Qwen-Image-Edit-2511-Lightning 4-step
+LoRA (`Qwen-Image-Edit-2511-Lightning-4steps-V1.0-bf16.safetensors`, 849,608,296 bytes,
+Apache-2.0, pinned at Hugging Face revision `107d238d68b8387e32843d0b4a2e24ceb0d3ad86`). It is
+an entry of `src/localsr/core/edit_catalog.json` with `kind: "speed_addon"` and
+`speed: "lightning"`, never an edit model of its own: the engine's `edit_catalog()` and the
+desktop's model lists leave it out, and the desktop lists it apart, with its install state.
+It is downloaded, verified, moved with the model folder and removed like an editing bundle,
+into the family's folder; one file serves every Qwen Image Edit 2511 size.
+
+An edit request chooses its speed per job: `speed` is `full` (the default, and what a request
+without the field means) or `lightning`. A Lightning edit applies the LoRA at run time
+(`--lora-model-dir` with the file's folder, `--lora-apply-mode auto`, its full file name as
+the prompt's `<lora:…:1>` tag), with guidance 1 and 4 steps. A step count from the request,
+the model's own 40 or one set under Advanced, does not apply to it; the job log says so. The
+desktop sends Lightning only to an engine that lists the `edit_lightning` feature, and only
+with the add-on installed: it resolves the file from the catalog entry in the current model
+folder when the edit is queued and again when it is sent, as it does the editing runtime, so a
+queued Lightning edit whose file was removed fails before anything is sent. The engine checks
+the file's name, size and SHA-256 like a bundle component, and refuses a runtime whose
+`--help` does not list the LoRA options. Without a saved choice the desktop plans Lightning,
+unless the Qwen model is installed and the add-on is not; the plan then counts the add-on's
+download with the model's.
+
+The runtime would load any `<lora:NAME:WEIGHT>` tag in a prompt, from the LoRA folder or from
+an absolute path. Every edit, Lightning or not, removes such tags and unclosed tag starts
+from the instruction first, and the job log notes it.
+
 ## Capacity profiles
 
 These are starting profiles, **not measured fit guarantees**. GiB means 1024³
@@ -60,7 +89,9 @@ FP16/BF16 as a loading fallback.
 
 `scripts/refresh_edit_catalog.py` derives the tiers from that phase model and
 writes the JSON catalog used by the worker's admission check. Update this table
-when regenerating the catalog:
+when regenerating the catalog. A bundle with a measured peak (Qwen Image Edit 2511 Q2_K)
+uses that peak instead of the phase model and the worker's own Mac reserve, and must fit
+with its Lightning add-on as well:
 
 - **Mac (unified memory):** the smallest Apple memory size where the heaviest
   phase plus the reserve fits in about 70% of memory (what an idle Mac has free),
@@ -72,7 +103,7 @@ when regenerating the catalog:
 
 | Family | Size | Bundle | Transformer | Mac unified memory | GPU memory |
 | --- | --- | ---: | ---: | ---: | ---: |
-| Qwen Image Edit 2511 | Q2_K | 10.8 GiB | 7.0 GiB | 24 GiB | 8 GiB |
+| Qwen Image Edit 2511 | Q2_K | 10.8 GiB | 7.0 GiB | 16 GiB (measured) | 8 GiB |
 | Qwen Image Edit 2511 | Q3_K_S | 14.0 GiB | 8.6 GiB | 24 GiB | 12 GiB |
 | Qwen Image Edit 2511 | Q4_K_M | 17.7 GiB | 12.3 GiB | 32 GiB | 16 GiB |
 | Qwen Image Edit 2511 | Q5_K_M | 19.4 GiB | 14.0 GiB | 32 GiB | 20 GiB |
@@ -86,7 +117,8 @@ Default maximum edit size: 512 px below 36 GiB of unified memory, 768 px below
 48 GiB, 1024 px above (dedicated GPUs: 512 px below 12 GiB, 768 px below 16 GiB).
 The app always defaults to a 512 px edit, even on larger hardware; larger sizes
 are explicit choices. A 16 GB Mac starts on FLUX.2 klein 4B; Mage-Flow-Edit-Turbo
-is an extra option for 16 GB Macs and 8 GB GPUs. Below 16 GiB the app shows
+and Qwen Image Edit 2511 Q2_K are extra options for 16 GB Macs, Mage-Flow-Edit-Turbo also
+for 8 GB GPUs. Below 16 GiB the app shows
 the smallest bundle, says why it cannot start, and the worker refuses to load it.
 Each model carries its own step count (40 for the Qwen editors, 4 for FLUX.2
 klein and Mage-Flow-Edit-Turbo) and guidance; **Steps** under Advanced overrides it for the chosen model
@@ -138,6 +170,14 @@ you put them.
   unified memory, 1 GiB beside a dedicated GPU, scaled with the edit size). The
   supervisor's process limit allows every mapped file to stay resident, which is
   normal when memory is plentiful.
+- The Lightning LoRA counts only in a Lightning edit. On unified memory it samples with
+  the transformer at 2.14 times its file size (its weights and the buffers that apply it);
+  beside a dedicated GPU the card holds its weights with the transformer, so it counts
+  against the GPU budget and the edit size, not host memory.
+- Qwen Image Edit 2511 Q2_K on unified memory uses its measured peaks plus 2%: 7.31 GiB at
+  40 steps and 9.00 GiB with Lightning (16 GB M1 Pro, 512 px, 28 November 2026), so a
+  512 px edit needs about 7.5 GiB plus the reserve, or 9.2 GiB with Lightning: about 11.2 GiB
+  free on a 16 GB Mac. A larger edit on a bigger Mac adds its larger working buffers.
 - Dedicated VRAM reserve: the larger of 2 GiB or 15% of capacity; the native
   budget is capped at 80% of capacity and at current free VRAM minus the reserve.
   Metal uses at most 60% of physical unified memory as the native managed budget.
@@ -175,6 +215,10 @@ you put them.
   4B Q4_0 at 512 × 352 px took about 130 s, peaked at a 2.6 GiB footprint (6.4 GiB
   RSS including mapped weights), kept pressure normal and did not swap; the free
   level fell from 71% to 40%.
+- Measured on the 16 GB M1 Pro (28 November 2026): Qwen Image Edit 2511 Q2_K at 512 px
+  took 20.6 min at 40 steps (7.31 GiB peak footprint) and about 2.3 min with Lightning
+  (8.97-9.00 GiB); on a 16 GB graphics card Q4_K_M at 512 px took 161 s at 40 steps and
+  24 s with Lightning (means of 15 edits each).
 - Measured on the 16 GB M1 Pro (22 November 2026): Mage-Flow-Edit-Turbo Q6_K at
   512 × 288 px on CPU with the app's flags (`--backend cpu`, mapped weights) took
   95.9 s and peaked at a 0.44 GiB physical footprint (2.8 GiB RSS).
@@ -228,6 +272,7 @@ Upstream references:
 
 - https://huggingface.co/Qwen/Qwen-Image-Edit-2511
 - https://huggingface.co/unsloth/Qwen-Image-Edit-2511-GGUF
+- https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning
 - https://github.com/microsoft/Mage
 - https://huggingface.co/Comfy-Org/Mage-Flow
 - https://huggingface.co/johnsor/Mage-Flow-Edit-Turbo-GGUF
@@ -235,7 +280,8 @@ Upstream references:
 - https://github.com/leejet/stable-diffusion.cpp/blob/3f8527a46c54ecf4cb4ed6003da8e8982283c73c/docs/mage_flow.md
 
 Automated tests use simulated memory profiles and small fixtures, not real
-weights. On real hardware only FLUX.2 klein 4B Q4_0 and Mage-Flow-Edit-Turbo
-Q6_K (CPU on Mac) at 512 px have run so far (16 GB M1 Pro); the Qwen bundles
-and larger sizes are estimates. See
+weights. On real hardware FLUX.2 klein 4B Q4_0, Mage-Flow-Edit-Turbo Q6_K (CPU on Mac)
+and Qwen Image Edit 2511 Q2_K with and without Lightning have run at 512 px on a 16 GB
+M1 Pro, and Q4_K_M with and without Lightning on a 16 GB graphics card; the other Qwen
+bundles and larger sizes are estimates. See
 [Known limitations](../KNOWN_LIMITATIONS.md#image-editing).

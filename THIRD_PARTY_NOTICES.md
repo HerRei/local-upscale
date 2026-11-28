@@ -151,7 +151,9 @@ commercial workflow.
   Source: https://github.com/leejet/stable-diffusion.cpp.
 - **Qwen Image Edit 2511** — Qwen (Apache-2.0), with GGUF diffusion quantizations
   by Unsloth, matching Qwen2.5-VL text/vision encoders and the Qwen Image VAE.
-  Source: https://huggingface.co/Qwen/Qwen-Image-Edit-2511.
+  Source: https://huggingface.co/Qwen/Qwen-Image-Edit-2511. Its optional 4-step
+  Lightning LoRA is by LightX2V (Apache-2.0).
+  Source: https://huggingface.co/lightx2v/Qwen-Image-Edit-2511-Lightning.
 - **FLUX.2 klein 4B** — Black Forest Labs (Apache-2.0), with GGUF diffusion
   quantizations by leejet, the Qwen3-4B text encoder (Qwen, Apache-2.0, GGUF by
   Unsloth) and the FLUX.2 autoencoder as published by Comfy-Org (Apache-2.0).

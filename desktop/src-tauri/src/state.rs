@@ -274,6 +274,7 @@ impl AppState {
             !settings.model_directory.trim().is_empty() && !model_root.is_dir();
         let edit = crate::editing::EditSetup {
             models: crate::editing::catalog_in(&model_root)?,
+            addons: crate::editing::addons_in(&model_root)?,
             runtime_path: lock(&self.edit_runtime)?.clone(),
             custom_model: crate::editing::custom_edit_model(&settings.custom_edit_model),
         };
