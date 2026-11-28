@@ -60,9 +60,9 @@
   illustration upscalers show a before and after picture, made with the model itself
   from a CC0 or public-domain source; Before and After switch between them. The
   recommended workflows show theirs on their card.
-- **Prompt examples for Edit.** With FLUX.2 klein 4B, Examples beside What to change
-  offers prompts that were tested on it: Colour and Film look. Choosing one replaces
-  your text, and ⌘Z brings it back.
+- **Prompt examples for Edit.** With FLUX.2 klein 4B and Qwen Image Edit 2511, Examples
+  beside What to change offers the prompts that passed our tests on them; today that is
+  Colour. Choosing one replaces your text, and ⌘Z brings it back.
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a
   glance, and open settings where you need them. Once the same kind of job has run twice,
   the panel shows about how long Start will take. The new blue accent follows your Mac’s

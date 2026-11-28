@@ -1080,13 +1080,11 @@ describe('Prompt examples', () => {
     return screen.getByRole('group', { name: 'Prompt examples' });
   };
 
-  it('ships FLUX.2 klein with Colour and Film look only', () => {
-    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b']);
-    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual([
-      'Colour',
-      'Film look',
-    ]);
-    expect(examplesFor(QWEN)).toEqual([]);
+  it('ships FLUX.2 klein and Qwen Image Edit 2511 with Colour only', () => {
+    expect(PROMPT_EXAMPLE_FAMILIES).toEqual(['flux2-klein-4b', QWEN]);
+    expect(examplesFor('flux2-klein-4b').map((example) => example.title)).toEqual(['Colour']);
+    expect(examplesFor(QWEN).map((example) => example.title)).toEqual(['Colour']);
+    expect(examplesFor('mage-flow-edit-turbo')).toEqual([]);
   });
 
   it('shows the link with the entries that passed on the listed family', async () => {
@@ -1097,7 +1095,7 @@ describe('Prompt examples', () => {
       within(list)
         .getAllByRole('button')
         .map((button) => button.textContent),
-    ).toEqual([expect.stringMatching(/^Colour/), expect.stringMatching(/^Film look/)]);
+    ).toEqual([expect.stringMatching(/^Colour/)]);
     expect(
       within(list).getByText('Repaints the photo. To only add colour, use Fix \u203a Colour.'),
     );
@@ -1135,6 +1133,7 @@ describe('Prompt examples', () => {
 
   it('warns about own text and undo gives it back', async () => {
     withFamilies([QWEN]);
+    unlock('Film look');
     const user = await mountWith(editSnapshot(36));
     await chooseTask(user, /^Edit$/);
     const field = screen.getByLabelText('What to change') as HTMLTextAreaElement;
