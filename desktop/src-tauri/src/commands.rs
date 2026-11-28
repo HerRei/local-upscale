@@ -526,6 +526,11 @@ pub(crate) fn remove_media_checked(state: &AppState, id: &str) -> AppResult<()> 
     if let Some(media) = existing {
         state.grants.revoke_media_file(Path::new(&media.path));
     }
+    crate::repair_mask::remove_masks_of(
+        &crate::repair_mask::masks_root(&state.paths.next_root),
+        id,
+        None,
+    );
     Ok(())
 }
 
@@ -572,7 +577,99 @@ pub(crate) fn clear_media_checked(state: &AppState) -> AppResult<()> {
     ensure_queue_idle(state)?;
     clear_all_media_and_previews(state)?;
     state.grants.clear_media();
+    crate::repair_mask::remove_all_masks(&crate::repair_mask::masks_root(&state.paths.next_root));
     Ok(())
+}
+
+/// The strokes painted on a photo for Dust & scratches.
+#[tauri::command]
+pub fn get_repair_strokes(
+    state: State<'_, Arc<AppState>>,
+    media_id: String,
+) -> AppResult<Vec<crate::repair_mask::RepairStroke>> {
+    get_repair_strokes_checked(&state, &media_id)
+}
+
+pub(crate) fn get_repair_strokes_checked(
+    state: &AppState,
+    media_id: &str,
+) -> AppResult<Vec<crate::repair_mask::RepairStroke>> {
+    let stored = lock(&state.database)?
+        .repair_strokes(media_id)?
+        .ok_or_else(|| AppError::Validation("that photo is no longer in the queue".into()))?;
+    if stored.is_empty() {
+        return Ok(Vec::new());
+    }
+    Ok(serde_json::from_str(&stored)?)
+}
+
+/// Keeps a photo's whole list of strokes; the window sends it again after every change.
+#[tauri::command]
+pub fn set_repair_strokes(
+    state: State<'_, Arc<AppState>>,
+    app: AppHandle,
+    media_id: String,
+    strokes: Vec<crate::repair_mask::RepairStroke>,
+) -> AppResult<()> {
+    set_repair_strokes_checked(&state, &media_id, &strokes)?;
+    emit_state_changed(&app);
+    Ok(())
+}
+
+pub(crate) fn set_repair_strokes_checked(
+    state: &AppState,
+    media_id: &str,
+    strokes: &[crate::repair_mask::RepairStroke],
+) -> AppResult<()> {
+    crate::updates::ensure_not_installing(state)?;
+    crate::repair_mask::validate_strokes(strokes).map_err(AppError::Validation)?;
+    let database = lock(&state.database)?;
+    let media = database
+        .get_media(media_id)?
+        .ok_or_else(|| AppError::Validation("that photo is no longer in the queue".into()))?;
+    if media.kind != "image" || media.probe_status != "ready" {
+        return Err(AppError::Validation(
+            "Marks can be painted on a photo that has been opened.".into(),
+        ));
+    }
+    if database.has_inflight_jobs()? {
+        return Err(AppError::Validation(
+            "Marks can be changed when the queue is done.".into(),
+        ));
+    }
+    let json = if strokes.is_empty() {
+        String::new()
+    } else {
+        serde_json::to_string(strokes)?
+    };
+    database.set_repair_strokes(media_id, &json, crate::repair_mask::count_marks(strokes))?;
+    Ok(())
+}
+
+/// The mask file of a photo's paint, drawn on first use; `None` for a photo without paint.
+/// It lives in the host's folder, so every job and patch of the photo reads one file and the
+/// worker never opens a path the window chose.
+pub(crate) fn repair_mask_path(state: &AppState, media_id: &str) -> AppResult<Option<PathBuf>> {
+    let (media, stored) = {
+        let database = lock(&state.database)?;
+        let Some(media) = database.get_media(media_id)? else {
+            return Ok(None);
+        };
+        let stored = database.repair_strokes(media_id)?.unwrap_or_default();
+        (media, stored)
+    };
+    if media.repair_marks == 0 || stored.is_empty() {
+        return Ok(None);
+    }
+    let root = crate::repair_mask::masks_root(&state.paths.next_root);
+    let name = crate::repair_mask::mask_file_name(media_id, media.repair_rev);
+    let path = root.join(&name);
+    if !path.is_file() {
+        let strokes: Vec<crate::repair_mask::RepairStroke> = serde_json::from_str(&stored)?;
+        crate::repair_mask::write_mask(&path, &strokes, media.width, media.height)?;
+    }
+    crate::repair_mask::remove_masks_of(&root, media_id, Some(&name));
+    Ok(Some(path))
 }
 
 fn clear_all_media_and_previews(state: &AppState) -> AppResult<()> {
@@ -1252,6 +1349,8 @@ pub struct PlanJobOptions {
     pub selected_video_model_id: Option<String>,
     pub edit_model_id: Option<String>,
     pub has_audio: Option<bool>,
+    /// Steps that need paint, which the open photo has: Dust & scratches runs only for these.
+    pub masked_steps: Vec<String>,
 }
 
 #[tauri::command]
@@ -1317,6 +1416,7 @@ pub(crate) fn plan_job_checked(
         selected_video_model,
         edit_model,
         has_audio: options.has_audio,
+        masked_steps: options.masked_steps,
     };
     Ok(crate::job_plan::resolve_plan(
         &catalog,
@@ -1484,22 +1584,37 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
             "Nothing to run: the selected video has no audio track.".into(),
         ));
     }
-    refuse_when_disk_is_short(&input, &selection, &media[0], &output_directory)?;
+    // A step that needs paint runs on the photos that have it. A photo left with nothing to run
+    // is not queued.
+    let mut runnable = Vec::with_capacity(media.len());
+    for item in media {
+        let photo_input = input_for_photo(state, &input, &item)?;
+        if photo_has_work(&photo_input) {
+            runnable.push((item, photo_input));
+        }
+    }
+    if runnable.is_empty() {
+        return Err(AppError::Validation(
+            "Paint over the marks on a photo first.".into(),
+        ));
+    }
+    refuse_when_disk_is_short(&input, &selection, &runnable[0].0, &output_directory)?;
     let engine = lock(&state.engine)?.clone();
     let ui_json = ui_json(input.ui.as_ref())?;
-    let media_ids: Vec<&str> = media.iter().map(|item| item.id.as_str()).collect();
+    let media_ids: Vec<&str> = runnable.iter().map(|(item, _)| item.id.as_str()).collect();
     lock(&state.database)?.admit_jobs(&media_ids, |reserved| {
-        media
+        runnable
             .iter()
-            .map(|item| -> AppResult<NewJob> {
+            .map(|(item, photo_input)| -> AppResult<NewJob> {
                 let job_id = Uuid::new_v4().to_string();
-                let output = unique_output_path(&output_directory, &item.path, &input, reserved);
+                let output =
+                    unique_output_path(&output_directory, &item.path, photo_input, reserved);
                 let message = build_job_message_for_engine(
                     &job_id,
                     item,
                     &output,
                     &state.paths.work_root,
-                    &input,
+                    photo_input,
                     &selection,
                     engine.as_ref(),
                 )?;
@@ -1514,6 +1629,41 @@ pub(crate) fn start_jobs_checked(state: &AppState, mut input: StartBatchInput) -
     })?;
     crate::stay_awake::sync(state);
     Ok(())
+}
+
+/// The start input as one photo runs it: a step that needs paint (Dust & scratches) gets the mask
+/// drawn from that photo's strokes, or is left out when the photo has none.
+fn input_for_photo(
+    state: &AppState,
+    input: &StartBatchInput,
+    media: &crate::types::MediaItem,
+) -> AppResult<StartBatchInput> {
+    let steps = crate::steps::registry();
+    let mut photo_input = input.clone();
+    if media.kind == "video" {
+        return Ok(photo_input);
+    }
+    let mut kept = Vec::with_capacity(photo_input.step_stages.len());
+    for mut selection in std::mem::take(&mut photo_input.step_stages) {
+        if steps
+            .step(&selection.step)
+            .is_some_and(|step| step.requires_mask)
+        {
+            let Some(mask) = repair_mask_path(state, &media.id)? else {
+                continue;
+            };
+            selection.mask_path = Some(mask.to_string_lossy().into_owned());
+        }
+        kept.push(selection);
+    }
+    photo_input.step_stages = kept;
+    Ok(photo_input)
+}
+
+/// Whether anything is left to run on a photo once the steps it has no paint for are gone.
+fn photo_has_work(input: &StartBatchInput) -> bool {
+    input.task == "video"
+        || !((no_restore_model(input) || upscale_skips_sr(input)) && !has_work_at_1x(input))
 }
 
 /// "Try again" after the host gave up restarting the inference engine.
@@ -4763,9 +4913,14 @@ fn validate_step_stages_engine(
         }
     }
     validate_stage_params_engine_for(
-        stages
-            .iter()
-            .any(|stage| stage.params.is_some() || stage.mask_path.is_some()),
+        // The host adds the mask of a step that needs paint, so the engine needs the feature too.
+        stages.iter().any(|stage| {
+            stage.params.is_some()
+                || stage.mask_path.is_some()
+                || steps
+                    .step(&stage.step)
+                    .is_some_and(|step| step.requires_mask)
+        }),
         engine,
     )
 }
@@ -5730,8 +5885,16 @@ fn image_pipeline_stages(
     use crate::steps::StepPlacement;
 
     let steps = crate::steps::registry();
+    // In run order, whatever order they were ticked in: Dust & scratches ahead of the background.
+    let mut ordered: Vec<_> = input.step_stages.iter().collect();
+    ordered.sort_by_key(|selection| {
+        steps
+            .step(&selection.step)
+            .map(|step| (steps.phase_index(&step.phase), step.order))
+    });
+    let ordered = &ordered;
     let step_stages = |placement: StepPlacement| {
-        input.step_stages.iter().filter_map(move |selection| {
+        ordered.iter().filter_map(move |selection| {
             let (step, at) = steps.step_stage(&selection.step)?;
             let model = step_models.iter().find(|model| model.step == step.id);
             (at == placement).then(|| PipelineStageRequest {
@@ -5833,6 +5996,12 @@ pub(crate) fn patch_plan(state: &AppState, mut input: StartBatchInput) -> AppRes
         registry
             .step(&selection.step)
             .is_none_or(|step| step.media.iter().any(|media| media == "image"))
+    });
+    // The patch does not paint yet: a step that needs a mask is left out of it.
+    input.step_stages.retain(|selection| {
+        registry
+            .step(&selection.step)
+            .is_none_or(|step| !step.requires_mask)
     });
     input.device = resolve_device(state, &input.device)?;
     validate_start_input(&input, external_codecs_available(state))?;
@@ -5944,10 +6113,23 @@ fn is_cutout_alone(input: &StartBatchInput) -> bool {
         })
 }
 
+/// A restore job with no model and no fix whose added steps include one that needs paint: the
+/// repair is all of it.
+fn is_repair_alone(input: &StartBatchInput) -> bool {
+    input.model_id.is_empty()
+        && input.fix_stages.is_empty()
+        && input.step_stages.iter().any(|selection| {
+            crate::steps::registry()
+                .step_stage(&selection.step)
+                .is_some_and(|(step, _)| step.requires_mask)
+        })
+}
+
 /// The name and extension a result of `input` ends with, before any counter.
 fn output_ending(input: &StartBatchInput) -> (String, &str) {
     let mut suffix = match input.task.as_str() {
         "denoise" if is_cutout_alone(input) => "_cutout".to_owned(),
+        "denoise" if is_repair_alone(input) => "_repaired".to_owned(),
         "denoise" => "_denoised".to_owned(),
         "video" if input.video_task == "denoise" => "_video_restored".to_owned(),
         "video"

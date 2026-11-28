@@ -212,6 +212,8 @@ export interface PlanJobOptions {
   selected_video_model_id?: string | null;
   edit_model_id?: string | null;
   has_audio?: boolean | null;
+  /** Steps that need paint, which the open photo has (`repair` for Dust & scratches). */
+  masked_steps?: string[];
 }
 
 export interface HostPlanStage {

@@ -103,6 +103,7 @@ describe('step stages with a model or a matte', () => {
     phase: 'cleanup',
     needs_model: true,
     supports_mask: false,
+    requires_mask: false,
     label: 'Test cut-out',
     stage_label: '',
     required_feature: null,
@@ -269,5 +270,36 @@ describe('step stages with a model or a matte', () => {
     expect(activeStepStages(settings, false, steps).map(({ step }) => step.id)).toEqual([
       'test_cutout',
     ]);
+  });
+});
+
+describe('a step that needs paint', () => {
+  const settings = {
+    task: 'upscale',
+    step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }, { step: 'repair' }],
+  } as const;
+  const ids = (maskedSteps?: readonly string[]) =>
+    activeStepStages(
+      { ...settings, step_stages: [...settings.step_stages] },
+      false,
+      STEPS,
+      maskedSteps,
+    ).map(({ step }) => step.id);
+
+  it('runs where the open photo has paint, in run order, ahead of the background', () => {
+    expect(ids(['repair'])).toEqual(['repair', 'remove_background']);
+  });
+
+  it('is left out of the plan of a photo without paint, and kept for a start', () => {
+    expect(ids([])).toEqual(['remove_background']);
+    expect(ids()).toEqual(['repair', 'remove_background']);
+  });
+
+  it('never reaches a video', () => {
+    expect(
+      activeStepStages({ task: 'video', step_stages: [{ step: 'repair' }] }, false, STEPS, [
+        'repair',
+      ]),
+    ).toEqual([]);
   });
 });

@@ -153,6 +153,12 @@ pub struct MediaItem {
     /// a photo and for a file probed by an older build.
     #[serde(default)]
     pub field_order: String,
+    /// How many strokes of Dust & scratches paint on this photo; the strokes stay in the host.
+    #[serde(default)]
+    pub repair_marks: u32,
+    /// Counts each save of the paint, so a view can tell when it changed.
+    #[serde(default)]
+    pub repair_rev: u32,
     pub error: String,
     pub selected: bool,
 }

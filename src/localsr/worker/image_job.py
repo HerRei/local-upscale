@@ -546,6 +546,46 @@ def _run_grain_stage(
     }
 
 
+# Telea inpainting reads this many pixels around each painted pixel.
+_REPAIR_RADIUS = 3
+
+
+def _run_repair_stage(
+    runner: ImageJobRunner,
+    image: dict[str, Any],
+    stage: PipelineStage,
+    _index: int,
+    _data: Mapping[str, Any],
+    _progress: ImageJobProgress,
+    _notes: list[str],
+) -> dict[str, Any]:
+    """Fill the painted pixels from the picture around them (OpenCV, Telea).
+
+    Each colour channel is inpainted alone as 16-bit integers: OpenCV's 32-bit float inpainting
+    returns garbage in the painted places (4.10), and 65535 levels keep a 16-bit picture's depth.
+    Alpha is a separate plane of the image and is not touched. The mask blend that follows the
+    handler keeps every pixel outside the paint as it was.
+    """
+    import cv2
+    import torch
+
+    assert stage.mask_path is not None
+    tensor = image["tensor"]
+    channels, height, width = (int(size) for size in tensor.shape)
+    painted = load_mask(stage.mask_path, width, height) > 0.5
+    if not painted.any():
+        return image
+    mask = painted.astype(np.uint8) * 255
+    pixels = tensor.detach().cpu().float().numpy()
+    repaired = np.empty_like(pixels)
+    for channel in range(channels):
+        runner._check_cancelled()
+        levels = np.rint(np.clip(pixels[channel], 0.0, 1.0) * 65535.0).astype(np.uint16)
+        filled = cv2.inpaint(levels, mask, _REPAIR_RADIUS, cv2.INPAINT_TELEA)
+        repaired[channel] = filled.astype(np.float32) / 65535.0
+    return {**image, "tensor": torch.from_numpy(repaired)}
+
+
 @dataclass(frozen=True, slots=True)
 class StepModel:
     """A step stage's catalog model, checked and loaded the way a fix's is, active on the
@@ -617,6 +657,7 @@ IMAGE_STEP_HANDLERS: dict[str, StageImpl] = {
     "colour": _run_colour_fix_stage,
     "restore": _run_fix_model_stage,
     "grain": _run_grain_stage,
+    "repair": _run_repair_stage,
 }
 
 # Step stages that bring a catalog model (`model_task`); each handler gets it loaded.

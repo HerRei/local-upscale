@@ -37,6 +37,8 @@ interface ParityCase {
     selected_video_model_id: string | null;
     edit_model_id: string | null;
     has_audio: boolean | null;
+    /** Left out of a case that names none. */
+    masked_steps?: string[];
   };
   start_request: {
     media_ids: string[];
@@ -96,6 +98,7 @@ function makeCase(
     selectedVideoModelId?: string | null;
     editModelId?: string | null;
     hasAudio?: boolean | null;
+    maskedSteps?: string[];
     mediaIds?: string[];
     batchMode?: boolean;
     recipeName?: string;
@@ -142,6 +145,7 @@ function makeCase(
   const selectedVideoModelId = spec.selectedVideoModelId ?? null;
   const editModelId = spec.editModelId ?? null;
   const hasAudio = spec.hasAudio === undefined ? null : spec.hasAudio;
+  const maskedSteps = spec.maskedSteps ?? [];
 
   const faceModel = faceModelId
     ? snapshot.catalog.models.find((m) => m.model_id === faceModelId)
@@ -160,6 +164,7 @@ function makeCase(
     selectedVideoModel,
     editModel,
     hasAudio: hasAudio === null ? undefined : hasAudio,
+    maskedSteps,
     steps,
   });
 
@@ -190,6 +195,7 @@ function makeCase(
       selected_video_model_id: selectedVideoModelId,
       edit_model_id: editModelId,
       has_audio: hasAudio,
+      ...(maskedSteps.length > 0 ? { masked_steps: maskedSteps } : {}),
     },
     start_request: {
       media_ids: mediaIds,
@@ -876,6 +882,60 @@ function buildCorpus(): ParityCase[] {
     }
   }
 
+  // 12. Dust & scratches runs for a photo that has paint: the plan lists the step only then,
+  // ahead of the fixes and the background; a start always carries it, and the host checks each photo.
+  const repair = { step: 'repair' };
+  const repairCases: [string, Partial<UiSettings>, string[]][] = [
+    ['upscale-painted', { task: 'upscale', step_stages: [repair] }, ['repair']],
+    ['upscale-unpainted', { task: 'upscale', step_stages: [repair] }, []],
+    [
+      'upscale-with-fix-and-background',
+      {
+        task: 'upscale',
+        fix_stages: [{ fix: 'noise', model_id: 'denoise_realplksr_1x' }],
+        fixes: ['noise'],
+        step_stages: [{ step: 'remove_background', model_id: 'birefnet_general' }, repair],
+      },
+      ['repair'],
+    ],
+    [
+      'restore-alone-painted',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [repair],
+      },
+      ['repair'],
+    ],
+    [
+      'restore-alone-unpainted',
+      {
+        task: 'denoise',
+        selected_model_id: '',
+        output_scale: 1,
+        fix_stages: [],
+        fixes: [],
+        step_stages: [repair],
+      },
+      [],
+    ],
+    [
+      'video',
+      { task: 'video', selected_video_model_id: 'frame_by_frame', step_stages: [repair] },
+      ['repair'],
+    ],
+  ];
+  for (const [tag, patch, maskedSteps] of repairCases) {
+    push(`repair-${tag}`, {
+      maskedSteps,
+      settingsPatch: { selected_model_id: 'span_photo_x4', output_scale: 4, ...patch },
+      installedIds: ['span_photo_x4', 'denoise_realplksr_1x', 'birefnet_general'],
+    });
+  }
+
   return cases;
 }
 
@@ -901,6 +961,7 @@ describe('job_plan parity corpus', () => {
         'audio_denoise',
         'grain',
         'remove_background',
+        'repair',
         'deinterlace',
         'test_cutout',
         'test_tone',
@@ -908,6 +969,31 @@ describe('job_plan parity corpus', () => {
       ]),
     );
     expect(cases.some((c) => (c.expected_start_input.step_stages ?? []).length > 0)).toBe(true);
+    const repairPlans = new Map(
+      cases
+        .filter((c) => c.id.includes('-repair-'))
+        .map((c) => [c.id.replace(/^case-\d+-repair-/, ''), c]),
+    );
+    const planned = (tag: string) => repairPlans.get(tag)!.expected_plan.map((s) => s.kind);
+    expect(planned('upscale-painted')[0]).toBe('repair');
+    expect(planned('upscale-unpainted')).not.toContain('repair');
+    expect(planned('upscale-with-fix-and-background').slice(0, 3)).toEqual([
+      'repair',
+      'remove_background',
+      'restore',
+    ]);
+    expect(planned('restore-alone-painted')).toEqual(['repair']);
+    expect(planned('restore-alone-unpainted')).toEqual([]);
+    expect(planned('video')).not.toContain('repair');
+    for (const [tag, c] of repairPlans) {
+      const sent = (c.expected_start_input.step_stages ?? []).map((stage) => stage.step);
+      expect(sent.includes('repair')).toBe(tag !== 'video');
+    }
+    expect(
+      repairPlans
+        .get('upscale-with-fix-and-background')!
+        .expected_start_input.step_stages!.map((stage) => stage.step),
+    ).toEqual(['repair', 'remove_background']);
     const modelStepRows = cases.flatMap((c) =>
       c.expected_plan.filter((s) => s.role === 'step' && s.kind.startsWith('test_')),
     );

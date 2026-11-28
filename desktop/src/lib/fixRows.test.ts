@@ -26,6 +26,7 @@ function extraStep(
     order: 50,
     needs_model: true,
     supports_mask: false,
+    requires_mask: false,
     stage_kind: 'restore',
     role: 'fix',
     fix_kind: id,

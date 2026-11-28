@@ -29,6 +29,8 @@ export interface StepDefinition {
   order: number;
   needs_model: boolean;
   supports_mask: boolean;
+  /** A stage of this step needs a mask; the host draws it from the photo's paint. */
+  requires_mask: boolean;
   stage_kind: string | null;
   role: string | null;
   fix_kind: string | null;

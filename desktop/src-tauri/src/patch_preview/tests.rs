@@ -672,6 +672,8 @@ fn sample_media() -> crate::types::MediaItem {
         audio_warning: String::new(),
         has_audio: true,
         field_order: String::new(),
+        repair_marks: 0,
+        repair_rev: 0,
         error: String::new(),
         selected: false,
     }
