@@ -42,7 +42,8 @@
   offers prompts that were tested on it: Colour and Film look. Choosing one replaces
   your text, and ⌘Z brings it back.
 - **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a
-  glance, and open settings where you need them. The new blue accent follows your Mac’s
+  glance, and open settings where you need them. Once the same kind of job has run twice,
+  the panel shows about how long Start will take. The new blue accent follows your Mac’s
   accent colour, and the colour-blind palette is easier to distinguish.
 - **Downloads show in one place, with size and time left.** Model downloads live in the
   status bar (and the library’s tray) with how much has arrived and how long is left,
