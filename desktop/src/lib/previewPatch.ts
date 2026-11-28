@@ -153,7 +153,7 @@ export function patchPlanEntries(
   >,
 ): PatchPlanEntry[] {
   const kept = stages.filter((stage) => !VIDEO_ONLY_KINDS.has(stage.kind));
-  const names = planLine(kept, settings, { kind: 'image' });
+  const names = planLine(kept, settings, { kind: 'image' }, { amounts: false });
   return kept.map((stage, index) => ({
     name: names[index].replace(/^Upscale (?=\d)/, ''),
     modelName: stage.model ? displayName(stage.model) : undefined,

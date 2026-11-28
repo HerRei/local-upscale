@@ -40,7 +40,7 @@ the code disagree are marked **(deviation)** and come up again under "Open quest
 | Rows never move | A row keeps its place and its height in every state. What cannot apply is disabled, not removed. | The board's rule ("Rows never move"). Size sits under the Fix list, so a row that vanished above it would move Size under the pointer. |
 | Fix list | One checkbox row per fix the engine has for this kind of file, read from the step registry (`steps.json`). Today: Blur, JPEG artifacts, Noise, Colour, and De-flicker for video. | The registry already lists steps, media and order (`lib/steps.ts:6-12`); a new step then shows up without panel work. |
 | Order of the rows **(deviation)** | The engine's default run order: Blur, JPEG artifacts, Noise, Colour (`steps.json` orders 10, 20, 30, 40 at 68-163; `DEFAULT_FIX_ORDER`, `lib/steps.ts:58`). The board draws Noise first. | The board's own note says "fixed rows in run order". List and plan line then agree. One function decides it (`fixRowOrder`), so the other answer is a one-line change. |
-| Value on a ticked row **(deviation)** | The fix's model name, and its download size while it is missing. The board draws `Medium ▾`. | No fix has a strength: the four fix steps declare no parameters (`steps.json:68-163`, `"parameters": []`). When a step gains a `choice` parameter, that becomes the value and the model moves into the popover alone. |
+| Value on a ticked row **(deviation)** | The fix's model name, and its download size while it is missing. The board draws `Medium ▾`. | Built in 0.7.0: on Blur, JPEG artifacts and Noise the value is the strength and the model moves into the popover alone (`tools-wave.md`, section 1); Colour and an engine without `fix_strength` keep the model name. |
 | More fixes | Shown only when at least two rows would be hidden. Today every row shows. | A link that hides one row costs a click and saves one line. |
 | Content at Same size **(deviation)** | Stays visible, disabled, with a tooltip. Today it is hidden (`{#if !restoring}`, `App.svelte:4837`; size-decides.md:48). | Rows never move; see above. |
 | Content on a video | The two segments read `Video` and `Animation`; the stored values stay `photo` and `illustration`. | The board, panel (b). Wording only. |
@@ -71,7 +71,7 @@ them are complete without them.
 | On the board | Why not now | In this build |
 | --- | --- | --- |
 | Rows Faces, Exposure, Stabilise, Scratches & dust | No such step runs. `face_restore` exists in the registry (`steps.json:377`) but the UI sends `enable_face_model: false` (`startInput.ts:111`) and `plan.e2e.ts` asserts "Faces is not offered". | Not listed. A row appears when its step is in `steps.json` and the engine lists the step's `required_feature`. |
-| `Medium ▾`, `Natural ▾`, `Crop to fit ▾` | No parameters on any fix. | The model name is the value. |
+| `Natural ▾`, `Crop to fit ▾` | No parameters on Colour. | The model name is the value. (`Medium ▾` is built for Blur, JPEG artifacts and Noise: `tools-wave.md`, section 1.) |
 | `Auto` switch, hints (`· looks compressed`, `2 found`) | No detector. "Nothing ticks itself" (size-decides.md:46) holds. | Absent. The Fix head has room on the right. |
 | `More ▾` in Content (Scan, Tape, Film, Anime) | `content` is `photo` or `illustration` (`types.ts:60`, `:382`). | Two segments. |
 | `Scan` row | Flagged frames are deinterlaced silently; 50 fps from fields is engine work. | Built as a native select between Content and the Fix head, see `docs/design/scan-and-background.md`. |
@@ -1034,7 +1034,7 @@ Where the tool waves put their parts. None of this is built now.
 | Part | Appears when | Where and how |
 | --- | --- | --- |
 | A new fix (Faces, Exposure, Stabilise, Scratches & dust, Text) | its step is in `steps.json` with `is_fix_stage` or is named in `SETTING_ROWS`, and the engine lists its feature | a Fix row at its phase and order. Add its `title` and, when it is not common, nothing else. |
-| A value such as `Medium ▾` | the step declares a `choice` parameter | the row's value is that choice; the popover shows it as a segmented row above `Model`. |
+| A value such as `Medium ▾` | the step declares a `choice` parameter | the row's value is that choice; the popover shows it as a segmented row above `Model`. Built for fix strength (`tools-wave.md`, section 1). |
 | `Labs` | the step's model is `support_tier: 'labs'`, or the step is in `LABS_ROWS` | the tag. |
 | Hints and `Auto` | a detector feature exists | hint text right of an unticked row in `--accent-text`; the switch right of the Fix head, off by default. Auto never ticks Creative, Text or Colour. |
 | `Scan` | the engine lists `video_deinterlace` and the file says `tff`, `bff` or `unknown` (not Content: there is no Tape; see `docs/design/scan-and-background.md`) | a row with a native select under Content. |
@@ -1091,5 +1091,5 @@ Only where the board and the code disagree. The spec builds the first answer of 
    in 0.6.0?
 4. **Multicolour on macOS.** LocalSR's blue with white text, or the system blue with black
    text?
-5. **A ticked row's value.** The model name until fixes have strengths, or nothing but the
+5. **A ticked row's value.** Answered in 0.7.0 (`tools-wave.md`, section 1): the strength on Blur, JPEG artifacts and Noise, else the model name. Was: the model name until fixes have strengths, or nothing but the
    `▾`?

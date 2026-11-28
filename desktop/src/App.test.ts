@@ -12622,3 +12622,212 @@ describe('Scan', () => {
     expect(within(foot()).queryByText('Nothing to run')).toBeNull();
   });
 });
+
+describe('Strength', () => {
+  function strengthSnapshot(listed = true): AppSnapshot {
+    const snapshot = readySnapshot([image('photo', true)]);
+    if (listed) snapshot.engine!.features.push('fix_strength', 'stage_params_and_masks');
+    snapshot.settings.task = 'upscale';
+    snapshot.settings.output_scale = 4;
+    return snapshot;
+  }
+  const fixGroup = () => screen.getByRole('group', { name: 'Fix' });
+  const foot = () => document.querySelector('.panel-foot') as HTMLElement;
+  const noiseEntry = { fix: 'noise', model_id: 'denoise_realplksr_1x' } as const;
+
+  async function tickNoise(user: ReturnType<typeof userEvent.setup>) {
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    return within(fixGroup()).findByRole('button', { name: 'Full' });
+  }
+
+  it('shows Full with the model in its title, and the segments before the model', async () => {
+    const user = await mountWith(strengthSnapshot());
+    const value = await tickNoise(user);
+    expect(value.textContent?.trim()).toBe('Full');
+    expect(value.getAttribute('title')).toBe('Full · RealPLKSR Denoise');
+    await user.click(value);
+    const group = await screen.findByRole('radiogroup', { name: 'Strength' });
+    expect(within(group).getByRole('radio', { name: 'Full' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    const model = document.querySelector('.fix-pop-model') as HTMLElement;
+    expect(group.compareDocumentPosition(model) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the model name where the engine does not list the feature', async () => {
+    const user = await mountWith(strengthSnapshot(false));
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    const value = await within(fixGroup()).findByRole('button', { name: 'RealPLKSR Denoise' });
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+
+  it('Light stores the strength, names it on the plan line and leaves the popover open', async () => {
+    const user = await mountWith(strengthSnapshot());
+    await user.click(await tickNoise(user));
+    await user.click(await screen.findByRole('radio', { name: 'Light' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [{ ...noiseEntry, params: { strength: 0.4 } }],
+        }),
+      ),
+    );
+    expect(screen.getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe('true');
+    expect(
+      within(fixGroup())
+        .getByRole('button', { name: /^Light/ })
+        .textContent?.trim(),
+    ).toBe('Light');
+    expect(await within(foot()).findByText('Noise (light) → Upscale 4×')).toBeTruthy();
+
+    await user.click(screen.getByRole('radio', { name: 'Full' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({ fix_stages: [noiseEntry] }),
+      ),
+    );
+  });
+
+  it('keeps the strength through Quick and Best, and forgets it when unticked', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: /^Best$/i }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } })],
+        }),
+      ),
+    );
+    await user.click(screen.getByRole('button', { name: /^Quick$/i }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          fix_stages: [expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } })],
+        }),
+      ),
+    );
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Noise' }));
+    expect(await within(fixGroup()).findByRole('button', { name: /^Full/ })).toBeTruthy();
+  });
+
+  it('Colour keeps its model name and has no strength', async () => {
+    const user = await mountWith(strengthSnapshot());
+    await user.click(within(fixGroup()).getByRole('checkbox', { name: 'Colour' }));
+    const value = await within(fixGroup()).findByRole('button', { name: 'DDColor' });
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+
+  it('names the strength on the Same size plan line', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.output_scale = 1;
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.7 } }];
+    snapshot.settings.fixes = ['noise'];
+    await mountWith(snapshot);
+    expect(await within(foot()).findByText('Noise (medium)')).toBeTruthy();
+  });
+
+  it('saves a recipe with the strength, and Update appears when it changes', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Save current as recipe…' }));
+    await user.type(screen.getByRole('textbox', { name: 'Recipe name' }), 'Grain');
+    await user.click(screen.getByRole('button', { name: 'Save' }));
+    await waitFor(() => expect(api.saveRecipe).toHaveBeenCalledTimes(1));
+    const saved = api.saveRecipe.mock.calls[0][0] as Recipe;
+    expect(saved.stages?.[0]).toEqual(
+      expect.objectContaining({ fix: 'noise', params: { strength: 0.4 } }),
+    );
+    expect(saved.stages?.at(-1)?.params).toBeUndefined();
+  }, 20_000);
+
+  it('a recipe saved at Light stops matching at Medium and offers Update', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.recipes = [
+      {
+        id: 'grain',
+        name: 'Grain',
+        task: 'upscale',
+        quality: 'quick',
+        model_id: 'localsr_quick_x4_v1',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 8,
+        precision: 'fp32',
+        safe_memory: false,
+        fixes: ['noise'],
+        stages: [
+          {
+            kind: 'restore',
+            model_id: 'denoise_realplksr_1x',
+            fix: 'noise',
+            params: { strength: 0.4 },
+          },
+          { kind: 'upscale', model_id: 'localsr_quick_x4_v1' },
+        ],
+      },
+    ];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: /^Grain/ }));
+    await waitFor(() => expect(screen.queryByRole('group', { name: 'Recipes' })).toBeNull());
+    await user.click(await within(fixGroup()).findByRole('button', { name: 'Light' }));
+    await user.click(await screen.findByRole('radio', { name: 'Medium' }));
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    expect(await screen.findByRole('button', { name: 'Update “Grain”' })).toBeTruthy();
+  }, 20_000);
+
+  it('says which stops an engine without the feature still allows', async () => {
+    const snapshot = strengthSnapshot(false);
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    const user = await mountWith(snapshot);
+    await user.click(await within(fixGroup()).findByRole('button', { name: /^Light/ }));
+    const group = await screen.findByRole('radiogroup', { name: 'Strength' });
+    expect(group.getAttribute('title')).toBe(
+      "This engine cannot change a fix's strength. Update LocalSR.",
+    );
+    expect(within(group).getByRole('radio', { name: 'Light' }).getAttribute('aria-checked')).toBe(
+      'true',
+    );
+    expect(
+      (within(group).getByRole('radio', { name: 'Medium' }) as HTMLButtonElement).disabled,
+    ).toBe(true);
+    expect((within(group).getByRole('radio', { name: 'Full' }) as HTMLButtonElement).disabled).toBe(
+      false,
+    );
+  });
+
+  it('keeps the value readable and the popover shut while a job runs', async () => {
+    const snapshot = strengthSnapshot();
+    snapshot.settings.fix_stages = [{ ...noiseEntry, params: { strength: 0.4 } }];
+    snapshot.settings.fixes = ['noise'];
+    snapshot.runtime.active_job_id = 'job-1';
+    snapshot.jobs = [
+      {
+        id: 'job-1',
+        media_id: 'photo',
+        media_name: 'photo.png',
+        media_kind: 'image',
+        status: 'running',
+        progress: 5,
+        output_path: '',
+        error: '',
+        created_at: 1,
+      },
+    ];
+    const user = await mountWith(snapshot);
+    const value = await within(fixGroup()).findByRole('button', { name: /^Light/ });
+    expect(value.textContent?.trim()).toBe('Light');
+    await user.click(value);
+    expect(screen.queryByRole('radiogroup', { name: 'Strength' })).toBeNull();
+  });
+});

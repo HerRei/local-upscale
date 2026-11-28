@@ -1,7 +1,7 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import { contrastOnPage, openApp, showPane } from './app';
 import { hostCalls } from './fake-host';
-import { cutout, ready, tape, video } from './fixtures';
+import { cutout, ready, strength, tape, video } from './fixtures';
 
 const fix = (page: Page, name: string) =>
   page.getByRole('group', { name: 'Fix' }).getByRole('checkbox', { name, exact: true });
@@ -343,4 +343,51 @@ test('Scan: Double rate changes the head, the plan line and Frames', async ({ pa
   const body = page.locator('.inspector-scroll');
   expect(await body.evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
   expect(await scan(page).evaluate((el) => el.scrollWidth <= el.clientWidth)).toBe(true);
+});
+
+const strengthGroup = (page: Page) => page.getByRole('radiogroup', { name: 'Strength' });
+
+async function openNoise(page: Page): Promise<void> {
+  await openApp(page, strength);
+  await showPane(page, 'enhance');
+  await page.getByRole('button', { name: 'Not now' }).click();
+  await fix(page, 'Noise').check();
+  await value(page, 'Noise').click();
+}
+
+test('Strength: the three segments fit the popover and arrow keys move between them', async ({
+  page,
+}) => {
+  await openNoise(page);
+  const group = strengthGroup(page);
+  await expect(group).toBeVisible();
+  const cut = await group
+    .locator('button')
+    .evaluateAll((els) =>
+      els.filter((el) => el.scrollWidth > el.clientWidth).map((el) => el.textContent),
+    );
+  expect(cut).toEqual([]);
+  const light = group.getByRole('radio', { name: 'Light' });
+  const medium = group.getByRole('radio', { name: 'Medium' });
+  await group.getByRole('radio', { name: 'Full' }).focus();
+  await page.keyboard.press('ArrowLeft');
+  await expect(medium).toBeFocused();
+  await page.keyboard.press('Home');
+  await expect(light).toBeFocused();
+  await expect(light).toHaveAttribute('aria-checked', 'true');
+  await page.keyboard.press('End');
+  await expect(group.getByRole('radio', { name: 'Full' })).toHaveAttribute('aria-checked', 'true');
+});
+
+test('Strength: choosing one moves no row', async ({ page }) => {
+  await openNoise(page);
+  const rows = page.locator('.fix-row');
+  const tops = async () =>
+    Promise.all((await rows.all()).map(async (row) => (await row.boundingBox())!.y));
+  const before = await tops();
+  await strengthGroup(page).getByRole('radio', { name: 'Light' }).click();
+  await expect(value(page, 'Noise')).toHaveText(/^Light/);
+  await expect(page.locator('.foot-plan')).toContainText('Noise (light)');
+  await expect(strengthGroup(page)).toBeVisible();
+  expect(await tops()).toEqual(before);
 });

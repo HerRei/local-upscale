@@ -2,6 +2,13 @@
 
 ## [0.7.0-beta] - Unreleased
 
+- **Fix strength.** A ticked Blur, JPEG artifacts (Compression on a video) or Noise row
+  now shows how strongly its fix is applied: Full, Medium or Light. Click the value to
+  choose. Light and Medium mix the fixed picture with the picture before the fix, so
+  more of its grain and texture stays. Full, the default, is the whole fix and changes
+  nothing for existing recipes and workflows. The plan line names it (`Noise (light)`),
+  recipes keep it, and the preview patch mixes again without running the model. The
+  model you use is in the same popover, under the three choices.
 - **Remove a photo's background.** Under Result, the new Backgr. row has Keep and Remove.
   Remove makes everything behind the main subject transparent, using BiRefNet, which
   downloads (444 MB) the first time you start. The subject is found on the original

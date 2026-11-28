@@ -1,3 +1,4 @@
+import { strengthLabel, strengthOf } from './fixRows';
 import type { PlanStage } from './plan';
 import { deinterlaceName, scanChoice } from './stepRows';
 import type { FixKind, InterpolationTarget, MediaItem, UiSettings } from './types';
@@ -23,18 +24,32 @@ const INTERPOLATION_BY_LABEL: Record<string, string> = {
   'Interpolate to 120 fps': '120 fps',
 };
 
+type PlanLineSettings = Pick<
+  UiSettings,
+  'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation' | 'step_stages'
+> &
+  Partial<Pick<UiSettings, 'fix_stages'>>;
+
 function stageStepName(
   stage: PlanStage,
-  settings: Pick<
-    UiSettings,
-    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation' | 'step_stages'
-  >,
+  settings: PlanLineSettings,
   isVideo: boolean,
+  amounts: boolean,
   fps?: number,
 ): string {
   if (stage.role === 'fix' || (stage.role === 'primary' && stage.fix)) {
-    if (stage.fix === 'jpeg') return isVideo ? 'Compression' : 'JPEG';
-    if (stage.fix) return PLAN_FIX_NAMES[stage.fix] ?? stage.label;
+    if (stage.fix) {
+      const name =
+        stage.fix === 'jpeg'
+          ? isVideo
+            ? 'Compression'
+            : 'JPEG'
+          : (PLAN_FIX_NAMES[stage.fix] ?? stage.label);
+      const strength = amounts
+        ? strengthOf(settings.fix_stages?.find((entry) => entry.fix === stage.fix))
+        : 1;
+      return strength < 1 ? `${name} (${strengthLabel(strength).toLowerCase()})` : name;
+    }
     return stage.label;
   }
   if (stage.role === 'primary' && (stage.kind === 'upscale' || stage.kind === 'video')) {
@@ -65,12 +80,11 @@ function stageStepName(
 /** Short step names for the foot's plan line, keeping the host's stage order. */
 export function planLine(
   stages: readonly PlanStage[],
-  settings: Pick<
-    UiSettings,
-    'task' | 'output_scale' | 'video_target_resolution' | 'video_interpolation' | 'step_stages'
-  >,
+  settings: PlanLineSettings,
   media?: Pick<MediaItem, 'kind'> & Partial<Pick<MediaItem, 'fps'>>,
+  options: { amounts?: boolean } = {},
 ): string[] {
   const isVideo = media?.kind === 'video' || settings.task === 'video';
-  return stages.map((stage) => stageStepName(stage, settings, isVideo, media?.fps));
+  const amounts = options.amounts ?? true;
+  return stages.map((stage) => stageStepName(stage, settings, isVideo, amounts, media?.fps));
 }
