@@ -2,6 +2,7 @@
   import { tick } from 'svelte';
   import { menuRows, recipePlanLine } from './lib/recipeList';
   import type { AppSnapshot, MediaItem, Recipe } from './lib/types';
+  import type { Workflow } from './lib/workflows';
 
   export let recipes: Recipe[];
   export let catalog: AppSnapshot['catalog'];
@@ -15,6 +16,11 @@
   export let openRecipeEditor: () => Promise<void>;
   export let openRecipesLibrary: () => void;
   export let applyRecipe: (recipe: Recipe) => void;
+  /** The built-in workflows: a pinned one is a row, and with nothing of your own they all are. */
+  export let workflows: readonly Workflow[] = [];
+  export let applyWorkflow: (workflow: Workflow) => void = () => {};
+  export let workflowLine: (workflow: Workflow) => string = () => '';
+  export let workflowActive: (workflow: Workflow) => boolean = () => false;
   export let addRecipe: () => Promise<void>;
   export let updatableRecipe: Recipe | undefined = undefined;
   export let updateRecipe: () => Promise<void> = async () => {};
@@ -28,6 +34,7 @@
     pins,
     recent,
     mediaKind: selectedMediaKind,
+    workflows,
   });
 
   async function startEditor(): Promise<void> {
@@ -38,7 +45,7 @@
 </script>
 
 <div class="recipes-menu">
-  {#if recipes.length === 0}
+  {#if rows.length === 0 && recipes.length === 0}
     <p class="recipes-empty">No recipes yet.</p>
   {:else if rows.length > 0}
     <div class="recipes-list">
@@ -76,6 +83,43 @@
               <span class="recipe-copy">
                 <b>{row.recipe.name}</b>
                 <span>{recipePlanLine(row.recipe, catalog)}</span>
+              </span>
+              {#if row.pinned}
+                <span class="recipe-pin" aria-hidden="true">⌃</span>
+              {/if}
+            </button>
+          </div>
+        {:else}
+          {@const active = workflowActive(row.workflow as Workflow)}
+          <div class="saved-recipe" data-recipe-id={row.id}>
+            <button
+              type="button"
+              class:active
+              aria-pressed={active}
+              disabled={row.disabled}
+              on:click={() => {
+                applyWorkflow(row.workflow as Workflow);
+                onClose();
+              }}
+            >
+              <span class="recipe-check" aria-hidden="true">
+                {#if active}
+                  <svg
+                    xmlns="http://www.w3.org/2000/svg"
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2.5"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"><path d="m5 12 5 5L20 7" /></svg
+                  >
+                {/if}
+              </span>
+              <span class="recipe-copy">
+                <b>{row.workflow.name}</b>
+                <span>{workflowLine(row.workflow as Workflow)}</span>
               </span>
               {#if row.pinned}
                 <span class="recipe-pin" aria-hidden="true">⌃</span>

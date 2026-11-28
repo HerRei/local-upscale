@@ -10,6 +10,7 @@ import {
   type PlanStage,
 } from './plan';
 import type { StepDefinition } from './steps';
+import type { Workflow } from './workflows';
 import type {
   AppSnapshot,
   CatalogModel,
@@ -193,6 +194,7 @@ export interface EnhancePanelActions {
   applyRecipe: (recipe: Recipe) => void;
   addRecipe: () => Promise<void>;
   updateRecipe: () => Promise<void>;
+  applyWorkflow: (workflow: Workflow) => void;
   setContent: (content: UiSettings['content']) => void;
   radioGroupKeydown: (event: KeyboardEvent) => void;
   toggleFix: (fix: FixKind) => void;

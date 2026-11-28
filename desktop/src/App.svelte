@@ -8,6 +8,7 @@
 
   import { tabFromKey } from './lib/keyboard';
   import { recipeMatches, recipeSettingsPatch } from './lib/recipes';
+  import { WORKFLOWS, workflowRecipe, workflowSettings, type Workflow } from './lib/workflows';
   import { duplicateName, recordUse, togglePin } from './lib/recipeList';
   import {
     benchmarkDeviceBarWidth,
@@ -4176,6 +4177,44 @@
     termsAccepted = {};
   }
 
+  function applyWorkflow(workflow: Workflow): void {
+    if (selectedMedia && (workflow.media === 'video') !== (selectedMedia.kind === 'video')) {
+      showModal(
+        'Workflow does not match this media',
+        `Select a ${workflow.media === 'video' ? 'video' : 'photo'} before using “${workflow.name}”.`,
+      );
+      return;
+    }
+    upscalerBeforeSameSize = '';
+    // A workflow is not a stored recipe, so Update has nothing to save it back to.
+    lastAppliedRecipeId = '';
+    const patch = workflowSettings(workflow, snapshot, settings);
+    if (patch.task && patch.task !== 'video') lastImageTask = patch.task;
+    updateSettings({
+      ...patch,
+      recipe_recent: recordUse(snapshot.settings.recipe_recent, workflow.id),
+    });
+    termsAccepted = {};
+  }
+
+  async function duplicateWorkflow(workflow: Workflow): Promise<string | undefined> {
+    if (snapshot.recipes.length >= 100) return undefined;
+    const taken = snapshot.recipes.some(
+      (recipe) => recipe.name.trim().toLowerCase() === workflow.name.toLowerCase(),
+    );
+    const name = taken ? duplicateName(workflow.name, snapshot.recipes) : workflow.name;
+    const recipe = workflowRecipe(workflow, snapshot, settings, crypto.randomUUID(), name);
+    try {
+      await api.saveRecipe(recipe);
+      if (api.isTauri()) await refresh();
+      else snapshot = { ...snapshot, recipes: [...snapshot.recipes, recipe] };
+      return recipe.id;
+    } catch (error) {
+      showModal('Could not save the recipe', String(error));
+      return undefined;
+    }
+  }
+
   async function consumeLaunchIntents(): Promise<void> {
     if (!api.isTauri() || handlingLaunchIntents) return;
     handlingLaunchIntents = true;
@@ -4347,11 +4386,16 @@
         const id = action.slice('preset.recipe.'.length);
         const recipe = snapshot.recipes.find((candidate) => candidate.id === id);
         // A pinned workflow carries its own id; it is not a stored recipe.
+        const workflow = WORKFLOWS.find((candidate) => candidate.id === id);
         if (recipe) applyRecipe(recipe);
+        else if (workflow) applyWorkflow(workflow);
         else lastAppliedRecipeId = '';
         return;
       }
       switch (action) {
+        case 'preset.browse':
+          openRecipesLibrary();
+          break;
         case 'file.add-media':
           await addFiles(false);
           break;
@@ -4676,7 +4720,15 @@
     previewPane?.queueProgressiveTile(message, snapshot.runtime.active_job_id);
   }
 
+  let recipesLibraryGroup: 'recommended' | undefined;
+
   function openRecipesLibrary(): void {
+    recipesLibraryGroup = undefined;
+    recipesLibraryOpen = true;
+  }
+
+  function openWorkflows(): void {
+    recipesLibraryGroup = 'recommended';
     recipesLibraryOpen = true;
   }
 
@@ -4758,6 +4810,7 @@
     applyRecipe,
     addRecipe,
     updateRecipe,
+    applyWorkflow,
     setContent,
     radioGroupKeydown,
     toggleFix,
@@ -5072,6 +5125,7 @@
           {videoResultId}
           compactHidden={page !== 'preview'}
           addFiles={() => void addFiles()}
+          {openWorkflows}
           dropping={filesDragging}
         />
       {/if}
@@ -5371,11 +5425,15 @@
     {settings}
     {activeRecipeIds}
     selectedMediaKind={selectedMedia?.kind}
+    workflows={WORKFLOWS}
+    initialGroup={recipesLibraryGroup}
     busy={settingsLocked}
     close={closeRecipesLibrary}
     {applyRecipe}
+    {applyWorkflow}
     {togglePinRecipe}
     {duplicateRecipe}
+    {duplicateWorkflow}
     {renameRecipe}
     {deleteRecipe}
   />

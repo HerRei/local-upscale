@@ -111,6 +111,7 @@
   export let videoEngineBusy = false;
   export let activeTileSize = 0;
   export let addFiles: () => void = () => {};
+  export let openWorkflows: () => void = () => {};
   export let dropping = false;
 
   let videoRequestId = '';
@@ -1583,7 +1584,7 @@
           >
         </p>{/if}
     {:else}
-      <EmptyStage {addFiles} {dropping} />
+      <EmptyStage {addFiles} {dropping} {openWorkflows} />
     {/if}
   </div>
 </section>

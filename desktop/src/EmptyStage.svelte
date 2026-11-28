@@ -3,6 +3,7 @@
 
   export let addFiles: () => void;
   export let dropping = false;
+  export let openWorkflows: () => void = () => {};
 
   let shot: HTMLSpanElement;
   let canvas: HTMLCanvasElement;
@@ -126,6 +127,9 @@
       </span>
     </span>
   </button>
+  <button class="link-button workflow-link" type="button" on:click={openWorkflows}
+    >or start from a workflow…</button
+  >
 </div>
 
 <style>
@@ -139,7 +143,7 @@
   }
   .well {
     position: absolute;
-    inset: 22px;
+    inset: 22px 22px 58px;
     display: grid;
     place-items: center;
     padding: 0;
@@ -159,6 +163,20 @@
     stroke: var(--dropzone-stroke);
   }
   .well:focus-visible {
+    outline: 2px solid var(--focus);
+    outline-offset: 3px;
+  }
+  /* The link sits outside the button, which cannot hold another control. */
+  .workflow-link {
+    position: absolute;
+    left: 50%;
+    bottom: 22px;
+    transform: translateX(-50%);
+    color: var(--secondary);
+    font-size: calc(12px * var(--ui-scale));
+    white-space: nowrap;
+  }
+  .workflow-link:focus-visible {
     outline: 2px solid var(--focus);
     outline-offset: 3px;
   }

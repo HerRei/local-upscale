@@ -91,4 +91,14 @@ describe('EmptyStage', () => {
     document.dispatchEvent(new Event('visibilitychange'));
     expect(raf).not.toHaveBeenCalled();
   });
+
+  it('offers the workflows as a link beside the well, not inside it', async () => {
+    vi.spyOn(HTMLCanvasElement.prototype, 'getContext').mockReturnValue(null);
+    const openWorkflows = vi.fn();
+    const view = render(EmptyStage, { addFiles: () => undefined, openWorkflows });
+    const link = view.getByRole('button', { name: 'or start from a workflow…' });
+    expect(link.closest('button.well')).toBeNull();
+    link.click();
+    expect(openWorkflows).toHaveBeenCalledTimes(1);
+  });
 });

@@ -1,5 +1,7 @@
 <script lang="ts">
   import { tick } from 'svelte';
+  import ModelExample from './ModelExample.svelte';
+  import { EXAMPLES, exampleCaption } from './lib/examples';
   import { formatBytes } from './lib/format';
   import { tabFromKey } from './lib/keyboard';
   import { modal } from './lib/modal';
@@ -10,25 +12,31 @@
     recipePlanLine,
     searchRecipes,
     sortRecipes,
-    type WorkflowEntry,
   } from './lib/recipeList';
   import type { AppSnapshot, MediaItem, Recipe, UiSettings } from './lib/types';
+  import { workflowDownload, workflowMatches, workflowPlan, type Workflow } from './lib/workflows';
 
   export let snapshot: AppSnapshot;
   export let settings: UiSettings;
   export let activeRecipeIds: Set<string>;
   export let selectedMediaKind: MediaItem['kind'] | undefined = undefined;
-  export let workflows: WorkflowEntry[] = [];
+  export let workflows: readonly Workflow[] = [];
   export let initialGroup: 'my' | 'recommended' | 'photo' | 'video' | undefined = undefined;
   export let busy = false;
   export let close: () => void;
   export let applyRecipe: (recipe: Recipe) => void;
+  export let applyWorkflow: (workflow: Workflow) => void = () => {};
   export let togglePinRecipe: (id: string) => void;
   export let duplicateRecipe: (recipe: Recipe) => Promise<string | undefined>;
+  export let duplicateWorkflow: (workflow: Workflow) => Promise<string | undefined> = async () =>
+    undefined;
   export let renameRecipe: (recipe: Recipe, name: string) => Promise<boolean>;
   export let deleteRecipe: (id: string) => Promise<boolean>;
 
   type GroupId = 'my' | 'recommended' | 'photo' | 'video';
+  type Item =
+    | { kind: 'recipe'; id: string; name: string; recipe: Recipe }
+    | { kind: 'workflow'; id: string; name: string; workflow: Workflow };
 
   let group: GroupId =
     initialGroup ?? (workflows.length > 0 && snapshot.recipes.length === 0 ? 'recommended' : 'my');
@@ -52,56 +60,111 @@
   $: pinSet = new Set(pins);
   $: photoRecipes = recipes.filter((recipe) => recipe.task !== 'video');
   $: videoRecipes = recipes.filter((recipe) => recipe.task === 'video');
+  $: photoWorkflows = workflows.filter((workflow) => workflow.media === 'image');
+  $: videoWorkflows = workflows.filter((workflow) => workflow.media === 'video');
   $: groups = [
     { id: 'my' as GroupId, label: 'My recipes', count: recipes.length },
     { id: 'recommended' as GroupId, label: 'Recommended', count: workflows.length },
     {
       id: 'photo' as GroupId,
       label: 'Photo',
-      count:
-        photoRecipes.length + workflows.filter((workflow) => workflow.media === 'image').length,
+      count: photoRecipes.length + photoWorkflows.length,
     },
     {
       id: 'video' as GroupId,
       label: 'Video',
-      count:
-        videoRecipes.length + workflows.filter((workflow) => workflow.media === 'video').length,
+      count: videoRecipes.length + videoWorkflows.length,
     },
   ];
-  $: groupRecipes =
+
+  const recipeItem = (recipe: Recipe): Item => ({
+    kind: 'recipe',
+    id: recipe.id,
+    name: recipe.name,
+    recipe,
+  });
+  const workflowItem = (workflow: Workflow): Item => ({
+    kind: 'workflow',
+    id: workflow.id,
+    name: workflow.name,
+    workflow,
+  });
+
+  $: groupItems =
     group === 'my'
-      ? recipes
-      : group === 'photo'
-        ? photoRecipes
-        : group === 'video'
-          ? videoRecipes
-          : [];
-  $: orderedRecipes = sortRecipes(groupRecipes, pins, recent);
-  $: visibleRecipes = searchRecipes(orderedRecipes, searchQuery, snapshot.catalog);
-  $: selectedRecipe =
-    visibleRecipes.find((recipe) => recipe.id === selectedId) ?? visibleRecipes[0];
-  $: if ((selectedRecipe?.id ?? '') !== editContextId) {
-    editContextId = selectedRecipe?.id ?? '';
+      ? recipes.map(recipeItem)
+      : group === 'recommended'
+        ? workflows.map(workflowItem)
+        : group === 'photo'
+          ? [...photoRecipes.map(recipeItem), ...photoWorkflows.map(workflowItem)]
+          : [...videoRecipes.map(recipeItem), ...videoWorkflows.map(workflowItem)];
+  $: orderedItems = sortRecipes(groupItems, pins, recent);
+
+  function itemMatches(item: Item, query: string): boolean {
+    if (item.kind === 'recipe') {
+      return searchRecipes([item.recipe], query, snapshot.catalog).length > 0;
+    }
+    const words = query.trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const plan = workflowPlan(item.workflow, snapshot, settings);
+    const text = [
+      item.name,
+      plan.map((entry) => entry.step).join(' → '),
+      ...plan.map((entry) => entry.model),
+    ]
+      .join(' ')
+      .toLowerCase();
+    return words.every((word) => text.includes(word));
+  }
+
+  $: visibleItems = orderedItems.filter((item) => itemMatches(item, searchQuery));
+  $: selectedItem = visibleItems.find((item) => item.id === selectedId) ?? visibleItems[0];
+  $: selectedRecipe = selectedItem?.kind === 'recipe' ? selectedItem.recipe : undefined;
+  $: selectedWorkflow = selectedItem?.kind === 'workflow' ? selectedItem.workflow : undefined;
+  $: if ((selectedItem?.id ?? '') !== editContextId) {
+    editContextId = selectedItem?.id ?? '';
     renaming = false;
     confirmingDelete = false;
   }
   $: selectedDetails = selectedRecipe
     ? recipeDetails(selectedRecipe, snapshot, settings)
     : undefined;
-  $: selectedFits = selectedRecipe ? fitsMedia(selectedRecipe) : false;
-  $: selectedPinned = selectedRecipe ? pinSet.has(selectedRecipe.id) : false;
+  $: workflowCard = selectedWorkflow
+    ? {
+        plan: workflowPlan(selectedWorkflow, snapshot, settings),
+        download: workflowDownload(selectedWorkflow, snapshot, settings),
+        example: EXAMPLES.find((example) => example.id === selectedWorkflow.example),
+      }
+    : undefined;
+  $: selectedFits = selectedItem ? fitsMedia(selectedItem) : false;
+  $: selectedPinned = selectedItem ? pinSet.has(selectedItem.id) : false;
   $: atRecipeLimit = recipes.length >= 100;
 
-  function fitsMedia(recipe: Recipe): boolean {
-    if (!selectedMediaKind) return true;
-    return (recipe.task === 'video') === (selectedMediaKind === 'video');
+  function isVideoItem(item: Item): boolean {
+    return item.kind === 'recipe' ? item.recipe.task === 'video' : item.workflow.media === 'video';
   }
 
-  function rowStatus(recipe: Recipe): string {
-    if (!fitsMedia(recipe)) return recipe.task === 'video' ? 'Video' : 'Photo';
-    if (activeRecipeIds.has(recipe.id)) return 'Active';
-    const missing = recipeMissingBytes(recipe, snapshot, settings);
-    return missing > 0 ? formatBytes(missing) : '';
+  function fitsMedia(item: Item): boolean {
+    if (!selectedMediaKind) return true;
+    return isVideoItem(item) === (selectedMediaKind === 'video');
+  }
+
+  function rowStatus(item: Item): string {
+    if (!fitsMedia(item)) return isVideoItem(item) ? 'Video' : 'Photo';
+    if (item.kind === 'recipe') {
+      if (activeRecipeIds.has(item.id)) return 'Active';
+      const missing = recipeMissingBytes(item.recipe, snapshot, settings);
+      return missing > 0 ? formatBytes(missing) : '';
+    }
+    if (workflowMatches(item.workflow, snapshot, settings)) return 'Active';
+    return workflowDownload(item.workflow, snapshot, settings).text;
+  }
+
+  function planLineOf(item: Item): string {
+    return item.kind === 'recipe'
+      ? recipePlanLine(item.recipe, snapshot.catalog)
+      : workflowPlan(item.workflow, snapshot, settings)
+          .map((entry) => entry.step)
+          .join(' → ');
   }
 
   function emptyMessage(currentGroup: GroupId, query: string): string {
@@ -121,13 +184,14 @@
     confirmingDelete = false;
   }
 
-  function selectRecipe(id: string): void {
+  function selectItem(id: string): void {
     selectedId = id;
   }
 
-  function applyAndClose(recipe: Recipe): void {
-    if (busy || !fitsMedia(recipe)) return;
-    applyRecipe(recipe);
+  function applyAndClose(item: Item): void {
+    if (busy || !fitsMedia(item)) return;
+    if (item.kind === 'recipe') applyRecipe(item.recipe);
+    else applyWorkflow(item.workflow);
     close();
   }
 
@@ -139,28 +203,28 @@
   }
 
   function onSearchKeydown(event: KeyboardEvent): void {
-    if (event.key === 'ArrowDown' && visibleRecipes.length > 0) {
+    if (event.key === 'ArrowDown' && visibleItems.length > 0) {
       event.preventDefault();
-      selectedId = visibleRecipes[0].id;
+      selectedId = visibleItems[0].id;
       focusRow(0);
       return;
     }
-    if (event.key === 'Enter' && selectedRecipe && fitsMedia(selectedRecipe)) {
+    if (event.key === 'Enter' && selectedItem && fitsMedia(selectedItem)) {
       event.preventDefault();
-      applyAndClose(selectedRecipe);
+      applyAndClose(selectedItem);
     }
   }
 
-  function onRowKeydown(event: KeyboardEvent, index: number, recipe: Recipe): void {
+  function onRowKeydown(event: KeyboardEvent, index: number, item: Item): void {
     if (event.key === 'Enter') {
       event.preventDefault();
-      if (fitsMedia(recipe)) applyAndClose(recipe);
+      if (fitsMedia(item)) applyAndClose(item);
       return;
     }
-    const next = tabFromKey(event.key, index, visibleRecipes.length, 'vertical');
+    const next = tabFromKey(event.key, index, visibleItems.length, 'vertical');
     if (next !== null) {
       event.preventDefault();
-      selectedId = visibleRecipes[next].id;
+      selectedId = visibleItems[next].id;
       focusRow(next);
     }
   }
@@ -212,6 +276,21 @@
     }
   }
 
+  async function handleDuplicateWorkflow(workflow: Workflow): Promise<void> {
+    if (busy || mutating || atRecipeLimit) return;
+    mutating = true;
+    try {
+      const createdId = await duplicateWorkflow(workflow);
+      if (createdId) {
+        group = 'my';
+        searchQuery = '';
+        selectedId = createdId;
+      }
+    } finally {
+      mutating = false;
+    }
+  }
+
   async function askDelete(): Promise<void> {
     if (!selectedRecipe || busy || mutating) return;
     confirmingDelete = true;
@@ -228,9 +307,9 @@
   async function confirmDelete(): Promise<void> {
     if (!selectedRecipe || mutating) return;
     const targetId = selectedRecipe.id;
-    const currentIndex = visibleRecipes.findIndex((recipe) => recipe.id === targetId);
+    const currentIndex = visibleItems.findIndex((item) => item.id === targetId);
     const fallbackId =
-      visibleRecipes[currentIndex + 1]?.id ?? visibleRecipes[currentIndex - 1]?.id ?? '';
+      visibleItems[currentIndex + 1]?.id ?? visibleItems[currentIndex - 1]?.id ?? '';
     mutating = true;
     try {
       const ok = await deleteRecipe(targetId);
@@ -311,33 +390,32 @@
           />
         </div>
         <div class="recipes-rows" bind:this={rowsEl}>
-          {#if visibleRecipes.length === 0}
+          {#if visibleItems.length === 0}
             <p class="library-empty">{emptyText}</p>
           {:else}
-            {#each visibleRecipes as recipe, index (recipe.id)}
-              {@const fits = fitsMedia(recipe)}
-              {@const pinned = pinSet.has(recipe.id)}
-              {@const status = rowStatus(recipe)}
+            {#each visibleItems as item, index (item.id)}
+              {@const fits = fitsMedia(item)}
+              {@const pinned = pinSet.has(item.id)}
+              {@const status = rowStatus(item)}
               <button
                 class="row"
                 type="button"
-                class:selected={selectedRecipe?.id === recipe.id}
+                class:selected={selectedItem?.id === item.id}
                 class:dimmed={!fits}
-                aria-pressed={selectedRecipe?.id === recipe.id}
-                on:click={() => selectRecipe(recipe.id)}
+                aria-pressed={selectedItem?.id === item.id}
+                on:click={() => selectItem(item.id)}
                 on:dblclick={() => {
-                  if (fits) applyAndClose(recipe);
+                  if (fits) applyAndClose(item);
                 }}
-                on:keydown={(event) => onRowKeydown(event, index, recipe)}
+                on:keydown={(event) => onRowKeydown(event, index, item)}
               >
                 <div>
                   <div class="name">
-                    <span>{recipe.name}</span>{#if pinned}<span
-                        class="recipe-pin"
-                        aria-hidden="true">⌃</span
+                    <span>{item.name}</span>{#if pinned}<span class="recipe-pin" aria-hidden="true"
+                        >⌃</span
                       >{/if}
                   </div>
-                  <div class="role">{recipePlanLine(recipe, snapshot.catalog)}</div>
+                  <div class="role">{planLineOf(item)}</div>
                 </div>
                 <div class="right">{status}</div>
               </button>
@@ -347,7 +425,7 @@
       </section>
 
       <aside class="detail" aria-label="Recipe details">
-        {#if selectedRecipe && selectedDetails}
+        {#if selectedRecipe && selectedDetails && selectedItem}
           <div>
             {#if renaming}
               <input
@@ -453,7 +531,7 @@
                       ? 'Select a video first.'
                       : 'Select a photo first.'
                     : undefined}
-                  on:click={() => applyAndClose(selectedRecipe)}>Apply</button
+                  on:click={() => applyAndClose(selectedItem)}>Apply</button
                 >
                 <button
                   class="button"
@@ -493,7 +571,90 @@
               </div>
             {/if}
           </div>
-        {:else if recipes.length > 0}
+        {:else if selectedWorkflow && workflowCard}
+          <div>
+            <h3 class="recipe-detail-title">
+              <span>{selectedWorkflow.name}</span>{#if selectedPinned}<span
+                  class="recipe-pin"
+                  aria-hidden="true">⌃</span
+                >{/if}
+            </h3>
+            <div class="role">Recommended workflow</div>
+          </div>
+          {#if workflowCard.example}
+            {#key workflowCard.example.id}
+              <ModelExample
+                example={workflowCard.example}
+                caption={exampleCaption(
+                  { example: workflowCard.example, borrowed: false },
+                  snapshot.catalog.models,
+                )}
+              />
+            {/key}
+          {/if}
+          <p class="model-description">{selectedWorkflow.for}</p>
+          <p class="model-description">{selectedWorkflow.note}</p>
+          {#if selectedWorkflow.detail_extra}
+            <p class="role">{selectedWorkflow.detail_extra}</p>
+          {/if}
+
+          {#if workflowCard.plan.length > 0}
+            <div class="recipe-steps" role="list" aria-label="Steps">
+              {#each workflowCard.plan as step, index}
+                <div class="recipe-step" role="listitem">
+                  <span class="recipe-step-num">{index + 1}</span>
+                  <span class="recipe-step-name">{step.step}</span>
+                  <span class="recipe-step-model">{step.model}</span>
+                </div>
+              {/each}
+            </div>
+          {/if}
+
+          <dl class="kv recipe-kv">
+            <div>
+              <dt>Quality</dt>
+              <dd>{selectedWorkflow.quality === 'best' ? 'Best' : 'Quick'}</dd>
+            </div>
+          </dl>
+
+          <div class="recipe-download">
+            {workflowCard.download.bytes > 0
+              ? `${workflowCard.download.text} to download`
+              : 'Nothing to download'}
+          </div>
+
+          <div class="actions">
+            <div class="pair">
+              <button
+                class="button primary"
+                type="button"
+                disabled={busy || !selectedFits}
+                title={!selectedFits ? 'Select a photo first.' : undefined}
+                on:click={() => applyAndClose(selectedItem)}>Use workflow</button
+              >
+              <button
+                class="button"
+                type="button"
+                disabled={busy || (!selectedPinned && pins.length >= MAX_RECIPE_PINS)}
+                title={!selectedPinned && pins.length >= MAX_RECIPE_PINS
+                  ? `${MAX_RECIPE_PINS} pins is the limit. Unpin one first.`
+                  : undefined}
+                on:click={() => togglePinRecipe(selectedWorkflow.id)}
+                >{selectedPinned ? 'Unpin' : 'Pin'}</button
+              >
+            </div>
+            <div class="recipe-secondary-actions">
+              <button
+                class="link-button"
+                type="button"
+                disabled={busy || mutating || atRecipeLimit}
+                title={atRecipeLimit ? '100 recipes is the limit. Delete one first.' : undefined}
+                on:click={() => void handleDuplicateWorkflow(selectedWorkflow)}
+                >Duplicate to My recipes</button
+              >
+            </div>
+          </div>
+        {:else if recipes.length > 0 || workflows.length > 0}
           <p class="model-description">Select a recipe to see its steps and settings.</p>
         {/if}
       </aside>

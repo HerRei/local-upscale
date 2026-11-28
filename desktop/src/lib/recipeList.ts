@@ -4,6 +4,7 @@ import { fixStageKind, FIX_ROW_LABELS } from './fixStages';
 import { displayName, fixesOf, pendingDownloads, resolvePlan, type PlanStage } from './plan';
 import { planLine } from './planLine';
 import { isRestoreRecipe, recipeFixStages, recipeSettingsPatch } from './recipes';
+import type { Workflow } from './workflows';
 import type { AppSnapshot, FixKind, MediaKind, Recipe, UiSettings } from './types';
 import { videoModelShortName } from './videoEngines';
 
@@ -13,14 +14,11 @@ export const MAX_RECIPE_RECENT = 12;
 const MAX_MENU_RECIPES = 6;
 const MAX_RECIPE_NAME_LENGTH = 60;
 
-/** Minimal shape for built-in workflows until workflows.ts adds the full definition. */
-export interface WorkflowEntry {
-  id: string;
-  name: string;
-  media: 'image' | 'video';
+/** What the menu and the search need of a workflow; `Workflow` (workflows.ts) satisfies it. */
+export type WorkflowEntry = Pick<Workflow, 'id' | 'name' | 'media'> & {
   planLine?: string;
   modelIds?: string[];
-}
+};
 
 export type MenuRow =
   | {

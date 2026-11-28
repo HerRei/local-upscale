@@ -31,6 +31,7 @@
   import { examplesFor } from './lib/promptExamples';
   import type { InterpolationOrder, InterpolationTarget, TaskKind } from './lib/types';
   import { videoModelShortName } from './lib/videoEngines';
+  import { WORKFLOWS as workflows, workflowMatches, workflowPlan } from './lib/workflows';
 
   export let view: EnhancePanelView;
   export let actions: EnhancePanelActions;
@@ -59,6 +60,7 @@
     applyRecipe,
     addRecipe,
     updateRecipe,
+    applyWorkflow,
     setContent,
     radioGroupKeydown,
     toggleFix,
@@ -391,6 +393,13 @@
           {openRecipeEditor}
           {openRecipesLibrary}
           {applyRecipe}
+          {workflows}
+          {applyWorkflow}
+          workflowLine={(workflow) =>
+            workflowPlan(workflow, snapshot, settings)
+              .map((entry) => entry.step)
+              .join(' → ')}
+          workflowActive={(workflow) => workflowMatches(workflow, snapshot, settings)}
           {addRecipe}
           {updatableRecipe}
           {updateRecipe}

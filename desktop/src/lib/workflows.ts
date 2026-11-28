@@ -7,10 +7,17 @@ import {
   resolvePlan,
   type PlanStage,
 } from './plan';
-import { chooseFixModel } from './fixStages';
+import { chooseFixModel, fixStageKind } from './fixStages';
 import { planLine } from './planLine';
 import { sameFixStages } from './recipes';
-import type { AppSnapshot, FixKind, FixStageSelection, UiSettings } from './types';
+import type {
+  AppSnapshot,
+  FixKind,
+  FixStageSelection,
+  Recipe,
+  TaskKind,
+  UiSettings,
+} from './types';
 
 export type WorkflowFix = Exclude<FixKind, 'faces'>;
 
@@ -129,4 +136,58 @@ export function workflowDownload(
   const { stages } = workflowStages(workflow, snapshot, settings);
   const { bytes } = pendingDownloads(stages);
   return { bytes, text: bytes > 0 ? formatBytes(bytes) : '' };
+}
+
+/**
+ * The workflow's settings merged over the current ones, as a saved recipe. It applies nothing:
+ * the panel stays as it is. Output, hardware and the run's tile and precision come from the
+ * current settings, as they do for `Save current as recipe…`.
+ */
+export function workflowRecipe(
+  workflow: Workflow,
+  snapshot: AppSnapshot,
+  settings: UiSettings,
+  id: string,
+  name: string,
+): Recipe {
+  const merged = { ...settings, ...workflowSettings(workflow, snapshot, settings) } as UiSettings;
+  const restoring = workflow.output_scale === 1;
+  const fixes = merged.fix_stages;
+  const prefix = (restoring ? fixes.slice(0, -1) : fixes).filter((selection) => selection.model_id);
+  const modelOf = (modelId: string) =>
+    snapshot.catalog.models.find((model) => model.model_id === modelId);
+  return {
+    id,
+    name,
+    task: merged.task as TaskKind,
+    model_id: merged.selected_model_id,
+    output_scale: restoring ? 1 : merged.output_scale,
+    tile_size: merged.tile_size,
+    halo: merged.halo,
+    precision: merged.precision,
+    safe_memory: merged.safe_memory,
+    video_model_id: merged.selected_video_model_id,
+    custom_model_path: '',
+    output_format: merged.output_format,
+    output_bit_depth: merged.output_bit_depth ?? 8,
+    preserve_metadata: merged.preserve_metadata,
+    jpeg_quality: merged.jpeg_quality,
+    enable_face_model: false,
+    face_fidelity: merged.face_fidelity,
+    quality: workflow.quality,
+    content: workflow.content,
+    fixes: [...workflow.fixes],
+    stages: [
+      ...prefix.map((selection) => ({
+        kind: fixStageKind(modelOf(selection.model_id), selection.fix),
+        model_id: selection.model_id,
+        fix: selection.fix,
+      })),
+      {
+        kind: restoring ? ('restore' as const) : ('upscale' as const),
+        model_id: merged.selected_model_id,
+        ...(restoring && fixes.length ? { fix: fixes[fixes.length - 1].fix } : {}),
+      },
+    ],
+  };
 }

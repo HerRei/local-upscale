@@ -10034,7 +10034,9 @@ describe('Enhance panel head, Recipes menu, and Task row', () => {
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
     const menu = screen.getByRole('group', { name: 'Recipes' });
     expect(trigger.getAttribute('aria-controls')).toBe(menu.id);
-    expect(within(menu).getByText('No recipes yet.')).toBeTruthy();
+    // With nothing of your own the menu lists the workflows that fit.
+    expect(within(menu).getByRole('button', { name: /^Old scan/ })).toBeTruthy();
+    expect(within(menu).queryByText('No recipes yet.')).toBeNull();
 
     cleanup();
     const running = readySnapshot([image('photo', true)]);
@@ -11881,5 +11883,171 @@ describe('Step chips', () => {
     await mountWith(batchSetup.snapshot);
     await tick();
     expect(screen.queryByRole('group', { name: 'Result after each step' })).toBeNull();
+  });
+});
+
+describe('Workflows in the library', () => {
+  function withoutModels(snapshot: AppSnapshot, ids: string[]): void {
+    for (const model of snapshot.catalog.models) {
+      if (ids.includes(model.model_id)) model.installed = false;
+    }
+  }
+
+  it('opens on Recommended with four rows and a card with for, note, plan, download and example', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    withoutModels(snapshot, ['fbcnn_color', 'localsr_quick_x4_v1']);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Browse recipes…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Recipes' });
+    expect(
+      within(dialog)
+        .getAllByRole('button', { pressed: true })
+        .some((button) => button.textContent?.startsWith('Recommended')),
+    ).toBe(true);
+    expect(dialog.querySelectorAll('button.row')).toHaveLength(4);
+
+    await user.click(within(dialog).getByRole('button', { name: /^Web image \(JPEG\)/ }));
+    const detail = within(dialog).getByLabelText('Recipe details');
+    expect(detail.textContent).toContain('Recommended workflow');
+    expect(detail.textContent).toContain(
+      'For small, blocky pictures saved from websites or chats.',
+    );
+    expect(detail.textContent).toContain('Detail the compression destroyed does not come back.');
+    expect(detail.textContent).toContain('JPEG');
+    expect(detail.textContent).toContain('Upscale 2×');
+    expect(detail.textContent).toContain('FBCNN Color');
+    expect(detail.textContent).toContain('290 MB to download');
+    expect(detail.querySelector('.example img')).toBeTruthy();
+    expect(within(dialog).getByRole('button', { name: 'Use workflow' })).toBeTruthy();
+  });
+
+  it('Use workflow saves the settings, records the use, closes, and starts nothing', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Browse recipes…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Recipes' });
+    await user.click(within(dialog).getByRole('button', { name: /^Low-light phone photo/ }));
+    expect(
+      within(dialog).getByText(
+        'Removes grain at the original size. Very fine texture, such as hair or fabric, can get smoother.',
+      ),
+    ).toBeTruthy();
+    await user.click(within(dialog).getByRole('button', { name: 'Use workflow' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          task: 'denoise',
+          content: 'photo',
+          quality: 'quick',
+          output_scale: 1,
+          selected_model_id: 'denoise_realplksr_1x',
+          recipe_recent: ['workflow.low-light'],
+        }),
+      ),
+    );
+    expect(screen.queryByRole('dialog', { name: 'Recipes' })).toBeNull();
+    expect(api.startJobs).not.toHaveBeenCalled();
+  });
+
+  it('Duplicate to My recipes saves an ordinary recipe named like the workflow and applies nothing', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    await user.click(screen.getByRole('button', { name: 'Browse recipes…' }));
+    const dialog = screen.getByRole('dialog', { name: 'Recipes' });
+    const before = api.saveSettings.mock.calls.length;
+    await user.click(within(dialog).getByRole('button', { name: /^Old scan/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Duplicate to My recipes' }));
+    await waitFor(() =>
+      expect(api.saveRecipe).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'Old scan',
+          task: 'upscale',
+          model_id: 'realplksr_nomoswebphoto_x4',
+          quality: 'best',
+          output_scale: 2,
+        }),
+      ),
+    );
+    expect(api.saveSettings.mock.calls.length).toBe(before);
+  });
+
+  it('a pinned workflow is a menu row that applies it, and the native menu applies it too', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    snapshot.recipes = [
+      {
+        id: 'mine',
+        name: 'Mine',
+        task: 'upscale',
+        model_id: 'span_photo_x4',
+        output_scale: 4,
+        tile_size: 256,
+        halo: 16,
+        precision: 'fp16',
+        safe_memory: false,
+      },
+    ];
+    snapshot.settings.recipe_pins = ['workflow.drawing'];
+    const user = await mountWith(snapshot);
+    await user.click(screen.getByRole('button', { name: 'Recipes' }));
+    const menu = screen.getByRole('group', { name: 'Recipes' });
+    const rows = within(menu).getAllByRole('button', { name: /^(Drawing or anime|Mine)/ });
+    expect(rows[0].textContent).toContain('Drawing or anime');
+    expect(rows[0].textContent).toContain('Upscale 4×');
+    await user.click(rows[0]);
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          content: 'illustration',
+          selected_model_id: 'realesrgan_x4plus_anime_6b',
+          recipe_recent: ['workflow.drawing'],
+        }),
+      ),
+    );
+
+    await chooseMenuItem('preset.recipe.workflow.old-scan');
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          content: 'photo',
+          quality: 'best',
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
+          recipe_recent: ['workflow.old-scan', 'workflow.drawing'],
+        }),
+      ),
+    );
+  });
+
+  it('the native menu action preset.browse opens the Recipes library', async () => {
+    const snapshot = readySnapshot([image('photo', true)]);
+    await mountWith(snapshot);
+    await chooseMenuItem('preset.browse');
+    await waitFor(() => expect(screen.getByRole('dialog', { name: 'Recipes' })).toBeTruthy());
+  });
+});
+
+describe('Empty screen', () => {
+  it('has a link outside the well that opens the library on Recommended, and Use workflow keeps the stage', async () => {
+    const snapshot = readySnapshot([]);
+    const user = await mountWith(snapshot);
+    const link = screen.getByRole('button', { name: 'or start from a workflow…' });
+    expect(link.closest('button.well')).toBeNull();
+    expect(link.parentElement?.querySelector('button.well')).toBeTruthy();
+    await user.click(link);
+    const dialog = screen.getByRole('dialog', { name: 'Recipes' });
+    expect(dialog.querySelectorAll('button.row')).toHaveLength(4);
+    await user.click(within(dialog).getByRole('button', { name: /^Old scan/ }));
+    await user.click(within(dialog).getByRole('button', { name: 'Use workflow' }));
+    await waitFor(() =>
+      expect(api.saveSettings).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          quality: 'best',
+          selected_model_id: 'realplksr_nomoswebphoto_x4',
+        }),
+      ),
+    );
+    expect(screen.getByRole('button', { name: 'or start from a workflow…' })).toBeTruthy();
   });
 });
