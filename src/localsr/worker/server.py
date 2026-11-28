@@ -226,6 +226,8 @@ def _engine_features(video_engines: list[str] | None = None) -> list[str]:
         "precision_auto",
         # stage_picture_max_dimension on a photo job and the stage_result message.
         "stage_results",
+        # `strength` on the blur, JPEG and noise fixes: a mix of the fix with its input.
+        "fix_strength",
     ]
     for feature in REQUIRED_STEP_FEATURES + (DEV_STEP_FEATURES if dev_steps_enabled() else ()):
         if feature not in features:
@@ -2376,6 +2378,11 @@ class WorkerServer:
             interpolation_order=str(data.get("interpolation_order") or "after_upscale"),
             preprocess_stages=tuple(preprocess_stages),
             primary_time_factor=primary_time_factor,
+            primary_strength=(
+                float(pipeline.primary.params.get("strength", 1.0))
+                if pipeline.primary is not None
+                else 1.0
+            ),
             audio_denoise=clean_audio,
             audio_denoise_bundle_dir=data.get("audio_denoise_bundle_dir"),
             audio_denoiser=audio_denoiser,

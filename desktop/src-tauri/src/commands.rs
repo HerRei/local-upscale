@@ -4614,10 +4614,34 @@ fn validate_fix_engine(
     Ok(())
 }
 
+/// The parameter that mixes a fix with its input, and the engine feature that runs it.
+pub(crate) const FIX_STRENGTH_PARAM: &str = "strength";
+const FIX_STRENGTH_FEATURE: &str = "fix_strength";
+
+/// The fix's strength when it asks for less than the whole fix. An older engine would run
+/// the whole fix and ignore the number, so it is refused before the job is queued.
+pub(crate) fn fix_strength_below_full(stage: &crate::types::FixStageSelection) -> Option<f64> {
+    stage
+        .params
+        .as_ref()
+        .and_then(|params| params.get(FIX_STRENGTH_PARAM))
+        .and_then(serde_json::Value::as_f64)
+        .filter(|strength| *strength < 1.0)
+}
+
 fn validate_stage_params_engine(
     stages: &[crate::types::FixStageSelection],
     engine: Option<&crate::types::EngineInfo>,
 ) -> AppResult<()> {
+    if stages
+        .iter()
+        .any(|stage| fix_strength_below_full(stage).is_some())
+        && !engine.is_some_and(|engine| engine.features.iter().any(|f| f == FIX_STRENGTH_FEATURE))
+    {
+        return Err(AppError::Validation(
+            "This engine cannot change a fix's strength. Update LocalSR.".into(),
+        ));
+    }
     validate_stage_params_engine_for(
         stages
             .iter()

@@ -83,7 +83,22 @@
       "needs_model": true,
       "order": 10,
       "output_alpha": false,
-      "parameters": [],
+      "parameters": [
+        {
+          "choices": [],
+          "default": 1.0,
+          "int_choices": [],
+          "kind": "number",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "name": "strength",
+          "nullable": false,
+          "required": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
       "phase": "restore",
       "required_feature": null,
       "role": "fix",
@@ -110,7 +125,22 @@
       "needs_model": true,
       "order": 20,
       "output_alpha": false,
-      "parameters": [],
+      "parameters": [
+        {
+          "choices": [],
+          "default": 1.0,
+          "int_choices": [],
+          "kind": "number",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "name": "strength",
+          "nullable": false,
+          "required": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
       "phase": "restore",
       "required_feature": null,
       "role": "fix",
@@ -137,7 +167,22 @@
       "needs_model": true,
       "order": 30,
       "output_alpha": false,
-      "parameters": [],
+      "parameters": [
+        {
+          "choices": [],
+          "default": 1.0,
+          "int_choices": [],
+          "kind": "number",
+          "maximum": 1.0,
+          "minimum": 0.0,
+          "name": "strength",
+          "nullable": false,
+          "required": false,
+          "ui_default": null,
+          "ui_maximum": null,
+          "ui_minimum": null
+        }
+      ],
       "phase": "restore",
       "required_feature": null,
       "role": "fix",

@@ -66,6 +66,7 @@ impl Harness {
                 "patch_preview".into(),
                 "image_multi_fix".into(),
                 "stage_params_and_masks".into(),
+                "fix_strength".into(),
             ],
             model_formats: Vec::new(),
             video_engines: Vec::new(),
@@ -505,6 +506,98 @@ fn the_steps_already_shown_cost_nothing_again() {
     let patch = harness.patch("a");
     assert_eq!(patch.state, "stale");
     assert_eq!(patch.estimate_seconds, 13.0);
+}
+
+fn with_strength(mut input: StartBatchInput, strength: f64) -> StartBatchInput {
+    input.fix_stages[0].params = Some(serde_json::Map::from_iter([(
+        "strength".into(),
+        json!(strength),
+    )]));
+    input
+}
+
+#[test]
+fn a_strength_change_costs_nothing_by_itself() {
+    let harness = Harness::new();
+    request_checked(&harness.state, harness.ask("a", input())).unwrap();
+    harness.stage_done("a", 0, false, 9.0);
+    harness.stage_done("a", 1, false, 9.0);
+    // The model would take 9 s and the upscaler 9 s; only the mix is new, and the upscaler
+    // after it must run again because its input changed.
+    measured(&harness, 9.0, 1.0);
+    harness.messages();
+    request_checked(
+        &harness.state,
+        harness.ask("a", with_strength(input(), 0.4)),
+    )
+    .unwrap();
+    let patch = harness.patch("a");
+    assert_eq!(patch.state, "running");
+    assert_eq!(patch.estimate_seconds, 0.0);
+    assert_eq!(
+        harness.messages().last().unwrap()["data"]["stages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+
+    // A slow step after the mix: the request is cut after the mix and the rest waits.
+    let harness = Harness::new();
+    request_checked(&harness.state, harness.ask("a", input())).unwrap();
+    harness.stage_done("a", 0, false, 9.0);
+    harness.stage_done("a", 1, false, 9.0);
+    measured(&harness, 9.0, 9.0);
+    harness.messages();
+    request_checked(
+        &harness.state,
+        harness.ask("a", with_strength(input(), 0.4)),
+    )
+    .unwrap();
+    let patch = harness.patch("a");
+    assert_eq!(patch.state, "running");
+    assert_eq!(patch.estimate_seconds, 9.0);
+    assert_eq!(
+        harness.messages().last().unwrap()["data"]["stages"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    let patch_id = lock(&harness.state.patch)
+        .unwrap()
+        .slot("a")
+        .patch_id
+        .clone();
+    apply_message(
+        &harness.state,
+        &WorkerEnvelope {
+            message_type: "patch_completed".into(),
+            data: json!({"patch_id": patch_id, "elapsed_seconds": 0.1}),
+        },
+    )
+    .unwrap();
+    assert_eq!(harness.patch("a").state, "stale");
+
+    // Under Manual nothing is sent, as before.
+    let harness = Harness::new();
+    request_checked(&harness.state, harness.ask("a", input())).unwrap();
+    harness.stage_done("a", 0, false, 9.0);
+    harness.stage_done("a", 1, false, 9.0);
+    measured(&harness, 9.0, 9.0);
+    harness.mode("manual");
+    harness.messages();
+    request_checked(
+        &harness.state,
+        harness.ask("a", with_strength(input(), 0.4)),
+    )
+    .unwrap();
+    assert_eq!(harness.patch("a").state, "stale");
+    // The old run is cancelled; no new request goes out.
+    assert!(harness
+        .messages()
+        .iter()
+        .all(|message| message["type"] != "patch_request"));
 }
 
 #[test]

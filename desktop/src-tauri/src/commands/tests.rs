@@ -4982,6 +4982,7 @@ fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
             .stage_params_feature
             .clone(),
     );
+    new_engine.features.push("fix_strength".into());
     assert!(validate_stage_params_engine(
         std::slice::from_ref(&stage_with_params),
         Some(&new_engine)
@@ -5013,6 +5014,125 @@ fn stage_params_and_masks_are_forwarded_and_gated_by_engine_feature() {
     // Primary stage without params/mask_path omits those keys cleanly.
     assert!(serialized[1].get("params").is_none());
     assert!(serialized[1].get("mask_path").is_none());
+}
+
+fn strength_stage(strength: Option<f64>) -> crate::types::FixStageSelection {
+    crate::types::FixStageSelection {
+        fix: "noise".into(),
+        model_id: "scunet_color_real_psnr".into(),
+        params: strength
+            .map(|value| serde_json::Map::from_iter([("strength".to_owned(), json!(value))])),
+        mask_path: None,
+    }
+}
+
+#[test]
+fn a_strength_needs_an_engine_that_lists_it() {
+    let engine = |features: &[&str]| crate::types::EngineInfo {
+        protocol_version: 1,
+        minimum_protocol_version: 1,
+        engine_id: "test".into(),
+        engine_version: "0.7.0".into(),
+        features: features.iter().map(|f| (*f).to_owned()).collect(),
+        model_formats: vec![],
+        video_engines: vec![],
+    };
+    let params_only = engine(&["image", "image_multi_fix", "stage_params_and_masks"]);
+    let with_strength = engine(&[
+        "image",
+        "image_multi_fix",
+        "stage_params_and_masks",
+        "fix_strength",
+    ]);
+    let light = [strength_stage(Some(0.4))];
+    let message = validate_stage_params_engine(&light, Some(&params_only))
+        .unwrap_err()
+        .to_string();
+    assert!(
+        message.contains("This engine cannot change a fix's strength. Update LocalSR."),
+        "{message}"
+    );
+    assert!(validate_stage_params_engine(&light, None).is_err());
+    assert!(validate_stage_params_engine(&light, Some(&with_strength)).is_ok());
+    // Without a strength, or at the whole fix, any engine is accepted.
+    let older = engine(&["image"]);
+    assert!(validate_stage_params_engine(&[strength_stage(None)], Some(&older)).is_ok());
+    assert!(validate_stage_params_engine(&[strength_stage(Some(1.0))], Some(&params_only)).is_ok());
+}
+
+#[test]
+fn a_recipe_keeps_a_fix_strength() {
+    let recipe = |strength: serde_json::Value| -> Recipe {
+        serde_json::from_value(json!({
+            "id": "r", "name": "Light noise", "task": "upscale", "model_id": "model",
+            "output_scale": 4, "tile_size": 256, "halo": 32, "precision": "fp32",
+            "safe_memory": true,
+            "stages": [
+                {"kind": "restore", "model_id": "scunet_color_real_psnr", "fix": "noise",
+                 "params": {"strength": strength}},
+                {"kind": "upscale", "model_id": "model"}
+            ],
+        }))
+        .unwrap()
+    };
+    let saved = recipe(json!(0.4));
+    assert!(validate_recipe_stages(&saved).is_ok());
+    let again: Recipe = serde_json::from_str(&serde_json::to_string(&saved).unwrap()).unwrap();
+    assert_eq!(
+        again.stages[0].params.as_ref().unwrap()["strength"],
+        json!(0.4)
+    );
+    assert!(validate_recipe_stages(&recipe(json!(2))).is_err());
+    assert!(validate_recipe_stages(&recipe(json!(-0.1))).is_err());
+}
+
+#[test]
+fn the_request_carries_the_strength() {
+    let resolved = |stage: &crate::types::FixStageSelection| ResolvedImageStage {
+        kind: "restore",
+        fix: stage.fix.clone(),
+        model_id: stage.model_id.clone(),
+        path: "/models/scunet.pth".into(),
+        params: stage.params.clone(),
+        mask_path: None,
+    };
+    let stages_for = |stage: crate::types::FixStageSelection| {
+        let mut denoise = input("denoise");
+        denoise.fix_stages = vec![stage.clone()];
+        // Restore's own model is the last fix, and is the primary stage as well.
+        let mut upscale = input("upscale");
+        upscale.fix_stages = vec![stage.clone()];
+        let fix = serde_json::to_value(image_pipeline_stages(
+            &[resolved(&stage)],
+            &[],
+            "main",
+            "/models/main.pth",
+            None,
+            "",
+            false,
+            &upscale,
+        ))
+        .unwrap();
+        let primary = serde_json::to_value(image_pipeline_stages(
+            &[],
+            &[],
+            "scunet_color_real_psnr",
+            "/models/scunet.pth",
+            None,
+            "",
+            false,
+            &denoise,
+        ))
+        .unwrap();
+        (fix, primary)
+    };
+    let (fix, primary) = stages_for(strength_stage(Some(0.4)));
+    assert_eq!(fix[0]["params"], json!({"strength": 0.4}));
+    assert_eq!(primary[0]["role"], "primary");
+    assert_eq!(primary[0]["params"], json!({"strength": 0.4}));
+    let (fix, primary) = stages_for(strength_stage(None));
+    assert!(fix[0].get("params").is_none());
+    assert!(primary[0].get("params").is_none());
 }
 
 fn grain_stage(params: serde_json::Value, mask_path: Option<&str>) -> StepStageSelection {

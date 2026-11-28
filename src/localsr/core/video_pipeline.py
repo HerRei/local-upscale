@@ -198,6 +198,8 @@ class VideoJobConfig:
     automatic_codec: bool = False
     preprocess_stages: tuple[VideoFixStage, ...] = ()
     primary_time_factor: float = 1.0
+    # Restore's own model as a fix: how much of its result is kept (1.0 is all of it).
+    primary_strength: float = 1.0
     keep_partial: bool = True
 
 

@@ -32,6 +32,26 @@ def rgb_to_tensor(rgb: np.ndarray) -> torch.Tensor:
     return torch.from_numpy(arr).permute(2, 0, 1)
 
 
+def mix_with_input(strength: float, source: torch.Tensor, fixed: np.ndarray) -> np.ndarray:
+    """``source + strength * (fixed - source)`` for a (3, H, W) float ``source`` in [0, 1].
+
+    ``fixed`` is the model's output, 8-bit or float in [0, 1]; the mix keeps its dtype so
+    the frame goes on in the depth it would have had without the mix.
+    """
+    reference = source.detach().cpu().float()
+    if tuple(reference.shape[1:]) != tuple(fixed.shape[1:]):
+        reference = torch.nn.functional.interpolate(
+            reference[None], size=tuple(fixed.shape[1:]), mode="bilinear", align_corners=False
+        )[0]
+    base = reference.numpy()
+    if fixed.dtype == np.uint8:
+        base = base * 255.0
+        mixed = base + np.float32(strength) * (fixed.astype(np.float32) - base)
+        return np.rint(mixed).clip(0, 255).astype(np.uint8)
+    mixed = base + np.float32(strength) * (fixed.astype(np.float32) - base)
+    return mixed.clip(0.0, 1.0).astype(np.float32)
+
+
 @dataclass(frozen=True)
 class StreamFrame:
     """One video frame plus the per-frame side data carried across stream stages."""
@@ -246,6 +266,9 @@ def _build_fix_model_stage(stage: VideoFixStage, step_ctx: VideoStepContext) -> 
                 yield item
                 continue
 
+            strength = float(stage.params.get("strength", 1.0))
+            if strength < 1.0:
+                output = mix_with_input(strength, tensor, output)
             if step_ctx.report_tiles:
                 next_tensor = (
                     torch.from_numpy(np.array(output, copy=True)).float()
@@ -547,6 +570,8 @@ def _primary_upscale_stage(ctx: VideoChainContext) -> VideoStreamStage:
                     whole_frame=True,
                     **float_options,
                 )
+            if ctx.config.primary_strength < 1.0:
+                out_chw = mix_with_input(ctx.config.primary_strength, tensor, out_chw)
             yield replace(item, out_chw=out_chw)
 
     return _stage

@@ -214,6 +214,52 @@ def test_a_new_last_step_runs_only_itself(harness):
     assert harness.loads == loads + 1
 
 
+def _with_strength(stage: dict, strength: float | None) -> dict:
+    return stage if strength is None else {**stage, "params": {"strength": strength}}
+
+
+def test_a_new_strength_mixes_again_without_the_model(harness):
+    noise = _fix(harness.noise)
+    full = harness.run([noise])
+    loads = harness.loads
+    assert loads == 1
+    light = harness.run([_with_strength(noise, 0.4)])
+    # The whole result is in the cache: the mix needs no model and says it was cached.
+    assert harness.loads == loads
+    assert [m["data"]["cached"] for m in _done(light)] == [True]
+    assert "running" not in [m["data"].get("state") for m in light if m["type"] == "patch_stage"]
+    full_png, light_png = _png(_done(full)[0]), _png(_done(light)[0])
+    assert not np.array_equal(full_png, light_png)
+    medium = harness.run([_with_strength(noise, 0.7)])
+    assert harness.loads == loads
+    again = harness.run([noise])
+    assert harness.loads == loads
+    assert [m["data"]["cached"] for m in _done(again)] == [True]
+    assert _png(_done(again)[0]).tolist() == full_png.tolist()
+    # The mix is the picture's own pixels moved toward the fix's, within one level.
+    with Image.open(harness.image) as source:
+        original = np.asarray(source.convert("RGB"))[30:222, 40:232].astype(np.float32)
+    expected = original + 0.4 * (full_png.astype(np.float32) - original)
+    assert np.abs(light_png.astype(np.float32) - expected).max() <= 1.0
+    assert not np.array_equal(_png(_done(medium)[0]), light_png)
+
+
+def test_a_strength_first_run_loads_the_model_once_and_a_following_step_runs_again(harness):
+    noise = _with_strength(_fix(harness.noise), 0.4)
+    first = harness.run([noise])
+    assert [m["data"]["cached"] for m in _done(first)] == [False]
+    assert harness.loads == 1
+    loads = harness.loads
+    grown = harness.run([noise, _upscale(harness.up2)], output_scale=2)
+    assert [m["data"]["cached"] for m in _done(grown)] == [True, False]
+    assert harness.loads == loads + 1
+    # A new strength changes the second step's input, so it runs again.
+    changed = harness.run(
+        [_with_strength(_fix(harness.noise), 0.7), _upscale(harness.up2)], output_scale=2
+    )
+    assert [m["data"]["cached"] for m in _done(changed)] == [True, False]
+
+
 @pytest.mark.parametrize(
     "region",
     [
