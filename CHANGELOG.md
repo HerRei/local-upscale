@@ -2,9 +2,74 @@
 
 ## [0.7.0-beta] - Unreleased
 
-- **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a glance, and open settings where you need them. The new blue accent follows your Mac’s accent colour, and the colour-blind palette is easier to distinguish.
-- **Downloads show in one place, with size and time left.** Model downloads live in the status bar (and the library’s tray) with how much has arrived and how long is left, without repeating percentages across the panel. Interrupted downloads stay in the status bar with what was kept, and Start retries with only the rest to fetch, also after Cancel.
-- **Edit uses more graphics memory and adds Expert controls.** On graphics cards with their own memory, Edit now fits the largest size and places the text encoder and VAE on the GPU when they fit; a new Expert section under Advanced lets you override placement, set a GPU memory limit, or allow larger edit sizes.
+- **Preview on your photo.** Under the viewer's header, Preview shows what the ticked
+  fixes and the upscale will do on a square of the open photo, before you start. The
+  square sits over the photo with a tab above it: one chip for Original and one for each
+  step, so you can see what each step adds. Drag the tab, or move it with the arrow
+  keys, to look at another part. The preview follows your ticks, models and size, runs
+  by itself when it is quick, and otherwise waits for Update preview (with the time it
+  expects). In Settings > General, Preview fixes on your photo can be Automatic, Always
+  update by itself, Update when I click, or Off. A fix's popover has See it on this
+  photo. It downloads a model only when you click Download … and preview, and it pauses
+  while a job runs or waits. In the Model library, Try on this photo puts a second model
+  on the same square: the tab shows A and B, X flips between them, and Use B takes the
+  second one over.
+- **Every step is visible while a job runs and after it.** A job with several steps no
+  longer drops to a small, soft picture between steps. The viewer keeps the sharp photo
+  until the next step's picture is ready, labels it Step 2 of 4 · Colour, and the status
+  bar and the plan line name the running step. Hold M to see the original during a job.
+  After a single-photo job, chips above the viewer show the picture after each step. The
+  picture of each step is kept until the next job starts, you remove the photo or you
+  quit.
+- **Recipes library and four recommended workflows.** Recipes now shows at most six
+  entries: your pinned recipes, then the ones you used last. Browse recipes… (⇧⌘R on a
+  Mac, also in the Presets menu) opens a library with search, My recipes, Recommended,
+  Photo and Video lists, and a detail view with Apply, Pin, Duplicate, Rename and
+  Delete. A pinned recipe gets a shortcut in the Presets menu, ⌘3 to ⌘9 in pin order.
+  When you change an applied recipe, Recipes offers Update "name" so you do not save
+  near-duplicates. Each recipe shows its plan line, for example JPEG, Noise, Upscale 4×.
+  Recommended holds four read-only workflows: Old scan, Low-light phone photo, Drawing
+  or anime and Web image (JPEG). Use workflow sets the panel the way you would by hand,
+  with the models your Quality choice picks, and starts nothing. Pin one to keep it in
+  the menu, or Duplicate it to My recipes. The empty start screen links to them with "or
+  start from a workflow…".
+- **A clearer Enhance panel.** Pick fixes in a list, see the plan and output at a
+  glance, and open settings where you need them. The new blue accent follows your Mac’s
+  accent colour, and the colour-blind palette is easier to distinguish.
+- **Downloads show in one place, with size and time left.** Model downloads live in the
+  status bar (and the library’s tray) with how much has arrived and how long is left,
+  without repeating percentages across the panel. Interrupted downloads stay in the
+  status bar with what was kept, and Start retries with only the rest to fetch, also
+  after Cancel.
+- **Edit uses more graphics memory and adds Expert controls.** On graphics cards with
+  their own memory, Edit now fits the largest size and places the text encoder and VAE
+  on the GPU when they fit; a new Expert section under Advanced lets you override
+  placement, set a GPU memory limit, or allow larger edit sizes.
+- **Stopping a batch of photos keeps what is done.** Stop now saves the photos that were
+  only waiting to be written, lets a photo that is saving finish, and keeps the finished
+  part of every photo of the batch, not only the first.
+- **Time left follows each step's real work.** For photos, each step's share of the bar
+  follows how long it takes on your computer, which LocalSR learns as it works. The time
+  left counts the steps still to come, and the save says what it writes.
+- **Zooming shows real pixels.** Zoomed in past the preview's size, the viewer fetches
+  the visible area of the original and of each result at full resolution, so a large
+  photo's result looks as sharp as it is.
+- **The computer stays awake while jobs run.** Settings has "Keep the computer awake
+  while working", on by default. It stops idle sleep until the queue finishes; the
+  display can still sleep.
+- **Faster photos and starts.** The engine is ready about 0.1 s after launch instead of
+  1.7 s, restarts skip checks of files it has already verified, and a second job with
+  the same model starts warm. In a batch of photos, one photo is saved while the next is
+  processed, on every device. Previews of photos decode only what they need, so a 24 MP
+  JPEG opens about four times as fast and large RAW files open faster, and HEIC export
+  takes 0.3 s instead of 1.6 s for a 24 MP photo. With Precision on Auto, Apple GPUs use
+  half precision for the ESRGAN, PULSE and SPAN models, after a measured check passed
+  for them. The release builds are smaller.
+- **Fixes.** Comparing videos keeps both sides on the same frame (#176). A result shown
+  without its result list is no longer labelled Original. The hardware line shows no
+  memory meter when there is no reading. Models can be chosen while Start waits for a
+  download; only the model folder stays locked. On Windows, the engine no longer waits
+  on a blocked input pipe when it loads a library for the first time.
 
 ## [0.6.3-beta] - 2026-11-27
 
