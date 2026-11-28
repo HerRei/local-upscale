@@ -34,11 +34,14 @@ from .media_codecs import (
     SYSTEM_OUTPUT_CODECS,
     UNDECODABLE_VIDEO_MESSAGE,
     UndecodableVideoError,
+    add_copied_stream,
+    add_parameter_copy,
     encode_spec,
     muxer_format,
     normalize_container,
     require_bundled_encoder,
     stream_copy_supported,
+    stream_decodable,
     validate_output,
 )
 from .output_publish import DiscardOnStop, OutputExistsError, owned_temporary, publish_output
@@ -184,7 +187,7 @@ def _video_decoder(path: str, *, frame_threads: bool = False, thread_count: int 
         stream = next((s for s in container.streams if s.type == "video"), None)
         if stream is None:
             raise ValueError(f"No video stream found in {path}")
-        if stream.codec_context is None:
+        if not stream_decodable(stream):
             raise UndecodableVideoError(UNDECODABLE_VIDEO_MESSAGE)
         require_pixel_budget(int(stream.width or 0), int(stream.height or 0))
         stream.codec_context.options = {
@@ -248,7 +251,7 @@ def _first_display_frame(container, stream) -> tuple[av.VideoFrame | None, str]:
 
 def _audio_stream_usable(stream, container_format: str) -> bool:
     """Decodable audio can always be kept; other tracks only if copied unchanged."""
-    return stream.codec_context is not None or stream_copy_supported(stream, container_format)
+    return stream_decodable(stream) or stream_copy_supported(stream, container_format)
 
 
 def _audio_compatibility_warning(
@@ -270,9 +273,10 @@ def _audio_compatibility_warning(
             "omitted. " + EXTERNAL_FFMPEG_HINT
         )
     if any(needs_audio_transcode(stream, container_format) for stream in audio):
+        target = "16-bit PCM" if normalize_container(container_format) == "mov" else "Opus"
         return (
             f"For {container_format.upper()} output, audio that the container cannot carry "
-            "unchanged is converted to Opus. The source audio stays unchanged."
+            f"unchanged is converted to {target}. The source audio stays unchanged."
         )
     return ""
 
@@ -288,7 +292,7 @@ def _source_decodable(path: str) -> bool:
         raise
     with container:
         stream = next((s for s in container.streams if s.type == "video"), None)
-        return stream is None or stream.codec_context is not None
+        return stream is None or stream_decodable(stream)
 
 
 def probe_video(
@@ -608,6 +612,13 @@ def count_video_frames(path: str) -> int:
         if stream.frames:
             return int(stream.frames)
         return sum(1 for packet in container.demux(stream) if packet.size)
+
+
+def written_seconds(path: str) -> float:
+    """The length of a written video, read without decoding: LocalSR's runtime cannot
+    decode the H.264, HEVC or ProRes the system encoder writes."""
+    with av.open(str(path)) as container:
+        return float(container.duration) / 1_000_000 if container.duration else 0.0
 
 
 def partial_destination(destination: Path, seconds: float) -> Path:
@@ -950,7 +961,7 @@ def _encode_video(
 
     The enhanced picture is encoded to an app-owned temporary container, then
     remuxed with source audio/subtitles. Compatible audio streams are copied;
-    audio the container cannot carry is converted to Opus. H.264/HEVC exports
+    audio the container cannot carry is converted to Opus (PCM in MOV). H.264/HEVC exports
     are delegated to the user's own FFmpeg from a lossless FFV1 master; with
     ``stream_to_system`` (a whole, untrimmed clip of timed frames) the system's
     hardware encoder receives the frames directly. The final destination appears
@@ -1290,13 +1301,16 @@ def _remux_source_streams(
         output_container = av.open(
             str(output_path), mode="w", format=muxer_format(container_format)
         )
-        # Copy the encoded stream's parameters; its decoder name (libdav1d) is not an encoder.
-        video_out = output_container.add_stream_from_template(video_in, opaque=True)
+        # The system encoder's H.264, HEVC and ProRes have no decoder in LocalSR's runtime.
+        # This video is always LocalSR's own encode in this container, so its tag fits.
+        video_out = add_parameter_copy(output_container, video_in)
         auxiliary_outputs: dict[int, object] = {}
         subtitle_outputs: dict[int, object] = {}
         converted_audio: dict[int, object] = {}
         for stream in audio_inputs:
-            if (
+            # A track without a decoder is copied; a stop cuts it in the packet the video
+            # ends in instead of at the exact sample.
+            if stream_decodable(stream) and (
                 force_audio_transcode
                 or needs_audio_transcode(stream, container_format)
                 or (reencode_audio and normalize_container(container_format) != "mkv")
@@ -1306,7 +1320,7 @@ def _remux_source_streams(
                 )
                 continue
             try:
-                auxiliary_outputs[stream.index] = output_container.add_stream_from_template(stream)
+                auxiliary_outputs[stream.index] = add_copied_stream(output_container, stream)
             except (av.FFmpegError, ValueError, OSError) as error:
                 raise VideoStageError(
                     "audio remux",
@@ -1359,10 +1373,20 @@ def _remux_source_streams(
             else None
         )
         source_end_seconds = source_start_seconds + (duration or float("inf"))
+        video_end = (video_in.start_time or 0) + video_in.duration if video_in.duration else None
 
         def video_packets():
             for packet in video_container.demux(video_in):
                 if packet.dts is not None or packet.pts is not None:
+                    if (
+                        video_end is not None
+                        and packet.pts is not None
+                        and packet.duration
+                        and packet.pts < video_end < packet.pts + packet.duration
+                    ):
+                        # The system encoder ends a variable-rate clip's last frame with an
+                        # edit list, which copied packets leave behind.
+                        packet.duration = video_end - packet.pts
                     packet.stream = video_out
                     yield packet
 

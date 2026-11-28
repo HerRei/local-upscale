@@ -41,6 +41,7 @@ from .video_io import (
     probe_video,
     selected_frame_count,
     validate_hdr_encoder,
+    written_seconds,
 )
 from .video_normalization import Deinterlace
 
@@ -772,7 +773,7 @@ def _run_video_frames(
         output_path=output_path,
         frames_processed=ctx.frames_processed,
         partial=output_path != config.output_video_path,
-        kept_seconds=probe_video(output_path).duration_seconds
+        kept_seconds=written_seconds(output_path)
         if output_path != config.output_video_path
         else 0.0,
         kept_frames=count_video_frames(output_path)

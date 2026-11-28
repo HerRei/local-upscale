@@ -2035,9 +2035,9 @@ class WorkerServer:
         kept_seconds = 0.0
         kept_frames = 0
         if partial:
-            from localsr.core.video_io import count_video_frames, probe_video
+            from localsr.core.video_io import count_video_frames, written_seconds
 
-            kept_seconds = probe_video(str(written_path)).duration_seconds
+            kept_seconds = written_seconds(str(written_path))
             kept_frames = count_video_frames(str(written_path))
         send_message(
             VideoJobCompleted(
