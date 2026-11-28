@@ -8,8 +8,9 @@ patent-licensed formats it can use, in this order:
 2. an FFmpeg the user installed and selected.
 
 Both hand frames through lossless FFV1/FLAC intermediates, so the pipeline
-treats them alike. A :class:`MediaBridge` holds whichever are available and
-picks one per file and per export.
+treats them alike; a video job reads the system codecs' frames as they are
+decoded instead of waiting for a whole copy. A :class:`MediaBridge` holds
+whichever are available and picks one per file and per export.
 """
 
 from __future__ import annotations
@@ -22,6 +23,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from . import external_ffmpeg as user_ffmpeg
 from .external_ffmpeg import ExternalFFmpeg, ExternalFFmpegError, ensure_free_space, plan_source
@@ -35,6 +37,9 @@ from .media_codecs import (
     normalize_container,
 )
 from .system_codecs import SystemCodecs, SystemCodecsError, detect_system_codecs
+
+if TYPE_CHECKING:
+    from .video_io import StreamedVideo
 
 Provider = SystemCodecs | ExternalFFmpeg
 
@@ -233,11 +238,16 @@ def decodable_source(
     output_container: str = "mkv",
     on_convert: Callable[[], None] | None = None,
     decode_audio: bool = False,
-) -> Iterator[tuple[str, str]]:
+    stream_video: bool = False,
+) -> Iterator[tuple[str | StreamedVideo, str]]:
     """Yield ``(frame_source, audio_source)`` paths the bundled runtime can read.
 
     The original file is used whenever possible. Otherwise the system codecs or
     the user's FFmpeg write a lossless intermediate that is deleted afterwards.
+    With ``stream_video``, video only the system codecs decode is not copied: the
+    frame source is a :class:`StreamedVideo` that ``probe_video`` and
+    ``decode_timed_frames`` read as the helper decodes it, and the audio source a
+    lossless file of the soundtrack and the first frame.
     """
     bridge = as_bridge(ffmpeg)
     plan = plan_source(path, output_container, decode_audio=decode_audio)
@@ -278,6 +288,9 @@ def decodable_source(
     directory = tempfile.mkdtemp(prefix="localsr-media-", dir=temporary_directory)
     try:
         intermediate = Path(directory) / "source.mkv"
+        if stream_video and not plan.video_decodable:
+            yield _streamed_source(provider, path, intermediate, cancel_event), str(intermediate)
+            return
         if not plan.video_decodable:
             ensure_free_space(directory, 2_000_000_000, "a lossless copy of the source video")
         provider.convert_source(
@@ -293,6 +306,43 @@ def decodable_source(
             yield str(intermediate), str(intermediate)
     finally:
         shutil.rmtree(directory, ignore_errors=True)
+
+
+def _streamed_source(
+    provider: SystemCodecs,
+    path: str,
+    reference: Path,
+    cancel_event: threading.Event | None,
+) -> StreamedVideo:
+    """Write the soundtrack and first frame of ``path`` losslessly; the rest is read later."""
+    from dataclasses import replace
+
+    from .video_io import StreamedVideo, probe_video
+
+    info = provider.probe(path)
+    track = info.get("audio") or {}
+    # The helper writes the soundtrack as 16-bit PCM WAV (at most stereo), then FLAC.
+    pcm = (
+        float(info.get("duration") or 0.0)
+        * float(track.get("sample_rate") or 0)
+        * min(int(track.get("channels") or 0), 2)
+        * 2
+    )
+    ensure_free_space(
+        reference.parent, int(2 * pcm) + 100_000_000, "the soundtrack of the source video"
+    )
+    provider.convert_source(path, reference, frames=1, audio=True, cancel_event=cancel_event)
+    probe = probe_video(str(reference))
+    # A full copy ends with its last frame or its soundtrack, whichever is later.
+    video_end = float((info.get("video") or {}).get("duration") or 0.0)
+    duration = max(probe.duration_seconds, video_end)
+    frames = int(round(duration * probe.fps)) if probe.fps else 0
+    return StreamedVideo(
+        path=path,
+        reference=str(reference),
+        probe=replace(probe, frame_count=frames, duration_seconds=duration),
+        decoder=provider,
+    )
 
 
 @contextmanager

@@ -6,7 +6,9 @@ under Apple's licences, behind AVFoundation. ``localsr-media`` (see
 frameworks and exchanges raw frames with the worker over pipes, so none of that
 code is ever loaded into LocalSR. Frames go through the same lossless FFV1/FLAC
 intermediates as the user-installed FFmpeg route, so the rest of the pipeline
-does not care which program opened a file.
+does not care which program opened a file. A video job does not wait for such a
+copy: it reads the frames that copy would hold straight from the helper
+(:meth:`SystemCodecs.decoded_frames`).
 """
 
 from __future__ import annotations
@@ -247,42 +249,66 @@ def _color_names(context) -> dict:
     }
 
 
-class _IntermediateVideo:
-    """FFV1 video of the lossless intermediate, in display orientation."""
+class _Pictures:
+    """The helper's frames as the lossless intermediate stores them: planar, in display
+    orientation, with the source's colour tags and timestamps."""
 
-    def __init__(self, container, header: dict) -> None:
+    def __init__(self, header: dict) -> None:
         from .video_io import display_turns
 
-        self.container = container
         self.width, self.height = int(header["width"]), int(header["height"])
         self.timescale = int(header["timescale"])
         self.source_format = str(header["format"])
         transform = header.get("transform")
         basis = np.array(transform, dtype=float).reshape(2, 2) if transform else np.eye(2)
         self.turns, self.flipped = display_turns(basis)
-        rotated = (self.height, self.width) if self.turns % 2 else (self.width, self.height)
-        spec = encode_spec("ffv1", hdr=self.source_format == "p010le")
-        fps = Fraction(str(header.get("nominal_fps") or 25)).limit_denominator(1000)
-        self.stream = container.add_stream(spec.encoder, rate=fps if fps > 0 else 25)
-        self.stream.width, self.stream.height = rotated
-        self.stream.pix_fmt = spec.pixel_format
-        self.stream.options = spec.options
-        self.stream.codec_context.time_base = Fraction(1, self.timescale)
+        self.size = (self.height, self.width) if self.turns % 2 else (self.width, self.height)
+        self.spec = encode_spec("ffv1", hdr=self.source_format == "p010le")
         self.tags = _color_values(header)
-        context = self.stream.codec_context
-        context.color_primaries, context.color_trc, context.colorspace, context.color_range = (
-            self.tags
-        )
-        self.pixel_format = spec.pixel_format
 
-    def write(self, pts: int, payload: bytes) -> None:
+    def picture(self, pts: int, payload: bytes) -> av.VideoFrame:
         frame = frame_from_payload(payload, self.width, self.height, self.source_format)
         frame.color_primaries, frame.color_trc, frame.colorspace, frame.color_range = self.tags
-        planar = frame.reformat(format=self.pixel_format)
+        planar = frame.reformat(format=self.spec.pixel_format)
         planar = rotate_planar(planar, self.turns, self.flipped)
         planar.pts = pts
         planar.time_base = Fraction(1, self.timescale)
-        for packet in self.stream.encode(planar):
+        return planar
+
+
+def _rescale(value: int, source: Fraction, target: Fraction) -> int:
+    """``value`` from one time base to another, rounded as FFmpeg's ``av_rescale_q`` rounds
+    (to nearest, halves away from zero) when a muxer stores a packet's timestamp."""
+    numerator = source.numerator * target.denominator
+    denominator = source.denominator * target.numerator
+    magnitude = (abs(value) * numerator + denominator // 2) // denominator
+    return magnitude if value >= 0 else -magnitude
+
+
+_COLOR_FIELDS = ("color_range", "colorspace", "color_primaries", "color_trc")
+
+
+class _IntermediateVideo:
+    """FFV1 video of the lossless intermediate, in display orientation."""
+
+    def __init__(self, container, header: dict) -> None:
+        self.container = container
+        self.pictures = _Pictures(header)
+        self.timescale = self.pictures.timescale
+        spec = self.pictures.spec
+        fps = Fraction(str(header.get("nominal_fps") or 25)).limit_denominator(1000)
+        self.stream = container.add_stream(spec.encoder, rate=fps if fps > 0 else 25)
+        self.stream.width, self.stream.height = self.pictures.size
+        self.stream.pix_fmt = spec.pixel_format
+        self.stream.options = spec.options
+        self.stream.codec_context.time_base = Fraction(1, self.timescale)
+        context = self.stream.codec_context
+        context.color_primaries, context.color_trc, context.colorspace, context.color_range = (
+            self.pictures.tags
+        )
+
+    def write(self, pts: int, payload: bytes) -> None:
+        for packet in self.stream.encode(self.pictures.picture(pts, payload)):
             self.container.mux(packet)
 
     def flush(self) -> None:
@@ -337,6 +363,32 @@ class _IntermediateAudio:
 
 def _creation_flags() -> int:
     return 0x0800_0000 if os.name == "nt" else 0
+
+
+def _cancelled(cancel_event: threading.Event | None) -> bool:
+    return cancel_event is not None and cancel_event.is_set()
+
+
+def _stop_on_cancel(process: subprocess.Popen, cancel_event: threading.Event) -> threading.Thread:
+    """End the helper as soon as the job is cancelled: also while the worker waits on its
+    output (the soundtrack is decoded before the first frame arrives), and while a
+    streamed source's reader is paused between frames and nothing reads the pipe."""
+
+    def watch() -> None:
+        while process.poll() is None:
+            if cancel_event.wait(0.1):
+                if process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                        process.wait()
+                return
+
+    thread = threading.Thread(target=watch, name="localsr-media-cancel", daemon=True)
+    thread.start()
+    return thread
 
 
 @dataclass(frozen=True)
@@ -442,7 +494,13 @@ class SystemCodecs:
         return SYSTEM_ENCODERS[video_codec]
 
     @contextmanager
-    def _process(self, arguments: list[str], *, stdin: bool = False) -> Iterator[subprocess.Popen]:
+    def _process(
+        self,
+        arguments: list[str],
+        *,
+        stdin: bool = False,
+        cancel_event: threading.Event | None = None,
+    ) -> Iterator[subprocess.Popen]:
         with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
             try:
                 process = start_child(
@@ -457,12 +515,16 @@ class SystemCodecs:
                     f"Could not start the system codec helper: {error}"
                 ) from error
             process.error_log = errors  # type: ignore[attr-defined]
+            watcher = _stop_on_cancel(process, cancel_event) if cancel_event is not None else None
             try:
                 yield process
             finally:
                 if process.poll() is None:
                     process.kill()
                     process.wait()
+                if watcher is not None:
+                    # The helper has ended, so the watcher returns within its 0.1 s poll.
+                    watcher.join(timeout=1.0)
 
     @staticmethod
     def _failure(process: subprocess.Popen, stage: str) -> SystemCodecsError:
@@ -493,19 +555,37 @@ class SystemCodecs:
         stdout = process.stdout
         assert stdout is not None
         while True:
-            if cancel_event is not None and cancel_event.is_set():
+            if _cancelled(cancel_event):
                 process.terminate()
                 raise InterruptedError("video job cancelled")
             header = stdout.read(FRAME_HEADER.size)
             if not header:
                 return
             if len(header) != FRAME_HEADER.size:
+                if _cancelled(cancel_event):
+                    raise InterruptedError("video job cancelled")
                 raise SystemCodecsError("The system codec helper stopped mid-frame.")
             pts, duration, length = FRAME_HEADER.unpack(header)
             payload = stdout.read(length)
             if len(payload) != length:
+                if _cancelled(cancel_event):
+                    raise InterruptedError("video job cancelled")
                 raise SystemCodecsError("The system codec helper stopped mid-frame.")
             yield pts, duration, payload
+
+    def _stream_header(
+        self, process: subprocess.Popen, cancel_event: threading.Event | None, stage: str
+    ) -> dict:
+        stdout = process.stdout
+        assert stdout is not None
+        header_line = stdout.readline()
+        if not header_line:
+            self._wait(process, cancel_event, stage)
+            raise self._failure(process, stage)
+        header = json.loads(header_line)
+        if header.get("stream") != STREAM_TAG:
+            raise SystemCodecsError("Unexpected data from the system codec helper.")
+        return header
 
     def convert_source(
         self,
@@ -514,45 +594,42 @@ class SystemCodecs:
         *,
         video: bool = True,
         frames: int = 0,
+        audio: bool | None = None,
         cancel_event: threading.Event | None = None,
         progress: Callable[[int], None] | None = None,
     ) -> None:
         """Write a lossless FFV1/FLAC MKV of ``path`` decoded by the system codecs.
 
         ``video=False`` converts only the soundtrack; ``frames`` limits the video to
-        its first frames (a one-frame file serves the preview probe).
+        its first frames (a one-frame file serves the preview probe). The soundtrack
+        is included unless ``frames`` is set; ``audio`` overrides that.
         """
         if video:
             track = self.probe(path).get("video") or {}
             require_pixel_budget(int(track.get("width") or 0), int(track.get("height") or 0))
         destination = Path(destination)
+        with_audio = not frames if audio is None else audio
         with tempfile.TemporaryDirectory(
             prefix="localsr-media-", dir=destination.parent
         ) as scratch:
             arguments = ["decode", str(path)]
             if frames:
-                arguments += ["--max-frames", str(frames), "--no-audio"]
-            else:
+                arguments += ["--max-frames", str(frames)]
+            if with_audio:
                 arguments += ["--audio", str(Path(scratch) / "audio.wav")]
+            else:
+                arguments.append("--no-audio")
             if not video:
                 arguments.append("--no-video")
-            with self._process(arguments) as process:
-                stdout = process.stdout
-                assert stdout is not None
-                header_line = stdout.readline()
-                if not header_line:
-                    self._wait(process, cancel_event, "source conversion")
-                    raise self._failure(process, "source conversion")
-                header = json.loads(header_line)
-                if header.get("stream") != STREAM_TAG:
-                    raise SystemCodecsError("Unexpected data from the system codec helper.")
-                audio = header.get("audio") or None
+            with self._process(arguments, cancel_event=cancel_event) as process:
+                header = self._stream_header(process, cancel_event, "source conversion")
+                soundtrack = header.get("audio") or None
                 count = 0
                 with av.open(str(destination), "w", format="matroska") as container:
                     video_writer = (
                         _IntermediateVideo(container, header) if header.get("video") else None
                     )
-                    audio_writer = _IntermediateAudio(container, audio) if audio else None
+                    audio_writer = _IntermediateAudio(container, soundtrack) if soundtrack else None
                     if video_writer is not None:
                         for pts, _duration, payload in self._frames(process, cancel_event):
                             if audio_writer is not None:
@@ -569,6 +646,66 @@ class SystemCodecs:
                     raise self._failure(process, "source conversion")
                 if video_writer is not None and count == 0:
                     raise SystemCodecsError("The system codecs decoded no frames from this video.")
+
+    def decoded_frames(
+        self,
+        path: str,
+        template: av.VideoFrame,
+        *,
+        cancel_event: threading.Event | None = None,
+        limit: int = 0,
+    ) -> Iterator[av.VideoFrame]:
+        """The frames a lossless intermediate of ``path`` would decode to, read straight
+        from the helper while it decodes, so no copy of the video is written.
+
+        ``template`` is the decoded first frame of a one-frame intermediate of ``path``
+        (``convert_source(frames=1)``): every frame of an intermediate has its time base,
+        duration and colour tags, and a timestamp the muxer rounded onto that time base.
+        ``limit`` stops the helper after that many frames. A failure part-way raises
+        :class:`~localsr.core.video_io.SourceDecodeError`, which no export mistakes for
+        a failed encoder.
+        """
+        from .video_io import SourceDecodeError
+
+        try:
+            yield from self._decoded_frames(path, template, cancel_event, limit)
+            return
+        except SystemCodecsError as error:
+            message = str(error)
+        # Raised outside the handler, so the error carries no SystemCodecsError context.
+        raise SourceDecodeError("decode", message)
+
+    def _decoded_frames(
+        self,
+        path: str,
+        template: av.VideoFrame,
+        cancel_event: threading.Event | None,
+        limit: int,
+    ) -> Iterator[av.VideoFrame]:
+        arguments = ["decode", str(path), "--no-audio"]
+        if limit:
+            arguments += ["--max-frames", str(int(limit))]
+        stage = "source decoding"
+        with self._process(arguments, cancel_event=cancel_event) as process:
+            pictures = _Pictures(self._stream_header(process, cancel_event, stage))
+            if pictures.size != (template.width, template.height):
+                raise SystemCodecsError("The video changed size since it was opened.")
+            source_base = Fraction(1, pictures.timescale)
+            count = 0
+            for pts, _duration, payload in self._frames(process, cancel_event):
+                picture = pictures.picture(pts, payload)
+                picture.pts = _rescale(pts, source_base, template.time_base)
+                picture.time_base = template.time_base
+                picture.duration = template.duration
+                for name in _COLOR_FIELDS:
+                    setattr(picture, name, getattr(template, name))
+                count += 1
+                yield picture
+            self._wait(process, cancel_event, stage)
+            if process.returncode != 0:
+                raise self._failure(process, stage)
+            if count == 0:
+                raise SystemCodecsError("The system codecs decoded no frames from this video.")
 
     def transcode_output(
         self,

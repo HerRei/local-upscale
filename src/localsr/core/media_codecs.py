@@ -15,6 +15,7 @@ import os
 from dataclasses import dataclass, field
 
 import av
+from av.bitstream import BitStreamFilterContext
 
 BUNDLED_OUTPUT_CODECS = ("av1", "vp9", "ffv1")
 EXTERNAL_OUTPUT_CODECS = ("h264", "hevc")
@@ -31,6 +32,8 @@ MUXER_FORMATS = {"mp4": "mp4", "mkv": "matroska", "webm": "webm", "mov": "mov"}
 # Audio that is carried unchanged (demux/mux only, never decoded or encoded).
 MP4_COPY_AUDIO = frozenset({"aac", "mp3", "mp3float", "opus", "flac", "alac", "ac3"})
 WEBM_COPY_AUDIO = frozenset({"opus", "vorbis"})
+# QuickTime's muxer takes neither FLAC nor Opus; they become PCM there.
+MOV_COPY_AUDIO = MP4_COPY_AUDIO - {"flac", "opus"}
 
 EXTERNAL_FFMPEG_HINT = (
     "Install FFmpeg on this computer — LocalSR then uses it automatically — or convert "
@@ -171,8 +174,14 @@ def require_bundled_encoder(spec: VideoEncodeSpec) -> None:
             )
 
 
+def stream_decodable(stream) -> bool:
+    """Whether this runtime has a decoder for ``stream``; PyAV gives a stream without one
+    no codec context. LocalSR's runtime has none for H.264, HEVC, ProRes or AAC."""
+    return stream.codec_context is not None
+
+
 def video_stream_decodable(stream) -> bool:
-    return stream is not None and stream.codec_context is not None
+    return stream is not None and stream_decodable(stream)
 
 
 def audio_copy_allowed(codec_name: str | None, container: str) -> bool:
@@ -182,22 +191,43 @@ def audio_copy_allowed(codec_name: str | None, container: str) -> bool:
         return True
     if container == "webm":
         return codec_name in WEBM_COPY_AUDIO
+    if container == "mov":
+        return codec_name in MOV_COPY_AUDIO
     return codec_name in MP4_COPY_AUDIO
 
 
-def stream_copy_supported(stream, container: str) -> bool:
-    """Probe whether ``container``'s muxer accepts ``stream`` without decoding it.
+def add_parameter_copy(output, template):
+    """An output stream for ``template``'s packets, set up from its codec parameters alone.
 
-    Streams whose decoder is not bundled have no codec context. PyAV cannot copy
-    such audio/video streams at all, so they need a user-installed FFmpeg. For
-    decodable streams a tiny in-memory header write asks the muxer directly.
+    PyAV sets up a template stream from its codec context, which a stream without a
+    decoder lacks: LocalSR's runtime has none for the H.264, HEVC and ProRes the system
+    codecs write, nor for AAC. ``add_mux_stream`` only needs a codec the muxer takes; the
+    ``null`` bitstream filter then copies all of the template's parameters over it,
+    extradata and tag included, so HEVC keeps the ``hvc1`` that Apple players need.
     """
-    if stream.codec_context is None:
-        return False
+    rate = template.average_rate if template.type == "video" else None
+    stream = output.add_mux_stream(
+        getattr(output, f"default_{template.type}_codec"), rate=rate, time_base=template.time_base
+    )
+    BitStreamFilterContext("null", in_stream=template, out_stream=stream)
+    return stream
+
+
+def add_copied_stream(output, template):
+    """The output stream ``template``'s packets travel into unchanged. A decodable stream
+    is set up from its codec context, so the muxer chooses the tag for its container."""
+    if stream_decodable(template):
+        return output.add_stream_from_template(template)
+    return add_parameter_copy(output, template)
+
+
+def stream_copy_supported(stream, container: str) -> bool:
+    """Probe whether ``container``'s muxer accepts ``stream`` without decoding it: a tiny
+    in-memory header write with the stream :func:`add_copied_stream` would add."""
     buffer = io.BytesIO()
     try:
         with av.open(buffer, mode="w", format=muxer_format(container)) as output:
-            output.add_stream_from_template(stream)
+            add_copied_stream(output, stream)
             output.start_encoding()
     except (av.FFmpegError, ValueError, OSError, NotImplementedError):
         return False

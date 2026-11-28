@@ -687,17 +687,276 @@ def test_system_export_leaves_nothing_but_the_output(tmp_path, fail):
     assert {path.name for path in tmp_path.iterdir()} == expected
 
 
+# What LocalSR's own runtime cannot decode and the system codecs write or read.
+SHIPPED_UNDECODABLE = frozenset({"h264", "hevc", "prores", "aac"})
+
+
+class _TemplateRefusingOutput:
+    """An output container that refuses a template stream without a decoder, as PyAV does
+    for a stream it opened without a codec context."""
+
+    def __init__(self, container, decodable):
+        self._container = container
+        self._decodable = decodable
+
+    def __getattr__(self, name):
+        return getattr(self._container, name)
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return self._container.__exit__(*exc_info)
+
+    def add_stream_from_template(self, template, *args, **kwargs):
+        if not self._decodable(template):
+            raise ValueError(f"template stream of type {template.type} has no codec context")
+        return self._container.add_stream_from_template(template, *args, **kwargs)
+
+
+@pytest.fixture(params=["installed", "no decoders"])
+def runtime(request, monkeypatch) -> str:
+    """The installed PyAV, and the same acting out the runtime LocalSR ships, which has no
+    decoder for H.264, HEVC, ProRes or AAC. PyPI's PyAV, which CI installs, decodes them
+    all, so without this CI never takes the shipped route (bug hunt 11-28)."""
+    if request.param == "no decoders":
+        from localsr.core import external_ffmpeg, media_codecs, video_audio, video_io
+
+        installed = media_codecs.stream_decodable
+
+        def decodable(stream) -> bool:
+            return (
+                installed(stream)
+                and stream.codec_context.codec.canonical_name not in SHIPPED_UNDECODABLE
+            )
+
+        for module in (media_codecs, video_audio, video_io, external_ffmpeg):
+            monkeypatch.setattr(module, "stream_decodable", decodable)
+        open_container = av.open
+
+        def refusing_open(*args, **kwargs):
+            container = open_container(*args, **kwargs)
+            mode = kwargs.get("mode", args[1] if len(args) > 1 else None)
+            return _TemplateRefusingOutput(container, decodable) if mode == "w" else container
+
+        monkeypatch.setattr(av, "open", refusing_open)
+    return request.param
+
+
+def aac_tone(path: Path, seconds: float = 3) -> Path:
+    """An 800 Hz AAC track, which only the system codecs decode on the shipped runtime."""
+    from test_video_timing import ffmpeg
+
+    ffmpeg("-f", "lavfi", "-i", f"sine=frequency=800:duration={seconds}", "-c:a", "aac", path)
+    return path
+
+
+def packet_bytes(path: Path, kind: str) -> list[bytes]:
+    with av.open(str(path)) as container:
+        stream = getattr(container.streams, kind)[0]
+        return [bytes(packet) for packet in container.demux(stream) if packet.size]
+
+
+def stream_seconds(stream) -> float:
+    return float(stream.duration * stream.time_base)
+
+
+@pytest.mark.parametrize("container", ["mp4", "mov"])
+@pytest.mark.parametrize("stopped", [False, True])
+def test_remux_copies_streams_the_runtime_cannot_decode(tmp_path, runtime, container, stopped):
+    from test_video_timing import ffmpeg
+
+    from localsr.core import media_codecs
+    from localsr.core.video_io import _remux_source_streams
+
+    encoded = tmp_path / f"encoded.{container}"
+    ffmpeg(
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=64x48:rate=25:duration=1.2",
+        "-c:v",
+        "libx264",
+        "-pix_fmt",
+        "yuv420p",
+        encoded,
+    )
+    source = aac_tone(tmp_path / "source.mp4")
+    output = tmp_path / f"output.{container}"
+    assert _remux_source_streams(
+        encoded,
+        source,
+        output,
+        container_format=container,
+        force_audio_transcode=stopped,
+        cut_packet_durations=stopped,
+    )
+    with av.open(str(source)) as original:
+        copied = not stopped or not media_codecs.stream_decodable(original.streams.audio[0])
+    assert packet_bytes(output, "video") == packet_bytes(encoded, "video")
+    if copied:
+        # Unchanged packets: the remux needed no decoder for them.
+        audio = packet_bytes(output, "audio")
+        assert audio and set(audio) <= set(packet_bytes(source, "audio"))
+    with av.open(str(output)) as result:
+        video_seconds = stream_seconds(result.streams.video[0])
+        assert video_seconds == pytest.approx(1.2, abs=0.01)
+        # A stop cuts copied audio inside its last packet; a whole clip keeps that packet.
+        tolerance = 0.002 if stopped else 1024 / 48000 + 0.002
+        assert stream_seconds(result.streams.audio[0]) == pytest.approx(
+            video_seconds, abs=tolerance
+        )
+
+
+def worker_export(tmp_path, bridge, codec, container, audio_source, frames, *, stop_after=0):
+    """encode_video as the worker calls it: keep_partial is a callable, so the soundtrack is
+    always remuxed into the system encoder's file."""
+    import threading
+
+    def stopped_frames():
+        yield from frames[:stop_after]
+        raise InterruptedError("stopped")
+
+    return encode_video(
+        stopped_frames() if stop_after else iter(frames),
+        str(tmp_path / f"output.{container}"),
+        fps=25,
+        width=frames[0].rgb.shape[1],
+        height=frames[0].rgb.shape[0],
+        video_codec=codec,
+        container_format=container,
+        external_ffmpeg=bridge,
+        stream_to_system=True,
+        audio_source=str(audio_source),
+        cancel_event=threading.Event(),
+        keep_partial=lambda: bool(stop_after),
+    )
+
+
+def system_decoded_frames(path: str, bridge, tmp_path) -> int:
+    """Frames macOS itself decodes from ``path``: what a player on the Mac shows."""
+    with decodable_source(path, ffmpeg=bridge, temporary_directory=str(tmp_path)) as (
+        frame_path,
+        _,
+    ):
+        return len(source_frames(Path(frame_path)))
+
+
+@pytest.mark.parametrize(
+    ("codec", "container", "fourcc"),
+    [("hevc", "mp4", "hvc1"), ("h264", "mp4", "avc1"), ("hevc", "mov", "hvc1")]
+    + [("prores", "mov", "apcn")],
+)
+# FLAC is the soundtrack of every source the system codecs decode; AAC comes unchanged
+# from a source LocalSR decodes itself.
+@pytest.mark.parametrize("sound", ["flac", "aac"])
+def test_system_export_keeps_the_soundtrack_as_the_worker_runs_it(
+    tmp_path, bridge, runtime, codec, container, fourcc, sound
+):
+    if codec == "prores":
+        prores_or_skip(bridge.system)
+    frames = source_frames(make_vfr(tmp_path / "source.mp4"))
+    tone = make_tone(tmp_path / "tone.mkv") if sound == "flac" else aac_tone(tmp_path / "t.mp4")
+    output = worker_export(tmp_path, bridge, codec, container, tone, frames)
+    assert "_partial_" not in output
+    info = bridge.system.probe(output)
+    # Apple players refuse HEVC tagged hev1, the tag a remux from a codec context writes.
+    assert info["video"]["codec"] == fourcc
+    # AAC is copied; FLAC is copied into MP4, and QuickTime, which cannot hold it, gets PCM.
+    expected = "aac" if sound == "aac" else "lpcm" if container == "mov" else "flac"
+    assert info["audio"]["codec"] == expected and info["audio"]["decodable"]
+    video_end = float(frames[-1].timestamp + frames[-1].duration - frames[0].timestamp)
+    with av.open(output) as result:
+        assert len(result.streams.audio) == 1
+        # A remux keeps the encoder's end, not one frame longer.
+        assert stream_seconds(result.streams.video[0]) == pytest.approx(video_end, abs=0.002)
+        audio_seconds = stream_seconds(result.streams.audio[0])
+    # The two-second FLAC tone ends first; the AAC tone is cut where the video ends.
+    assert audio_seconds == pytest.approx(min(video_end, 2.0 if sound == "flac" else 3.0), abs=0.03)
+    assert system_decoded_frames(output, bridge, tmp_path) == len(frames)
+
+
+def test_the_shipped_runtime_remuxes_system_exports_without_decoders(tmp_path, bridge):
+    """The real thing, where it is installed: run this file with the licensing-clean runtime
+    (packaging/ffmpeg/install_media_runtime.py, or its PyAV on PYTHONPATH)."""
+    for codec in sorted(SHIPPED_UNDECODABLE):
+        clean_runtime_only(codec)
+    frames = source_frames(make_vfr(tmp_path / "source.mp4"))
+    tone = aac_tone(tmp_path / "tone.mp4")
+    for stop_after in (0, 3):
+        output = worker_export(tmp_path, bridge, "hevc", "mp4", tone, frames, stop_after=stop_after)
+        with av.open(output) as result:
+            video, audio = result.streams.video[0], result.streams.audio[0]
+            # Neither stream has a decoder here, so the remux used none.
+            assert video.codec_context is None and audio.codec_context is None
+            assert stream_seconds(audio) == pytest.approx(stream_seconds(video), abs=0.03)
+        assert system_decoded_frames(output, bridge, tmp_path) == (stop_after or len(frames))
+        Path(output).unlink()
+
+
+@pytest.mark.parametrize(("codec", "container"), [("hevc", "mp4"), ("prores", "mov")])
+def test_a_stopped_system_export_job_reports_its_kept_part(
+    tmp_path, bridge, runtime, codec, container
+):
+    """The job measures what it kept without decoding it: LocalSR's runtime cannot decode
+    the system encoder's video, so the stop was reported as a failure (bug hunt 11-28)."""
+    import threading
+    from types import SimpleNamespace
+
+    from test_video_timing import IdentityEngine, ffmpeg
+
+    from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
+    if codec == "prores":
+        prores_or_skip(bridge.system)
+    source = tmp_path / "source.mkv"
+    tone = aac_tone(tmp_path / "tone.mp4")
+    ffmpeg("-i", make_vfr(tmp_path / "video.mp4"), "-i", tone, "-c", "copy", "-shortest", source)
+    stop = threading.Event()
+    result = run_video_job(
+        VideoJobConfig(
+            str(source),
+            "test",
+            str(tmp_path / f"output.{container}"),
+            SimpleNamespace(scale=1),
+            "cpu",
+            "fp32",
+            64,
+            4,
+            False,
+            container=container,
+            video_codec=codec,
+            external_ffmpeg=bridge,
+            temporary_directory=str(tmp_path),
+        ),
+        IdentityEngine(),
+        stop,
+        frame_completed_cb=lambda index, total, preview: index == 2 and stop.set(),
+        keep_partial=lambda: True,
+    )
+    assert result.partial and "_partial_" in result.output_path
+    assert result.kept_frames == system_decoded_frames(result.output_path, bridge, tmp_path)
+    assert 0 < result.kept_frames < 10
+    with av.open(result.output_path) as kept:
+        assert result.kept_seconds == pytest.approx(kept.duration / 1_000_000)
+        assert stream_seconds(kept.streams.audio[0]) == pytest.approx(
+            stream_seconds(kept.streams.video[0]), abs=0.03
+        )
+
+
 @pytest.mark.parametrize(
     ("codec", "container"),
     # .mov cannot carry Opus: a kept part of a QuickTime export gets PCM (bug hunt 11-23).
     [("hevc", "mp4"), ("hevc", "mov"), ("prores", "mov")],
 )
 def test_stopped_streamed_system_export_keeps_playable_video_and_trimmed_audio(
-    tmp_path, bridge, codec, container
+    tmp_path, bridge, runtime, codec, container
 ):
     import threading
 
     from test_video_timing import ffmpeg
+
+    from localsr.core import media_codecs
 
     video = make_vfr(tmp_path / "video.mp4")
     source = tmp_path / "source.mp4"
@@ -747,4 +1006,477 @@ def test_stopped_streamed_system_export_keeps_playable_video_and_trimmed_audio(
             )
             < 0.06
         )
-        assert len(list(container.decode(video=0))) == 3
+        if media_codecs.stream_decodable(video_stream):
+            assert len(list(container.decode(video=0))) == 3
+    assert system_decoded_frames(output, bridge, tmp_path) == 3
+
+
+def force_system_route(monkeypatch) -> None:
+    """Route H.264/HEVC through the system codecs as the shipped runtime does, also where
+    PyPI's PyAV could decode it itself."""
+    from localsr.core.external_ffmpeg import SourcePlan
+
+    monkeypatch.setattr(
+        media_bridge, "plan_source", lambda *args, **kwargs: SourcePlan(False, True)
+    )
+
+
+def timed(frames) -> list:
+    return [
+        (
+            f.index,
+            f.timestamp,
+            f.duration,
+            f.time_base,
+            f.rgb.dtype.str,
+            f.rgb.shape,
+            f.rgb.tobytes(),
+        )
+        for f in frames
+    ]
+
+
+def audio_packets(path: str) -> list:
+    with av.open(path) as container:
+        if not container.streams.audio:
+            return []
+        stream = container.streams.audio[0]
+        return [(packet.pts, bytes(packet)) for packet in container.demux(stream) if packet.size]
+
+
+def system_export(bridge, destination: Path, frames, **options) -> Path:
+    try:
+        encode_video(iter(frames), str(destination), external_ffmpeg=bridge, **options)
+    except Exception as error:  # noqa: BLE001
+        cause = error if isinstance(error, SystemCodecsError) else error.__cause__
+        if isinstance(cause, SystemCodecsError):
+            encoder_or_skip(cause)
+        raise
+    return destination
+
+
+def streamed_sources(tmp_path, bridge, kind: str) -> tuple[Path, str]:
+    """A source only the system decodes, and the HDR mode to read it with."""
+    if kind == "hlg":
+        if shutil.which("ffmpeg") is None:
+            pytest.skip("needs ffmpeg to build the HLG source")
+        frames = list(
+            decode_timed_frames(str(make_hdr(tmp_path / "hlg.mp4", 18)), hdr_mode="preserve")
+        )
+        options = {"width": 64, "height": 64, "video_codec": "hevc", "hdr_format": "HLG"}
+        return system_export(
+            bridge, tmp_path / "hlg-hevc.mp4", frames, fps=25, **options
+        ), "preserve"
+    frames = source_frames(make_vfr(tmp_path / "source.mp4"))
+    tone = make_tone(tmp_path / "tone.mkv")
+    if kind == "vfr":
+        exported = system_export(
+            bridge,
+            tmp_path / "phone.mp4",
+            frames,
+            fps=25,
+            width=48,
+            height=32,
+            video_codec="h264",
+            container_format="mp4",
+            audio_source=str(tone),
+        )
+        return exported, "reject"
+    import json
+
+    header = {
+        "stream": STREAM_TAG,
+        "width": 48,
+        "height": 32,
+        "format": "nv12",
+        # 90 kHz ticks whose milliseconds round up and down, as phone clips have.
+        "timescale": 90000,
+        "full_range": False,
+        "color": {"primaries": "bt709", "transfer": "bt709", "matrix": "bt709"},
+        "fps": 25.0,
+    }
+    payload = json.dumps(header).encode() + b"\n"
+    for index, frame in enumerate(frames):
+        packed = payload_from_frame(frame_for(frame), "nv12")
+        payload += FRAME_HEADER.pack(
+            int(frame.timestamp * 90000) + 45 * (index % 2), 0, len(packed)
+        )
+        payload += packed
+    rotated = tmp_path / "portrait.mp4"
+    result = subprocess.run(
+        [
+            bridge.system.path,
+            "encode",
+            "--output",
+            str(rotated),
+            "--codec",
+            "h264",
+            "--rotation",
+            "90",
+        ],
+        input=payload,
+        capture_output=True,
+        check=False,
+    )
+    if result.returncode != 0 and b"cannot encode" in result.stderr:
+        pytest.skip(result.stderr.decode())
+    assert result.returncode == 0, result.stderr.decode()
+    return rotated, "reject"
+
+
+@pytest.mark.parametrize("kind", ["vfr", "rotated", "hlg"])
+def test_streamed_source_matches_the_lossless_copy_frame_for_frame(
+    tmp_path, bridge, monkeypatch, kind
+):
+    from localsr.core.video_io import StreamedVideo, count_video_frames
+
+    source, hdr_mode = streamed_sources(tmp_path, bridge, kind)
+    force_system_route(monkeypatch)
+    trims = [(None, None), (2, 5), (0, 0)]
+    work = tmp_path / "work"
+    work.mkdir()
+    with decodable_source(str(source), ffmpeg=bridge, temporary_directory=str(work)) as (
+        copy,
+        copy_audio,
+    ):
+        assert isinstance(copy, str)
+        expected_probe = probe_video(copy)
+        expected = {
+            trim: timed(decode_timed_frames(copy, *trim, hdr_mode=hdr_mode)) for trim in trims
+        }
+        expected_audio = audio_packets(copy_audio)
+    with decodable_source(
+        str(source), ffmpeg=bridge, temporary_directory=str(work), stream_video=True
+    ) as (streamed, audio):
+        assert isinstance(streamed, StreamedVideo)
+        # Only the first frame is copied; the rest comes from the helper as it decodes.
+        assert count_video_frames(audio) == 1
+        assert [path.name for path in Path(audio).parent.iterdir()] == ["source.mkv"]
+        probe = probe_video(streamed)
+        # Estimates for progress: the copy ends one nominal frame after its last frame.
+        assert probe.frame_count == pytest.approx(expected_probe.frame_count, abs=1)
+        assert probe.duration_seconds == pytest.approx(
+            expected_probe.duration_seconds, abs=1 / expected_probe.fps
+        )
+        same = ("frame_count", "duration_seconds")
+        assert {k: v for k, v in vars(probe).items() if k not in same} == {
+            k: v for k, v in vars(expected_probe).items() if k not in same
+        }
+        for trim in trims:
+            assert timed(decode_timed_frames(streamed, *trim, hdr_mode=hdr_mode)) == expected[trim]
+        assert audio_packets(audio) == expected_audio
+    assert expected[(None, None)]
+    assert bool(expected_audio) == (kind == "vfr")
+    assert not list(work.iterdir())
+
+
+def _large_phone_clip(tmp_path, bridge) -> Path:
+    """Frames far larger than a pipe's buffer, so the helper cannot run ahead and finish."""
+    frames = source_frames(
+        make_vfr(tmp_path / "large.mp4", times=tuple(range(0, 480, 40)), width=640, height=360)
+    )
+    return system_export(
+        bridge,
+        tmp_path / "large-phone.mp4",
+        frames,
+        fps=25,
+        width=640,
+        height=360,
+        video_codec="h264",
+        container_format="mp4",
+    )
+
+
+def _started_processes(monkeypatch) -> list:
+    started = []
+    original = system_codecs.start_child
+
+    def record(*args, **kwargs):
+        process = original(*args, **kwargs)
+        started.append(process)
+        return process
+
+    monkeypatch.setattr(system_codecs, "start_child", record)
+    return started
+
+
+def test_streamed_frames_arrive_while_the_helper_still_decodes(tmp_path, bridge, monkeypatch):
+    source = _large_phone_clip(tmp_path, bridge)
+    force_system_route(monkeypatch)
+    started = _started_processes(monkeypatch)
+    with decodable_source(
+        str(source), ffmpeg=bridge, temporary_directory=str(tmp_path), stream_video=True
+    ) as (streamed, _audio):
+        started.clear()
+        frames = decode_timed_frames(streamed)
+        first = next(frames)
+        (decoder,) = started
+        assert first.index == 0 and decoder.poll() is None
+        assert len(list(frames)) == 11
+        assert decoder.returncode == 0
+    assert not list(tmp_path.glob("localsr-media-*"))
+
+
+def test_cancelling_a_streamed_source_stops_its_helper(tmp_path, bridge, monkeypatch):
+    import threading
+    import time
+
+    source = _large_phone_clip(tmp_path, bridge)
+    force_system_route(monkeypatch)
+    started = _started_processes(monkeypatch)
+    cancel = threading.Event()
+    with pytest.raises(InterruptedError):
+        with decodable_source(
+            str(source),
+            ffmpeg=bridge,
+            temporary_directory=str(tmp_path),
+            cancel_event=cancel,
+            stream_video=True,
+        ) as (streamed, _audio):
+            started.clear()
+            frames = decode_timed_frames(streamed, cancel_event=cancel)
+            next(frames)
+            (decoder,) = started
+            assert decoder.poll() is None
+            # The helper stops on the cancel itself, while the job is not reading.
+            cancel.set()
+            deadline = time.monotonic() + 5
+            while decoder.poll() is None and time.monotonic() < deadline:
+                time.sleep(0.02)
+            assert decoder.poll() is not None
+            next(frames)
+    assert not list(tmp_path.glob("localsr-media-*"))
+
+
+def test_video_jobs_read_a_system_decoded_source_as_it_decodes(tmp_path, bridge, monkeypatch):
+    """A whole job gives the same video and audio whether it streams or reads a copy."""
+    import threading
+    from types import SimpleNamespace
+
+    from test_video_timing import IdentityEngine
+
+    from localsr.core.video_pipeline import VideoJobConfig, run_video_job
+
+    source, _ = streamed_sources(tmp_path, bridge, "vfr")
+    force_system_route(monkeypatch)
+    reads = []
+    streaming = media_bridge.decodable_source
+
+    def copy_only(*args, **kwargs):
+        kwargs["stream_video"] = False
+        return streaming(*args, **kwargs)
+
+    original = SystemCodecs.decoded_frames
+
+    def counted(self, *args, **kwargs):
+        reads.append(mode)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(SystemCodecs, "decoded_frames", counted)
+    outputs = {}
+    for mode in ("copy", "stream"):
+        monkeypatch.setattr(
+            media_bridge, "decodable_source", copy_only if mode == "copy" else streaming
+        )
+        stages = []
+        output = tmp_path / f"{mode}.mkv"
+        result = run_video_job(
+            VideoJobConfig(
+                str(source),
+                "test",
+                str(output),
+                SimpleNamespace(scale=1),
+                "cpu",
+                "fp32",
+                64,
+                4,
+                False,
+                container="mkv",
+                video_codec="ffv1",
+                external_ffmpeg=bridge,
+                temporary_directory=str(tmp_path),
+            ),
+            IdentityEngine(),
+            threading.Event(),
+            stage_cb=lambda stage, *_, seen=stages: seen.append(stage),
+        )
+        assert result.output_path == str(output) and "external_decode" in stages
+        with av.open(str(output)) as container:
+            video = [
+                (frame.pts, frame.to_ndarray().tobytes())
+                for frame in container.decode(container.streams.video[0])
+            ]
+        outputs[mode] = (video, audio_packets(str(output)))
+    assert reads == ["stream"]
+    assert outputs["stream"] == outputs["copy"]
+    assert len(outputs["stream"][0]) == 10 and outputs["stream"][1]
+    assert not list(tmp_path.glob("localsr-media-*"))
+
+
+def test_timestamps_are_rounded_as_the_muxer_rounds_them(tmp_path):
+    from localsr.core.system_codecs import _rescale
+
+    for timescale, stamps in (
+        (90000, [0, 45, 135, 3003, 6006, 9054, 12010, 90045]),
+        (600, [0, 1, 20, 41, 61, 599]),
+        (30000, [0, 1001, 2002, 3003, 4004, 30030]),
+    ):
+        path = tmp_path / f"{timescale}.mkv"
+        with av.open(str(path), "w", format="matroska") as container:
+            stream = container.add_stream("ffv1", rate=25)
+            stream.width, stream.height, stream.pix_fmt = 16, 16, "yuv420p"
+            stream.codec_context.time_base = Fraction(1, timescale)
+            for stamp in stamps:
+                frame = av.VideoFrame(16, 16, "yuv420p")
+                frame.pts, frame.time_base = stamp, Fraction(1, timescale)
+                for packet in stream.encode(frame):
+                    container.mux(packet)
+            for packet in stream.encode():
+                container.mux(packet)
+        with av.open(str(path)) as container:
+            stored = [frame.pts for frame in container.decode(video=0)]
+            base = container.streams.video[0].time_base
+        assert stored == [_rescale(stamp, Fraction(1, timescale), base) for stamp in stamps]
+    assert _rescale(-45, Fraction(1, 90000), Fraction(1, 1000)) == -1
+
+
+def _fake_decoder(monkeypatch, stdout: bytes, returncode: int, errors: str = ""):
+    import io
+    from contextlib import contextmanager
+    from types import SimpleNamespace
+
+    process = SimpleNamespace(
+        stdout=io.BytesIO(stdout),
+        returncode=returncode,
+        error_log=io.StringIO(errors),
+        poll=lambda: returncode,
+        terminate=lambda: None,
+    )
+
+    @contextmanager
+    def fake_process(self, arguments, *, stdin=False, cancel_event=None):
+        yield process
+
+    monkeypatch.setattr(SystemCodecs, "_process", fake_process)
+    monkeypatch.setattr(SystemCodecs, "_wait", staticmethod(lambda *args: None))
+
+
+def _stream_bytes(frames: int, *, cut: bool = False) -> bytes:
+    import json
+
+    header = {"stream": STREAM_TAG, "video": True, "width": 4, "height": 2, "format": "nv12"}
+    data = json.dumps({**header, "timescale": 90000, "transform": [1, 0, 0, 1]}).encode() + b"\n"
+    payload = bytes(4 * 2 + 4 * 1)
+    for index in range(frames):
+        data += FRAME_HEADER.pack(index * 3003, 0, len(payload)) + payload
+    return data + (FRAME_HEADER.pack(9, 0, len(payload)) + payload[:3] if cut else b"")
+
+
+def _template() -> av.VideoFrame:
+    template = av.VideoFrame(4, 2, "yuv420p")
+    template.pts, template.time_base, template.duration = 0, Fraction(1, 1000), 33
+    template.color_range, template.colorspace = 1, 1
+    return template
+
+
+def test_streamed_frames_take_the_intermediate_timing(monkeypatch):
+    _fake_decoder(monkeypatch, _stream_bytes(3), 0)
+    frames = list(SystemCodecs("helper", 1).decoded_frames("clip.mov", _template()))
+    assert [frame.pts for frame in frames] == [0, 33, 67]
+    assert {(frame.time_base, frame.duration, frame.format.name) for frame in frames} == {
+        (Fraction(1, 1000), 33, "yuv420p")
+    }
+    assert {(int(frame.color_range), int(frame.colorspace)) for frame in frames} == {(1, 1)}
+
+
+@pytest.mark.parametrize("cut", [False, True])
+def test_a_source_that_stops_decoding_part_way_is_not_an_encoder_failure(monkeypatch, cut):
+    from localsr.core.video_codec_recovery import automatic_export, system_export_failure
+    from localsr.core.video_io import SourceDecodeError
+
+    _fake_decoder(monkeypatch, _stream_bytes(2, cut=cut), 0 if cut else 1, "video decode failed")
+    decoded = SystemCodecs("helper", 1).decoded_frames("clip.mov", _template())
+    frames = (frame.to_ndarray(format="rgb24") for frame in decoded)
+    exports = []
+
+    def export(replay, codec):
+        exports.append(codec)
+        for _frame in replay:
+            pass
+        return "published"
+
+    with pytest.raises(SourceDecodeError, match="decode") as raised:
+        automatic_export(
+            frames,
+            "out.mp4",
+            export=export,
+            cancel_event=None,
+            temporary_directory=None,
+            note_callback=None,
+            warning_callback=None,
+        )
+    # No second encoder publishes the frames that arrived before the failure.
+    assert exports == ["hevc"]
+    assert not isinstance(raised.value, SystemCodecsError)
+    assert raised.value.__context__ is None
+    wrapped = SourceDecodeError("decode", "stopped")
+    wrapped.__context__ = SystemCodecsError("helper failed")
+    assert not system_export_failure(wrapped)
+    assert system_export_failure(SystemCodecsError("encoder failed"))
+
+
+def test_temporal_jobs_read_a_system_decoded_source_as_it_decodes(tmp_path, bridge, monkeypatch):
+    import threading
+    from types import SimpleNamespace
+
+    from test_video_timing import IdentityEngine
+
+    from localsr.worker.server import WorkerServer
+
+    source, _ = streamed_sources(tmp_path, bridge, "vfr")
+    force_system_route(monkeypatch)
+    monkeypatch.setattr("localsr.worker.server.send_message", lambda _: None)
+    streaming = media_bridge.decodable_source
+    reads = []
+    original = SystemCodecs.decoded_frames
+
+    def counted(self, *args, **kwargs):
+        reads.append(mode)
+        return original(self, *args, **kwargs)
+
+    monkeypatch.setattr(SystemCodecs, "decoded_frames", counted)
+    outputs = {}
+    for mode in ("copy", "stream"):
+
+        def copy_only(*args, **kwargs):
+            kwargs["stream_video"] = False
+            return streaming(*args, **kwargs)
+
+        monkeypatch.setattr(
+            media_bridge, "decodable_source", copy_only if mode == "copy" else streaming
+        )
+        engine = IdentityEngine()
+        engine.max_temporal_window = 5
+        output = tmp_path / f"temporal-{mode}.mkv"
+        WorkerServer._run_temporal_video_job(
+            SimpleNamespace(cancel_event=threading.Event(), _emit_live_preview=lambda _: None),
+            f"temporal-{mode}",
+            {
+                "video_path": str(source),
+                "output_video_path": str(output),
+                "container": "mkv",
+                "video_codec": "ffv1",
+                "temporary_directory": str(tmp_path),
+            },
+            lambda *_, ready=engine: ready,
+        )
+        with av.open(str(output)) as container:
+            video = [
+                (frame.pts, frame.to_ndarray().tobytes())
+                for frame in container.decode(container.streams.video[0])
+            ]
+        outputs[mode] = (video, audio_packets(str(output)))
+    assert reads == ["stream"]
+    assert outputs["stream"] == outputs["copy"]
+    assert len(outputs["stream"][0]) == 10 and outputs["stream"][1]
+    assert not list(tmp_path.glob("localsr-media-*"))

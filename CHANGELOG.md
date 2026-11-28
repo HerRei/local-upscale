@@ -64,6 +64,11 @@
   subtitles: the Output line says no sound, Clean up audio is off while it is chosen,
   and the file name ends in `_slow`. A slow-motion result opens in Enhanced only,
   because it cannot play on one clock with the original.
+- **Videos start right away on a Mac.** H.264, HEVC and ProRes videos that macOS decodes
+  are read as they are decoded instead of being copied to a lossless file first, so the
+  first frame is enhanced within seconds (a 1-minute 1080p clip used to wait about 2
+  minutes) and no disk space is needed for the copy (about 1.4 GB per minute of 1080p).
+  The result is the same, frame for frame.
 - **Every step is visible while a job runs and after it.** A job with several steps no
   longer drops to a small, soft picture between steps. The viewer keeps the sharp photo
   until the next step's picture is ready, labels it Step 2 of 4 · Colour, and the status
@@ -132,7 +137,9 @@
   picture. On Linux and Windows, Edit no longer stops with "the system swapped 0.5 GiB"
   while plenty of memory is free; it stops when memory really runs short or the system
   stalls on it, and a stopped edit says why instead of "Not enough memory for this
-  size".
+  size". Mac exports with sound in HEVC, H.264 or ProRes no longer fail at the end
+  (broken since 0.5.2), a stopped one keeps its part with sound, and HEVC files keep the
+  tag Apple's players need.
 
 ## [0.6.3-beta] - 2026-11-27
 
