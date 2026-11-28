@@ -165,7 +165,9 @@ export type PreferenceName =
   | 'keep_awake'
   | 'stopped_job_result'
   | 'appearance'
-  | 'interface_scale';
+  | 'interface_scale'
+  | 'preview_patch'
+  | 'preview_patch_shown';
 
 /** One app-wide preference, saved by the host on its own: a full settings save never changes it. */
 export const setPreference = (
@@ -176,6 +178,7 @@ export const setPreference = (
     | UiSettings['interface_scale']
     | NonNullable<UiSettings['contrast']>
     | NonNullable<UiSettings['viewer_background']>
+    | NonNullable<UiSettings['preview_patch']>
     | NonNullable<UiSettings['accent']>
     | NonNullable<UiSettings['stopped_job_result']>,
 ): Promise<void> => invoke('set_preference', { name, value });
@@ -559,6 +562,26 @@ export const requestPreviewRegions = (
   generation: number,
   regions: import('./compareRegions').PreviewRegions,
 ): Promise<void> => invoke('request_preview_regions', { mediaId, generation, regions });
+export const requestPatchPreview = (request: {
+  mediaId: string;
+  slot: 'a' | 'b';
+  region: import('./types').PatchRegion;
+  input: import('./types').StartBatchInput;
+  replace?: import('./types').PatchReplace | null;
+  stageLimit?: number | null;
+  force?: boolean;
+}): Promise<void> =>
+  invoke('request_patch_preview', {
+    mediaId: request.mediaId,
+    slot: request.slot,
+    region: request.region,
+    input: request.input,
+    replace: request.replace ?? null,
+    stageLimit: request.stageLimit ?? null,
+    force: request.force ?? false,
+  });
+export const cancelPatchPreview = (slot: 'a' | 'b'): Promise<void> =>
+  invoke('cancel_patch_preview', { slot });
 export const clearPreviewRegions = (): Promise<void> => invoke('clear_preview_regions');
 
 export interface StoredCrashReport {

@@ -338,6 +338,10 @@ export interface UiSettings {
   colour_blind_palette: boolean;
   contrast?: 'system' | 'standard' | 'high';
   viewer_background?: 'checker' | 'black' | 'grey' | 'white';
+  /** When the preview patch updates; host-owned like `viewer_background`. */
+  preview_patch?: PreviewPatchSetting;
+  /** The remembered on/off of the viewer's Preview button. */
+  preview_patch_shown?: boolean;
   accent?: 'system' | 'localsr';
   interface_scale: 100 | 110 | 125;
   batch_mode: boolean;
@@ -486,7 +490,50 @@ export interface LastSteps {
   steps: JobStep[];
 }
 
+export type PreviewPatchSetting = 'auto' | 'live' | 'manual' | 'off';
+
+/** A square of the source picture, in source pixels. */
+export interface PatchRegion {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface PatchStep {
+  kind: string;
+  fix: string;
+  model_id: string;
+  state: 'waiting' | 'running' | 'done' | 'skipped' | 'missing';
+  /** The picture's address in the preview folder; empty until the step is done. */
+  url: string;
+  width: number;
+  height: number;
+  seconds: number;
+  /** The engine's reason for a skipped step. */
+  note: string;
+}
+
+export interface PatchState {
+  state: 'idle' | 'running' | 'ready' | 'stale' | 'busy' | 'failed';
+  media_id: string;
+  region: PatchRegion | null;
+  /** 0 when unknown. */
+  estimate_seconds: number;
+  error: string;
+  steps: PatchStep[];
+}
+
+/** Variant A is the plan as it stands; B swaps one slot's model for comparison. */
+export interface PatchReplace {
+  slot: 'a' | 'b';
+  fix: string;
+  model_id: string;
+}
+
 export interface RuntimeStatus {
+  /** Sent when the engine lists `patch_preview`. */
+  patches?: { a: PatchState; b: PatchState };
   comparison_pair?: ComparisonPair;
   preview_original?: PreviewOriginalRegion;
   compare?: CompareState;
