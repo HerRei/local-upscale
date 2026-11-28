@@ -20,6 +20,16 @@ async function shoot(page: Page, name: string): Promise<void> {
   await expect(page).toHaveScreenshot(`${name}.png`);
 }
 
+const recipeFixture = {
+  task: 'upscale',
+  model_id: 'span_photo_x4',
+  output_scale: 4,
+  tile_size: 512,
+  halo: 32,
+  precision: 'fp32',
+  safe_memory: false,
+};
+
 const outputsTab = (page: Page) => page.getByRole('tab', { name: /^Outputs/ });
 const pick = (page: Page, label: string) =>
   page.getByRole('checkbox', { name: `${label}, Alpine lake 1.jpg` }).check();
@@ -223,5 +233,33 @@ test.describe('screens @visual', () => {
     await page.locator('#edit-expert').click();
     await page.locator('#edit-expert-reset').scrollIntoViewIfNeeded();
     await shoot(page, 'edit-expert-windows');
+  });
+
+  test('Recipes library with the list and a recipe', async ({ page }) => {
+    await openApp(page, {
+      ...ready,
+      recipes: [
+        { ...recipeFixture, id: 'a', name: 'Phone photos' },
+        { ...recipeFixture, id: 'b', name: 'Old slides', output_scale: 2 },
+        { ...recipeFixture, id: 'c', name: 'Web banners', output_scale: 2 },
+      ],
+      installed: [...(ready.installed ?? []), 'span_photo_x4'],
+      settings: { ...ready.settings, recipe_pins: ['a'] },
+    });
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Recipes', exact: true }).click();
+    await page.getByRole('button', { name: 'Browse recipes…' }).click();
+    await page.getByRole('dialog', { name: 'Recipes' }).locator('.row').first().click();
+    await shoot(page, 'recipes-library');
+  });
+
+  test('Recipes library with a workflow card', async ({ page }) => {
+    await openApp(page, ready);
+    await showPane(page, 'enhance');
+    await page.getByRole('button', { name: 'Recipes', exact: true }).click();
+    await page.getByRole('button', { name: 'Browse recipes…' }).click();
+    const sheet = page.getByRole('dialog', { name: 'Recipes' });
+    await sheet.locator('.row').filter({ hasText: 'Web image (JPEG)' }).click();
+    await shoot(page, 'recipes-workflow-card');
   });
 });
